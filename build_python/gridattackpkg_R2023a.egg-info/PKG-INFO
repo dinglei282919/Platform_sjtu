@@ -1,0 +1,13 @@
+Metadata-Version: 2.4
+Name: gridattackpkg-R2023a
+Version: 9.14
+Summary: A Python interface to gridattackpkg
+Home-page: https://www.mathworks.com/
+Author: MathWorks
+Platform: Linux
+Platform: Windows
+Platform: macOS
+Dynamic: author
+Dynamic: home-page
+Dynamic: platform
+Dynamic: summary
