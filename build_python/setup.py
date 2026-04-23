@@ -1,4 +1,4 @@
-# Copyright 2015-2022 The MathWorks, Inc.
+# Copyright 2015-2024 The MathWorks, Inc.
 import sys
 import warnings
 from shutil import rmtree
@@ -19,46 +19,51 @@ if 'bdist_wheel' in sys.argv[1:]:
         excTxt = '{}'.format(exc)
 
 if excTxt:
-    print("bdist_wheel requires the 'wheel' module, which can be installed via pip.")
+    print("bdist_wheel requires the 'wheel' module, which can be installed via 'python -m pip install wheel'")
     raise ModuleNotFoundError(excTxt)
-    
-else:
-    # We start with distutils to minimize disruptions to existing workflows. 
-    # If distutils no longer exists, we try setuptools.
+
+firstExceptionMessage = ''
+secondExceptionMessage = ''
+
+try:
+    from setuptools import setup
+    from setuptools.command.install import install
+except Exception as firstE:
+    firstExceptionMessage = str(firstE)
+
+if firstExceptionMessage:
     try:
-        # We suppress warnings about deprecation of distutils. We will remove
-        # references to distutils before it is removed from Python.
-        warnings.filterwarnings('ignore', 
-            message='.*distutils package is deprecated.*', 
+        # We suppress warnings about deprecation of distutils. If neither is found,
+        # we will only mention setuptools, which is the one that should be used.
+        warnings.filterwarnings('ignore', message='.*distutils package is deprecated.*', 
             category=DeprecationWarning)
         from distutils.core import setup
         from distutils.command.install import install
-    except:
-        # We suppress warnings about "setup.py install", which we continue
-        # to support, though we also support pip.
-        warnings.filterwarnings('ignore', message=use_build_msg)
-        from setuptools import setup
-        from setuptools.command.install import install
-        
-    class InstallAndCleanBuildArea(install):
-        # Directories with these names are created during installation, but are 
-        # not needed afterward (unless bdist_wheel is being executed, in which 
-        # case we skip this step).
-        clean_dirs = ["./build", "./dist"]
+    except Exception as secondE:
+        secondExceptionMessage = str(secondE)
 
-        def clean_up(self):
-            for dir in self.clean_dirs:
-                if exists(dir):
-                    rmtree(dir, ignore_errors=True) 
+if secondExceptionMessage:
+    raise EnvironmentError("Installation failed. Install setuptools using 'python -m pip install setuptools', then try again.")
 
-        def run(self):
-            install.run(self)
-            self.clean_up()
+class InstallAndCleanBuildArea(install):
+    # Directories with these names are created during installation, but are 
+    # not needed afterward (unless bdist_wheel is being executed, in which 
+    # case we skip this step).
+    clean_dirs = ["./build", "./dist"]
+
+    def clean_up(self):
+        for dir in self.clean_dirs:
+            if exists(dir):
+                rmtree(dir, ignore_errors=True) 
+
+    def run(self):
+        install.run(self)
+        self.clean_up()
     
 if __name__ == '__main__':
     setup_dict = {
-        'name': 'gridattackpkg-R2023a',
-        'version': '9.14',
+        'name': 'gridattackpkg-R2024b',
+        'version': '24.2',
         'description': 'A Python interface to gridattackpkg',
         'author': 'MathWorks',
         'url': 'https://www.mathworks.com/',

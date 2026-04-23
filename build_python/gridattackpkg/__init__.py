@@ -1,4 +1,4 @@
-# Copyright 2015-2022 MathWorks, Inc.
+# Copyright 2015-2024 MathWorks, Inc.
 
 
 """ Package for executing deployed MATLAB functions """
@@ -16,9 +16,9 @@ import weakref
 
 class _PathInitializer(object):
     PLATFORM_DICT = {'Windows': ['PATH','dll',''], 'Linux': ['LD_LIBRARY_PATH','so','libmw'], 'Darwin': ['DYLD_LIBRARY_PATH','dylib','libmw']}
-    SUPPORTED_PYTHON_VERSIONS = ['3_8', '3_9', '3_10']
-    RUNTIME_VERSION_W_DOTS = '9.14'
-    RUNTIME_VERSION_W_UNDERSCORES = '9_14'
+    SUPPORTED_PYTHON_VERSIONS = ['3_9', '3_10', '3_11', '3_12']
+    RUNTIME_VERSION_W_DOTS = '24.2'
+    RUNTIME_VERSION_W_UNDERSCORES = '24_2'
     PACKAGE_NAME = 'gridattackpkg'
     
     def set_interpreter_version(self):    
@@ -241,7 +241,7 @@ class _PathInitializer(object):
         firstExceptionMessage = ''
         secondExceptionMessage = ''
         diagnosticStr = ''
-        cppext_module_name = "matlabruntimeforpython" + self.interpreter_version
+        cppext_module_name = "matlabruntimeforpython_abi3"
         try:
             self.cppext_handle = importlib.import_module(cppext_module_name)
         except Exception as firstE:
