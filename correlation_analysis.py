@@ -15,10 +15,14 @@ from PySide6.QtWidgets import (
 
 
 class SharedParameterStore:
+    """在不同界面模块之间暂存并传递关联分析生成的参数。"""
+
     _correlation_params = None
 
     @classmethod
     def set_correlation_params(cls, percent_min, percent_max, sigma1, sigma2):
+        """保存当前生成的攻击幅度与噪声参数，供异常检测模块读取。"""
+        # 统一转成 float，避免 Qt 控件数值对象或其他类型影响后续序列化。
         cls._correlation_params = {
             "percent_min": float(percent_min),
             "percent_max": float(percent_max),
@@ -29,13 +33,18 @@ class SharedParameterStore:
 
     @classmethod
     def get_correlation_params(cls):
+        """返回最近一次保存的关联分析参数；没有参数时返回 None。"""
         if cls._correlation_params is None:
             return None
+        # 返回副本，避免外部调用者直接修改类级缓存。
         return dict(cls._correlation_params)
 
 
 class CorrelationAnalysisWidget(QWidget):
+    """关联分析页面，负责随机生成参数并写入共享参数缓存。"""
+
     def __init__(self, parent=None):
+        """初始化控件引用、构建界面，并生成一组默认随机参数。"""
         super().__init__(parent)
         self._percent_min_input = None
         self._percent_max_input = None
@@ -46,6 +55,7 @@ class CorrelationAnalysisWidget(QWidget):
         self.generate_random_values()
 
     def _build_ui(self):
+        """创建关联分析页面的参数表单、按钮、状态栏和样式。"""
         root = QFrame()
         root.setObjectName("corrRoot")
         root_layout = QVBoxLayout(self)
@@ -155,6 +165,7 @@ class CorrelationAnalysisWidget(QWidget):
         )
 
     def _new_spin(self, minimum, maximum, value):
+        """创建统一格式的三位小数浮点输入框。"""
         spin = QDoubleSpinBox()
         spin.setDecimals(3)
         spin.setRange(minimum, maximum)
@@ -163,16 +174,20 @@ class CorrelationAnalysisWidget(QWidget):
         return spin
 
     def generate_random_values(self):
+        """随机生成一组合法参数，更新界面显示并同步到共享缓存。"""
+        # 先生成最小攻击幅度，再用它约束最大攻击幅度，保证区间合法。
         percent_min = round(random.uniform(0.05, 0.5), 3)
         percent_max = round(random.uniform(percent_min, 0.5), 3)
         sigma1 = round(random.uniform(0.01, 0.3), 3)
         sigma2 = round(random.uniform(0.01, 0.3), 3)
 
+        # 将随机值写回表单，使用户能够看到并继续手动调整。
         self._percent_min_input.setValue(percent_min)
         self._percent_max_input.setValue(percent_max)
         self._sigma1_input.setValue(sigma1)
         self._sigma2_input.setValue(sigma2)
 
+        # 状态文本用于提示本次生成的参数，同时缓存给异常检测模块复用。
         self._status_label.setText(
             f"已生成参数: 攻击幅度=[{percent_min:.3f}, {percent_max:.3f}]，"
             f"实部噪声={sigma1:.3f}，虚部噪声={sigma2:.3f}"

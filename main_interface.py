@@ -18,7 +18,10 @@ from correlation_analysis import CorrelationAnalysisWidget
 
 
 class MainWindow(QMainWindow):
+    """主窗口，负责顶部导航、下拉菜单和功能页面之间的切换。"""
+
     def __init__(self):
+        """初始化主窗口尺寸、导航状态和两个功能页面容器。"""
         super().__init__()
         self.setWindowTitle("工业安全智能决策平台")
         self.resize(1700, 960)
@@ -33,6 +36,7 @@ class MainWindow(QMainWindow):
         self._build_ui()
 
     def _build_ui(self):
+        """组装主界面的页头、功能导航栏和内容区域。"""
         root = QWidget()
         root.setObjectName("root")
         self.setCentralWidget(root)
@@ -41,6 +45,7 @@ class MainWindow(QMainWindow):
         root_layout.setContentsMargins(16, 12, 16, 14)
         root_layout.setSpacing(10)
 
+        # 主界面从上到下依次是页头、一级功能栏和功能内容区。
         root_layout.addWidget(self._build_header())
         root_layout.addWidget(self._build_function_bar())
         root_layout.addWidget(self._build_content(), 1)
@@ -49,6 +54,7 @@ class MainWindow(QMainWindow):
         self._on_submodule_clicked("异构数据治理", "关联分析")
 
     def _build_header(self):
+        """创建顶部标题栏和右侧快捷图标区域。"""
         bar = QFrame()
         bar.setObjectName("headerBar")
         bar.setFixedHeight(72)
@@ -74,6 +80,7 @@ class MainWindow(QMainWindow):
         return bar
 
     def _make_nav_button(self, icon: str, text: str, checked=False):
+        """创建统一样式的一级导航按钮。"""
         btn = QPushButton(f"{icon}  {text}  ⌄")
         btn.setCheckable(True)
         btn.setChecked(checked)
@@ -82,6 +89,7 @@ class MainWindow(QMainWindow):
         return btn
 
     def _build_function_bar(self):
+        """创建一级功能导航栏，并绑定每个按钮的下拉菜单数据。"""
         bar = QFrame()
         bar.setObjectName("functionBar")
         bar.setFixedHeight(66)
@@ -94,6 +102,7 @@ class MainWindow(QMainWindow):
             ("🏭", "异常行为检测", False, ["多工况分层级异常检测"]),
         ]
 
+        # 建立按钮到子菜单、标题的映射，点击时可直接根据按钮反查内容。
         for icon, text, checked, menu_items in items:
             button = self._make_nav_button(icon, text, checked=checked)
             layout.addWidget(button)
@@ -110,6 +119,7 @@ class MainWindow(QMainWindow):
         return bar
 
     def _build_dropdown(self):
+        """创建悬浮下拉面板，后续按当前导航项动态填充子模块。"""
         panel = QFrame(self, Qt.Popup | Qt.FramelessWindowHint)
         panel.setObjectName("dropdownPanel")
         panel.setFixedSize(420, 260)
@@ -120,6 +130,7 @@ class MainWindow(QMainWindow):
         return panel
 
     def _build_content(self):
+        """创建内容标题栏和两个可切换的功能页面容器。"""
         container = QFrame()
         container.setObjectName("contentRoot")
         vbox = QVBoxLayout(container)
@@ -162,17 +173,20 @@ class MainWindow(QMainWindow):
         body_layout.addWidget(self._anomaly_content_widget, 1)
         body_layout.addWidget(self._correlation_content_widget, 1)
 
+        # 两个功能页面共用同一内容区域，通过 show/hide 完成切换。
         vbox.addWidget(title_bar)
         vbox.addWidget(body, 1)
         return container
 
     def _set_dropdown_items(self, nav_title, items):
+        """根据当前一级导航项刷新下拉菜单中的子模块按钮。"""
         while self._dropdown_layout.count():
             item = self._dropdown_layout.takeAt(0)
             widget = item.widget()
             if widget is not None:
                 widget.deleteLater()
 
+        # 根据子模块文本宽度动态调整下拉菜单，避免长标题被截断。
         item_height = 52
         font = QFont("Microsoft YaHei UI")
         font.setPixelSize(22)
@@ -196,18 +210,21 @@ class MainWindow(QMainWindow):
         self._dropdown.setFixedSize(panel_width, min(max(panel_height, 140), 460))
 
     def _toggle_dropdown(self, button):
+        """响应一级导航点击，切换下拉菜单显示状态并更新选中按钮。"""
         if self._dropdown.isVisible() and self._active_dropdown_button is button:
             self._dropdown.hide()
             return
         self._active_dropdown_button = button
         for nav_btn in self._nav_menu_map:
             nav_btn.setChecked(nav_btn is button)
+        # 先刷新菜单内容，再计算位置，保证面板尺寸参与定位。
         self._set_dropdown_items(self._nav_title_map.get(button, ""), self._nav_menu_map.get(button, []))
         self._position_dropdown()
         self._dropdown.show()
         self._dropdown.raise_()
 
     def _on_submodule_clicked(self, nav_title, submodule_title):
+        """响应子模块点击，更新标题并显示对应功能页面。"""
         self._dropdown.hide()
         if self._content_title_label is not None:
             self._content_title_label.setText(f"{nav_title} - {submodule_title}")
@@ -220,14 +237,17 @@ class MainWindow(QMainWindow):
             self._correlation_content_widget.show()
 
     def resizeEvent(self, event):  # noqa: N802
+        """窗口尺寸变化时重新定位下拉菜单。"""
         super().resizeEvent(event)
         self._position_dropdown()
 
     def showEvent(self, event):  # noqa: N802
+        """窗口显示后延迟定位下拉菜单，确保控件尺寸已计算完成。"""
         super().showEvent(event)
         QTimer.singleShot(0, self._position_dropdown)
 
     def _position_dropdown(self):
+        """把下拉菜单定位到当前导航按钮下方，并限制在屏幕可见范围内。"""
         if not self._dropdown or not self._active_dropdown_button:
             return
         anchor = self._active_dropdown_button.mapToGlobal(QPoint(0, 0))
@@ -235,11 +255,13 @@ class MainWindow(QMainWindow):
         y = anchor.y() + self._active_dropdown_button.height() + 8
         screen = QApplication.screenAt(anchor) or QApplication.primaryScreen()
         if screen:
+            # 约束 x 坐标，防止窗口靠近屏幕边缘时下拉面板超出可视区域。
             bounds = screen.availableGeometry()
             x = max(bounds.left() + 8, min(x, bounds.right() - self._dropdown.width() - 8))
         self._dropdown.move(x, y)
 
     def _apply_styles(self):
+        """集中设置主窗口、导航栏、内容区和滚动条的 Qt 样式。"""
         self.setStyleSheet(
             """
             * {
@@ -370,6 +392,7 @@ class MainWindow(QMainWindow):
 
 
 def main():
+    """创建 Qt 应用、显示主窗口并进入事件循环。"""
     app = QApplication(sys.argv)
     window = MainWindow()
     window.show()

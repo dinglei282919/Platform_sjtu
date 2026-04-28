@@ -31,7 +31,10 @@ from correlation_analysis import SharedParameterStore
 
 
 class MultiScenarioAnomalyDetectionWidget(QWidget):
+    """多工况异常检测页面，负责参数输入、模型运行、结果展示和导出。"""
+
     def __init__(self, parent=None):
+        """初始化运行目录、控件引用和默认界面状态。"""
         super().__init__(parent)
         self.workspace_dir = Path.cwd()
         self.core_output_dir = self.workspace_dir / "gridattackpkg_core_output"
@@ -62,6 +65,7 @@ class MultiScenarioAnomalyDetectionWidget(QWidget):
         self._set_status("待执行")
 
     def _build_ui(self):
+        """搭建异常检测页面的参数区、图像区、状态栏和整体样式。"""
         self.setObjectName("anomalyRoot")
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(14, 14, 14, 14)
@@ -288,6 +292,7 @@ class MultiScenarioAnomalyDetectionWidget(QWidget):
         )
 
     def _new_spin(self, minimum, maximum, value):
+        """创建统一配置的小数输入框，用于各类数值参数。"""
         spin = QDoubleSpinBox()
         spin.setDecimals(3)
         spin.setRange(minimum, maximum)
@@ -296,6 +301,7 @@ class MultiScenarioAnomalyDetectionWidget(QWidget):
         return spin
 
     def _create_image_panel(self, title):
+        """创建带标题和图片占位区域的结果图展示面板。"""
         panel = QFrame()
         panel_layout = QVBoxLayout(panel)
         panel_layout.setContentsMargins(0, 0, 0, 0)
@@ -318,12 +324,14 @@ class MultiScenarioAnomalyDetectionWidget(QWidget):
         return panel, title_label, image_label
 
     def _set_status(self, text):
+        """同步更新底部中英文状态栏文本。"""
         if self._status_left_label is not None:
             self._status_left_label.setText(f"状态：{text}")
         if self._status_right_label is not None:
             self._status_right_label.setText(f"Status: {text}")
 
     def _get_image_meta(self):
+        """根据当前图片模式返回标题、文件路径和空状态提示。"""
         if self._current_image_mode == "detection":
             return (
                 "检测概率图 (detection_probability.png)",
@@ -337,6 +345,7 @@ class MultiScenarioAnomalyDetectionWidget(QWidget):
         )
 
     def _set_image_mode(self, mode):
+        """切换拓扑图或检测概率图，并刷新图片显示。"""
         self._current_image_mode = "detection" if mode == "detection" else "topology"
         if self._topology_switch_btn is not None:
             self._topology_switch_btn.setChecked(self._current_image_mode == "topology")
@@ -348,6 +357,7 @@ class MultiScenarioAnomalyDetectionWidget(QWidget):
         self._refresh_images()
 
     def _set_running(self, running):
+        """根据运行状态启用或禁用按钮，避免执行过程中重复触发。"""
         self._run_btn.setEnabled(not running)
         self._refresh_btn.setEnabled(not running)
         self._export_btn.setEnabled((not running) and self.last_result is not None)
@@ -357,6 +367,8 @@ class MultiScenarioAnomalyDetectionWidget(QWidget):
             self._detection_switch_btn.setEnabled(not running)
 
     def _prepare_runtime_paths(self, mcr_root: Path):
+        """校验 MATLAB Runtime 路径，并把必需 DLL 目录加入 PATH。"""
+        # MATLAB 编译组件依赖 runtime/bin/extern 三类目录，缺一可能导致 DLL 加载失败。
         runtime_dir = mcr_root / "runtime" / "win64"
         bin_dir = mcr_root / "bin" / "win64"
         extern_dir = mcr_root / "extern" / "bin" / "win64"
@@ -368,6 +380,7 @@ class MultiScenarioAnomalyDetectionWidget(QWidget):
         current = os.environ.get("PATH", "")
         current_parts = current.split(os.pathsep) if current else []
         prepend_parts = []
+        # 只追加当前 PATH 中不存在的目录，避免多次运行后 PATH 重复膨胀。
         for part in (runtime_dir, bin_dir, extern_dir):
             part_str = str(part)
             if not any(part_str.lower() == p.lower() for p in current_parts):
@@ -377,6 +390,7 @@ class MultiScenarioAnomalyDetectionWidget(QWidget):
         return dll_path
 
     def _validate_inputs(self):
+        """读取并校验攻击幅度与噪声参数，返回规范化后的输入值。"""
         percent_min = self._percent_min_input.value()
         percent_max = self._percent_max_input.value()
         sigma1 = self._sigma1_input.value()
@@ -387,6 +401,7 @@ class MultiScenarioAnomalyDetectionWidget(QWidget):
         return percent_min, percent_max, sigma1, sigma2
 
     def _apply_correlation_params(self, notify_if_missing=True):
+        """从关联分析共享缓存读取参数，并写入异常检测参数表单。"""
         params = SharedParameterStore.get_correlation_params()
         if not params:
             if notify_if_missing:
@@ -405,8 +420,10 @@ class MultiScenarioAnomalyDetectionWidget(QWidget):
         return True
 
     def _import_runtime_modules(self):
+        """按打包和源码两种运行方式查找并导入运行所需模块。"""
         candidate_paths = []
 
+        # PyInstaller 打包后依赖可能被解压到 _MEIPASS，需要优先加入搜索路径。
         if getattr(sys, "frozen", False):
             meipass = Path(getattr(sys, "_MEIPASS", ""))
             if str(meipass):
@@ -430,6 +447,7 @@ class MultiScenarioAnomalyDetectionWidget(QWidget):
             if path_str and path.exists() and path_str not in sys.path:
                 sys.path.insert(0, path_str)
 
+        # gridattackpkg 是 MATLAB 编译后的 Python 包，matlab 模块提供数据类型封装。
         try:
             gridattackpkg = importlib.import_module("gridattackpkg")
         except ModuleNotFoundError as exc:
@@ -443,6 +461,7 @@ class MultiScenarioAnomalyDetectionWidget(QWidget):
         return gridattackpkg, matlab
 
     def _run_detection_with_external_python(self, mcr_root: Path, percent_min, percent_max, sigma1, sigma2):
+        """在兼容的外部 Python 环境中执行核心脚本，作为当前进程导入失败时的降级方案。"""
         runner = self.workspace_dir / "run_core_plot_with_three_params.py"
         if not runner.exists():
             raise FileNotFoundError(f"未找到外部运行脚本: {runner}")
@@ -451,6 +470,7 @@ class MultiScenarioAnomalyDetectionWidget(QWidget):
             self.workspace_dir / ".venv_fw8_mcr914" / "python.exe",
             Path(sys.executable).resolve().parent / ".venv_fw8_mcr914" / "python.exe",
         ]
+        # MATLAB Runtime 9.14 对 Python 版本敏感，优先寻找项目内置的兼容解释器。
         python_exe = next((p for p in python_candidates if p.exists()), None)
         if python_exe is None:
             checked = " | ".join(str(p) for p in python_candidates)
@@ -483,6 +503,7 @@ class MultiScenarioAnomalyDetectionWidget(QWidget):
             check=False,
         )
 
+        # 合并 stdout/stderr，失败时把外部脚本的诊断信息直接带回界面。
         merged_output = "\n".join(
             part for part in [proc.stdout.strip(), proc.stderr.strip()] if part
         )
@@ -497,6 +518,8 @@ class MultiScenarioAnomalyDetectionWidget(QWidget):
         }
 
     def _run_detection(self):
+        """执行异常检测主流程：校验参数、运行核心算法、检查输出并刷新界面。"""
+        # 若用户选择复用关联分析参数，先尝试从共享缓存同步到当前表单。
         if (
             self._use_correlation_params_checkbox is not None
             and self._use_correlation_params_checkbox.isChecked()
@@ -522,6 +545,7 @@ class MultiScenarioAnomalyDetectionWidget(QWidget):
 
         handle = None
         try:
+            # 准备运行环境和输出目录，确保后续算法调用有可写位置。
             mcr_root = Path(mcr_root_text)
             dll_path = self._prepare_runtime_paths(mcr_root)
             self.core_output_dir.mkdir(parents=True, exist_ok=True)
@@ -531,6 +555,7 @@ class MultiScenarioAnomalyDetectionWidget(QWidget):
             run_mode = "inprocess"
             external_info = None
             try:
+                # 首选当前进程直接调用 MATLAB 编译包，减少外部进程启动开销。
                 gridattackpkg, matlab = self._import_runtime_modules()
 
                 overrides = {
@@ -546,6 +571,7 @@ class MultiScenarioAnomalyDetectionWidget(QWidget):
                 run_core_output_type = str(type(core_out).__name__)
             except Exception as inner_exc:  # noqa: BLE001
                 msg = str(inner_exc)
+                # 当前 Python 版本不兼容时，降级到项目内置 Python 3.10 环境运行。
                 if ("not supported" in msg and "Python" in msg) or "Python 3.11" in msg:
                     run_mode = "external_python"
                     external_info = self._run_detection_with_external_python(
@@ -559,6 +585,7 @@ class MultiScenarioAnomalyDetectionWidget(QWidget):
             stage2_file = self.core_output_dir / "stage2_results.mat"
             topology_png = self.figure_dir / "topology.png"
             detection_png = self.figure_dir / "detection_probability.png"
+            # 核心算法必须产出数据文件和两张结果图，缺失时视为运行失败。
             missing = [str(p) for p in (stage2_file, topology_png, detection_png) if not p.exists()]
             if missing:
                 raise RuntimeError(f"输出文件缺失: {missing}")
@@ -584,6 +611,7 @@ class MultiScenarioAnomalyDetectionWidget(QWidget):
             }
             if external_info is not None:
                 self.last_result["external_runner"] = external_info
+            # 预览区显示完整 JSON，方便用户确认导出内容。
             self._result_preview.setText(
                 json.dumps(self.last_result, ensure_ascii=False, indent=2)
             )
@@ -596,6 +624,7 @@ class MultiScenarioAnomalyDetectionWidget(QWidget):
         finally:
             if handle is not None:
                 try:
+                    # MATLAB 编译包句柄需要显式释放，避免重复运行时资源占用。
                     handle.terminate()
                 except Exception:  # noqa: BLE001
                     pass
@@ -603,6 +632,7 @@ class MultiScenarioAnomalyDetectionWidget(QWidget):
             QApplication.restoreOverrideCursor()
 
     def _load_image(self, label, image_path: Path, empty_tip: str):
+        """加载结果图片到指定 QLabel，缺失或损坏时显示占位图。"""
         if not image_path.exists():
             self._set_black_placeholder(label, empty_tip)
             label.setToolTip("")
@@ -616,6 +646,7 @@ class MultiScenarioAnomalyDetectionWidget(QWidget):
 
         target_width = max(240, label.width() - 8)
         target_height = max(160, label.height() - 8)
+        # 按标签当前尺寸等比缩放，避免图片拉伸变形。
         scaled = pixmap.scaled(
             target_width,
             target_height,
@@ -627,6 +658,7 @@ class MultiScenarioAnomalyDetectionWidget(QWidget):
         label.setToolTip(str(image_path))
 
     def _set_black_placeholder(self, label, tip_text):
+        """绘制深色占位图，保证结果区域在无图片时仍有稳定视觉反馈。"""
         width = max(320, label.width() if label.width() > 0 else 640)
         height = max(180, label.height() if label.height() > 0 else 220)
         canvas = QPixmap(width, height)
@@ -651,12 +683,14 @@ class MultiScenarioAnomalyDetectionWidget(QWidget):
         label.setText(tip_text)
 
     def _refresh_images(self):
+        """按照当前图片模式重新读取并显示结果图。"""
         if self._image_view_label is None:
             return
         _, image_path, empty_tip = self._get_image_meta()
         self._load_image(self._image_view_label, image_path, empty_tip)
 
     def _export_result(self):
+        """将最近一次异常检测结果导出为 JSON 文件。"""
         if not self.last_result:
             QMessageBox.information(self, "无可导出结果", "请先执行异常检测。")
             return
@@ -672,6 +706,7 @@ class MultiScenarioAnomalyDetectionWidget(QWidget):
         if not file_name:
             return
 
+        # 导出的 JSON 与预览区一致，保留中文和缩进便于人工检查。
         Path(file_name).write_text(
             json.dumps(self.last_result, ensure_ascii=False, indent=2),
             encoding="utf-8",
