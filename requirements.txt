@@ -1,7 +1,9 @@
 # Full package list from current conda env (.venv_fw8_mcr914)
 # Exported for Python 3.10
 
-gridattackpkg-R2024b==24.2
+# gridattackpkg-R2024b==24.2 is not published on PyPI.
+# Install it separately from ./build_python after the base environment is ready.
+# See GRIDATTACKPKG_NEW_ENV_SETUP.md.
 importlib_metadata==8.8.0
 packaging==26.0
 pefile==2023.2.7
