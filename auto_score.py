@@ -105,17 +105,57 @@ class AutoScoreWidget(QWidget):
         right_panel = QGroupBox("评估报告与六维蛛网图")
         right_layout = QVBoxLayout(right_panel)
 
+        # ==========================================
+        # 新增水平布局，将蛛网图与大分数值左右并排
+        # ==========================================
+        chart_and_score_layout = QHBoxLayout()
+
         self._figure = Figure(dpi=100)
         self._figure.patch.set_facecolor('#1a2635')
         self._canvas = FigureCanvas(self._figure)
         self._ax = self._figure.add_subplot(111, polar=True)
         self._ax.set_facecolor('#152334')
         self._ax.tick_params(colors='#d4e8ff')
-        right_layout.addWidget(self._canvas, 3)
+        chart_and_score_layout.addWidget(self._canvas, 3)  # 蛛网图占据比例为3
+
+        # 大分数值展示面板
+        self._big_score_frame = QFrame()
+        self._big_score_frame.setObjectName("bigScoreFrame")
+        big_score_layout = QVBoxLayout(self._big_score_frame)
+        big_score_layout.setAlignment(Qt.AlignCenter)
+        big_score_layout.setSpacing(10)
+
+        self._lbl_total_title = QLabel("综合加权总分")
+        self._lbl_total_title.setAlignment(Qt.AlignCenter)
+        self._lbl_total_title.setStyleSheet(
+            "color: #a9c6e2; font-size: 16px; font-weight: bold; border: none; background: transparent;")
+
+        self._lbl_total_val = QLabel("--")
+        self._lbl_total_val.setAlignment(Qt.AlignCenter)
+        self._lbl_total_val.setStyleSheet(
+            "color: #63b9ff; font-size: 42px; font-weight: bold; border: none; background: transparent;")
+
+        self._lbl_risk_title = QLabel("潜在危险分数")
+        self._lbl_risk_title.setAlignment(Qt.AlignCenter)
+        self._lbl_risk_title.setStyleSheet(
+            "color: #a9c6e2; font-size: 16px; font-weight: bold; margin-top: 30px; border: none; background: transparent;")
+
+        self._lbl_risk_val = QLabel("--")
+        self._lbl_risk_val.setAlignment(Qt.AlignCenter)
+        self._lbl_risk_val.setStyleSheet(
+            "color: #ff6b6b; font-size: 36px; font-weight: bold; border: none; background: transparent;")
+
+        big_score_layout.addWidget(self._lbl_total_title)
+        big_score_layout.addWidget(self._lbl_total_val)
+        big_score_layout.addWidget(self._lbl_risk_title)
+        big_score_layout.addWidget(self._lbl_risk_val)
+
+        chart_and_score_layout.addWidget(self._big_score_frame, 1)  # 分数面板占据比例为1
+        right_layout.addLayout(chart_and_score_layout, 3)
 
         self._result_box = QTextEdit()
         self._result_box.setReadOnly(True)
-        self._result_box.setPlaceholderText("点击左侧执行加权评分后，此处将展示各项得分、加权总分及安全评分。")
+        self._result_box.setPlaceholderText("点击左侧执行加权评分后，此处将展示各项得分权重明细。")
         right_layout.addWidget(self._result_box, 2)
 
         content_row.addWidget(left_panel, 1)
@@ -187,6 +227,11 @@ class AutoScoreWidget(QWidget):
                 border: 1px solid rgba(126, 168, 208, 0.35);
                 border-radius: 6px;
                 background: rgba(25, 38, 55, 0.95);
+            }
+            QFrame#bigScoreFrame {
+                background: rgba(21, 35, 52, 0.6);
+                border: 1px solid rgba(101, 175, 235, 0.3);
+                border-radius: 8px;
             }
             """
         )
@@ -273,13 +318,17 @@ class AutoScoreWidget(QWidget):
 
         self._plot_radar_chart(scores)
 
+        # 更新右侧大分数值显示
+        self._lbl_total_val.setText(f"{weighted_total:.2f}")
+        self._lbl_risk_val.setText(f"{safety_score * 100:.2f}")
+
         report = "【各项指标得分明细】\n"
         for i, metric in enumerate(self.metrics_def):
             report += f"{metric} ({self._current_data[metric]}): {scores[i]:.2f} 分 (权重: {normalized_weights[i]:.2%})\n"
 
         report += f"\n【综合评估】\n"
         report += f"加权总分: {weighted_total:.2f} / 100.00\n"
-        report += f"潜在危险分数: {safety_score*100:.4f}\n"
+        report += f"潜在危险分数: {safety_score * 100:.4f}\n"
 
         self._result_box.setText(report)
         self._status_label.setText("状态：评分完成")
@@ -295,8 +344,19 @@ class AutoScoreWidget(QWidget):
         self._ax.plot(angles_plot, scores_plot, 'o-', linewidth=2, color='#63b9ff')
         self._ax.fill(angles_plot, scores_plot, alpha=0.3, color='#63b9ff')
 
+        # 在图上为每个数据点标注单项得分
+        # Matplotlib does not accept CSS-style 'rgba(...)' strings for colors.
+        # Use an RGBA tuple with normalized 0-1 values instead.
+        bbox_props = dict(boxstyle="round,pad=0.3", fc=(21/255, 35/255, 52/255, 0.8), ec="#63b9ff", lw=1)
+        for angle, score in zip(angles, scores):
+            # 将文字偏移量向外推，防止遮挡线条
+            self._ax.text(angle, score + 8, f"{score:.1f}",
+                          color='#ffffff', fontsize=10, ha='center', va='center', bbox=bbox_props)
+
         self._ax.set_thetagrids(np.degrees(angles), self.metrics_def, color='#d4e8ff', fontsize=11)
-        self._ax.set_ylim(0, 100)
+
+        # 将上限放宽至115，避免最外围的分数标签被图表边缘裁切
+        self._ax.set_ylim(0, 115)
         self._ax.set_yticks([20, 40, 60, 80, 100])
         self._ax.set_yticklabels(["20", "40", "60", "80", "100"], color='#87a2bd', fontsize=9)
         self._ax.grid(color='#466385', linestyle='--', linewidth=0.5)
