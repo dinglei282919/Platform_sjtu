@@ -1,0 +1,9 @@
+Metadata-Version: 2.1
+Name: dnnmpcpkg-R2024b
+Version: 24.2
+Summary: A Python interface to dnnmpcpkg
+Home-page: https://www.mathworks.com/
+Author: MathWorks
+Platform: Linux
+Platform: Windows
+Platform: macOS

@@ -1,0 +1,8 @@
+pyproject.toml
+setup.py
+dnnmpcpkg/__init__.py
+dnnmpcpkg/dnnmpcpkg.ctf
+dnnmpcpkg_R2024b.egg-info/PKG-INFO
+dnnmpcpkg_R2024b.egg-info/SOURCES.txt
+dnnmpcpkg_R2024b.egg-info/dependency_links.txt
+dnnmpcpkg_R2024b.egg-info/top_level.txt
