@@ -15,6 +15,9 @@ from PySide6.QtWidgets import (
 
 from anomaly_detection import MultiScenarioAnomalyDetectionWidget
 from correlation_analysis import CorrelationAnalysisWidget
+# DLUT新增
+from error_classification import ErrorClassificationWidget  # 故障分类
+from auto_score import AutoScoreWidget  # 自动评分
 
 
 class MainWindow(QMainWindow):
@@ -33,6 +36,8 @@ class MainWindow(QMainWindow):
         self._content_title_label = None
         self._anomaly_content_widget = None
         self._correlation_content_widget = None
+        self._error_class_content_widget = None
+        self._auto_score_content_widget = None
         self._build_ui()
 
     def _build_ui(self):
@@ -100,6 +105,7 @@ class MainWindow(QMainWindow):
         items = [
             ("📊", "异构数据治理", True, ["关联分析"]),
             ("🏭", "异常行为检测", False, ["多工况分层级异常检测"]),
+            ("📈", "风险动态分析", False, ["故障分类", "自动评分"]),  # DLUT
         ]
 
         # 建立按钮到子菜单、标题的映射，点击时可直接根据按钮反查内容。
@@ -170,8 +176,16 @@ class MainWindow(QMainWindow):
         self._correlation_content_widget = correlation_content
         self._correlation_content_widget.hide()
 
+        self._error_class_content_widget = ErrorClassificationWidget()
+        self._error_class_content_widget.hide()
+
+        self._auto_score_content_widget = AutoScoreWidget()
+        self._auto_score_content_widget.hide()
+
         body_layout.addWidget(self._anomaly_content_widget, 1)
         body_layout.addWidget(self._correlation_content_widget, 1)
+        body_layout.addWidget(self._error_class_content_widget, 1)
+        body_layout.addWidget(self._auto_score_content_widget, 1)
 
         # 两个功能页面共用同一内容区域，通过 show/hide 完成切换。
         vbox.addWidget(title_bar)
@@ -229,11 +243,28 @@ class MainWindow(QMainWindow):
         if self._content_title_label is not None:
             self._content_title_label.setText(f"{nav_title} - {submodule_title}")
 
+        # 1. 先隐藏所有页面
+        self._anomaly_content_widget.hide()
+        self._correlation_content_widget.hide()
+        self._error_class_content_widget.hide()
+        self._auto_score_content_widget.hide()
+
+        # if submodule_title == "多工况分层级异常检测":
+        #     self._anomaly_content_widget.show()
+        #     self._correlation_content_widget.hide()
+        # else:
+        #     self._anomaly_content_widget.hide()
+        #     self._correlation_content_widget.show()
+
+        # 2. 根据点击的标题显示对应页面
         if submodule_title == "多工况分层级异常检测":
             self._anomaly_content_widget.show()
-            self._correlation_content_widget.hide()
+        elif submodule_title == "故障分类":
+            self._error_class_content_widget.show()
+        elif submodule_title == "自动评分":
+            self._auto_score_content_widget.show()
         else:
-            self._anomaly_content_widget.hide()
+            # 默认为关联分析
             self._correlation_content_widget.show()
 
     def resizeEvent(self, event):  # noqa: N802
