@@ -1,0 +1,6 @@
+{
+  "model_mat": "H:\\repository\\Platform_sjtu\\dnn_mpc\\output\\process_control_nn_model.mat",
+  "output_dir": "H:\\repository\\Platform_sjtu\\dnn_mpc\\output",
+  "summary_json": "H:\\repository\\Platform_sjtu\\dnn_mpc\\output\\training_summary.json",
+  "timestamp": "2026-05-10 21:36:40"
+}

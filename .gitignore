@@ -1,0 +1,22 @@
+# Python local cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Local virtual environments
+.venv/
+venv/
+env/
+
+# Local run artifacts
+*.log
+*_result.json
+*_result.png
+anomaly_result_*.json
+
+#history files
+.history
+
+# DNN-MPC output and matlab files
+dnn_mpc/output/
+dnn_mpc/matlab

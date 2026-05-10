@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QMessageBox,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -15,9 +16,9 @@ from PySide6.QtWidgets import (
 
 from anomaly_detection import MultiScenarioAnomalyDetectionWidget
 from correlation_analysis import CorrelationAnalysisWidget
-# DLUT新增
 from error_classification import ErrorClassificationWidget  # 潜在安全威胁识别与自动分类
 from auto_score import AutoScoreWidget  # 多评估准则融合的风险学习分析
+from process_control_dnn_mpc import ProcessControlDnnMpcWidget
 
 
 class MainWindow(QMainWindow):
@@ -27,7 +28,8 @@ class MainWindow(QMainWindow):
         """初始化主窗口尺寸、导航状态和两个功能页面容器。"""
         super().__init__()
         self.setWindowTitle("工业安全智能决策平台")
-        self.resize(1700, 960)
+        self.setMinimumSize(1180, 760)
+        self.resize(1500, 860)
         self._dropdown = None
         self._dropdown_layout = None
         self._nav_menu_map = {}
@@ -38,6 +40,8 @@ class MainWindow(QMainWindow):
         self._correlation_content_widget = None
         self._error_class_content_widget = None
         self._auto_score_content_widget = None
+        self._process_training_content_widget = None
+        self._process_mpc_content_widget = None
         self._build_ui()
 
     def _build_ui(self):
@@ -62,7 +66,7 @@ class MainWindow(QMainWindow):
         """创建顶部标题栏和右侧快捷图标区域。"""
         bar = QFrame()
         bar.setObjectName("headerBar")
-        bar.setFixedHeight(72)
+        bar.setFixedHeight(64)
         layout = QHBoxLayout(bar)
         layout.setContentsMargins(14, 0, 16, 0)
         layout.setSpacing(12)
@@ -97,7 +101,7 @@ class MainWindow(QMainWindow):
         """创建一级功能导航栏，并绑定每个按钮的下拉菜单数据。"""
         bar = QFrame()
         bar.setObjectName("functionBar")
-        bar.setFixedHeight(66)
+        bar.setFixedHeight(58)
         layout = QHBoxLayout(bar)
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(8)
@@ -105,7 +109,8 @@ class MainWindow(QMainWindow):
         items = [
             ("📊", "异构数据治理", True, ["关联分析"]),
             ("🏭", "异常行为检测", False, ["多工况分层级异常检测"]),
-            ("📈", "风险动态分析", False, ["潜在安全威胁识别与自动分类", "多评估准则融合的风险学习分析"]),  # DLUT
+            ("📈", "风险动态分析", False, ["潜在安全威胁识别与自动分类", "多评估准则融合的风险学习分析"]),
+            ("🎛", "化工控制过程", False, ["DNNTrain", "MPC simulation"]),
         ]
 
         # 建立按钮到子菜单、标题的映射，点击时可直接根据按钮反查内容。
@@ -136,7 +141,7 @@ class MainWindow(QMainWindow):
         return panel
 
     def _build_content(self):
-        """创建内容标题栏和两个可切换的功能页面容器。"""
+        """创建内容标题栏和可切换的功能页面容器。"""
         container = QFrame()
         container.setObjectName("contentRoot")
         vbox = QVBoxLayout(container)
@@ -145,7 +150,7 @@ class MainWindow(QMainWindow):
 
         title_bar = QFrame()
         title_bar.setObjectName("contentTitleBar")
-        title_bar.setFixedHeight(64)
+        title_bar.setFixedHeight(56)
         title_layout = QHBoxLayout(title_bar)
         title_layout.setContentsMargins(18, 0, 18, 0)
         title = QLabel("异构数据治理 - 关联分析")
@@ -176,18 +181,37 @@ class MainWindow(QMainWindow):
         self._correlation_content_widget = correlation_content
         self._correlation_content_widget.hide()
 
+        process_training_content = QFrame()
+        process_training_layout = QVBoxLayout(process_training_content)
+        process_training_layout.setContentsMargins(0, 0, 0, 0)
+        process_training_layout.setSpacing(0)
+        process_training_layout.addWidget(ProcessControlDnnMpcWidget(page_mode="training"))
+        self._process_training_content_widget = process_training_content
+        self._process_training_content_widget.hide()
+
+        process_mpc_content = QFrame()
+        process_mpc_layout = QVBoxLayout(process_mpc_content)
+        process_mpc_layout.setContentsMargins(0, 0, 0, 0)
+        process_mpc_layout.setSpacing(0)
+        process_mpc_layout.addWidget(ProcessControlDnnMpcWidget(page_mode="mpc"))
+        self._process_mpc_content_widget = process_mpc_content
+        self._process_mpc_content_widget.hide()
+
+        body_layout.addWidget(self._anomaly_content_widget, 1)
+        body_layout.addWidget(self._correlation_content_widget, 1)
+        body_layout.addWidget(self._process_training_content_widget, 1)
+        body_layout.addWidget(self._process_mpc_content_widget, 1)
+
         self._error_class_content_widget = ErrorClassificationWidget()
         self._error_class_content_widget.hide()
 
         self._auto_score_content_widget = AutoScoreWidget()
         self._auto_score_content_widget.hide()
 
-        body_layout.addWidget(self._anomaly_content_widget, 1)
-        body_layout.addWidget(self._correlation_content_widget, 1)
         body_layout.addWidget(self._error_class_content_widget, 1)
         body_layout.addWidget(self._auto_score_content_widget, 1)
 
-        # 两个功能页面共用同一内容区域，通过 show/hide 完成切换。
+        # 功能页面共用同一内容区域，通过 show/hide 完成切换。
         vbox.addWidget(title_bar)
         vbox.addWidget(body, 1)
         return container
@@ -243,34 +267,49 @@ class MainWindow(QMainWindow):
         if self._content_title_label is not None:
             self._content_title_label.setText(f"{nav_title} - {submodule_title}")
 
-        # 1. 先隐藏所有页面
-        self._anomaly_content_widget.hide()
-        self._correlation_content_widget.hide()
-        self._error_class_content_widget.hide()
-        self._auto_score_content_widget.hide()
+        for widget in (
+            self._anomaly_content_widget,
+            self._correlation_content_widget,
+            self._error_class_content_widget,
+            self._auto_score_content_widget,
+            self._process_training_content_widget,
+            self._process_mpc_content_widget,
+        ):
+            if widget is not None:
+                widget.hide()
 
-        # if submodule_title == "多工况分层级异常检测":
-        #     self._anomaly_content_widget.show()
-        #     self._correlation_content_widget.hide()
-        # else:
-        #     self._anomaly_content_widget.hide()
-        #     self._correlation_content_widget.show()
-
-        # 2. 根据点击的标题显示对应页面
         if submodule_title == "多工况分层级异常检测":
             self._anomaly_content_widget.show()
         elif submodule_title == "潜在安全威胁识别与自动分类":
             self._error_class_content_widget.show()
         elif submodule_title == "多评估准则融合的风险学习分析":
             self._auto_score_content_widget.show()
+        elif submodule_title == "DNNTrain":
+            self._process_training_content_widget.show()
+        elif submodule_title == "MPC simulation":
+            self._process_mpc_content_widget.show()
         else:
-            # 默认为关联分析
             self._correlation_content_widget.show()
 
     def resizeEvent(self, event):  # noqa: N802
         """窗口尺寸变化时重新定位下拉菜单。"""
         super().resizeEvent(event)
         self._position_dropdown()
+
+    def closeEvent(self, event):  # noqa: N802
+        """后台任务运行中时阻止窗口被销毁，避免 QThread 仍在运行。"""
+        running_widgets = []
+        for widget in self.findChildren(QWidget):
+            checker = getattr(widget, "has_running_worker", None)
+            if callable(checker) and checker():
+                running_widgets.append(widget)
+
+        if running_widgets:
+            QMessageBox.warning(self, "后台任务运行中", "请等待当前 MATLAB/计算任务完成后再关闭平台。")
+            event.ignore()
+            return
+
+        super().closeEvent(event)
 
     def showEvent(self, event):  # noqa: N802
         """窗口显示后延迟定位下拉菜单，确保控件尺寸已计算完成。"""
@@ -323,7 +362,7 @@ class MainWindow(QMainWindow):
                 qproperty-alignment: AlignCenter;
             }
             QLabel#pageTitle {
-                font-size: 50px;
+                font-size: 42px;
                 font-weight: 700;
                 color: #f2f6ff;
                 letter-spacing: 1px;
@@ -352,7 +391,7 @@ class MainWindow(QMainWindow):
                 border: 1px solid transparent;
                 padding: 8px 14px;
                 background: transparent;
-                font-size: 24px;
+                font-size: 21px;
                 color: #c3d8f6;
                 text-align: left;
             }
@@ -392,7 +431,7 @@ class MainWindow(QMainWindow):
                 background: rgba(17, 42, 73, 0.9);
             }
             QLabel#contentTitle {
-                font-size: 34px;
+                font-size: 29px;
                 font-weight: 700;
                 color: #eef6ff;
             }
