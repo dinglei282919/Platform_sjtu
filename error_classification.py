@@ -11,11 +11,11 @@ import matplotlib
 matplotlib.use('QtAgg')
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
+from matplotlib import font_manager
 
-from PySide6.QtCore import QThread, Signal
+from PySide6.QtCore import QThread, Signal, Qt
 from PySide6.QtWidgets import (
     QDoubleSpinBox,
-    QFormLayout,
     QFrame,
     QGroupBox,
     QHBoxLayout,
@@ -23,7 +23,10 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSpinBox,
     QTextEdit,
-    QTabWidget,
+    QTableWidget,
+    QTableWidgetItem,
+    QHeaderView,
+    QAbstractItemView,
     QVBoxLayout,
     QWidget,
 )
@@ -36,33 +39,57 @@ def seed_torch(seed=42):
     torch.cuda.manual_seed_all(seed)
 
 
-# =========================
-# 可集中修改的实验设定值（在此区域修改超参与噪声相关设定，便于实验复现与调参）
-# 注释放在同行右侧，减少占用行数
-# =========================
-DEFAULT_SEED = 42                       # 随机种子（用于保证结果可复现）
-DEFAULT_EPOCHS = 50                     # 默认训练轮次（作为 UI 的默认值，也可在运行时覆盖）
-DEFAULT_BATCH_SIZE = 32                 # 默认批次大小（UI 默认值）
-DEFAULT_LR = 0.001                      # 默认学习率（UI 默认值）
+DEFAULT_SEED = 42
+DEFAULT_EPOCHS = 50
+DEFAULT_BATCH_SIZE = 32
+DEFAULT_LR = 0.001
 
-NUM_TRAIN_SAMPLES = 500                 # 合成数据训练样本数量
-NUM_TEST_SAMPLES = 100                  # 合成数据测试样本数量
+NUM_TRAIN_SAMPLES = 500
+NUM_TEST_SAMPLES = 100
 
-SEQUENCE_LENGTH = 128                   # 序列长度（时间步数 T）
-FEATURE_DIM = 10                        # 特征维度（每个时间步的通道数 N）
-NUM_CLASSES = 5                         # 分类类别数
+SEQUENCE_LENGTH = 128
+FEATURE_DIM = 10
+NUM_CLASSES = 5
 
-SYNTHETIC_NOISE_SCALE = 0.95             # 合成数据中高斯噪声标准差（基础噪声强度）
-SINE_AMPLITUDE = 0.2                    # 注入到特定通道的正弦扰动幅值（用于区分类信号）
-COSINE_AMPLITUDE = 0.25                  # 注入到特定通道的余弦扰动幅值（用于区分类信号）
-CLASS_OFFSET_SCALE = 0.1                # 每个样本按类别的全局偏移量比例（增加类间均值差异）
+SECURITY_CLASS_NAMES = [
+    "正常运行",
+    "数据注入威胁",
+    "拒绝服务威胁",
+    "重放攻击威胁",
+    "拓扑篡改威胁",
+]
 
-DEFAULT_WEIGHT_DECAY = 1e-4             # 优化器权重衰减（L2 正则化强度）
-TRAINING_SLEEP_SECONDS = 0.08           # 每个 epoch 日志间短暂停顿（仅用于 UI 展示，不影响训练结果）
+SYNTHETIC_NOISE_SCALE = 0.95
+SINE_AMPLITUDE = 0.2
+COSINE_AMPLITUDE = 0.25
+CLASS_OFFSET_SCALE = 0.1
 
-EPOCHS_RANGE = (1, 500)                 # UI: epochs 输入范围 (min, max)
-BATCH_SIZE_RANGE = (8, 256)             # UI: batch size 输入范围 (min, max)
-LR_RANGE = (0.0001, 0.1)                # UI: learning rate 输入范围 (min, max)
+DEFAULT_WEIGHT_DECAY = 1e-4
+TRAINING_SLEEP_SECONDS = 0.08
+
+EPOCHS_RANGE = (1, 500)
+BATCH_SIZE_RANGE = (8, 256)
+LR_RANGE = (0.0001, 0.1)
+
+
+def configure_matplotlib_chinese_font():
+    # Windows/跨平台常见中文字体回退，避免中文渲染成方块
+    candidates = [
+        "Microsoft YaHei",
+        "SimHei",
+        "Noto Sans CJK SC",
+        "Source Han Sans SC",
+        "WenQuanYi Zen Hei",
+    ]
+    available = {f.name for f in font_manager.fontManager.ttflist}
+    for font_name in candidates:
+        if font_name in available:
+            matplotlib.rcParams["font.sans-serif"] = [font_name] + matplotlib.rcParams.get("font.sans-serif", [])
+            break
+    matplotlib.rcParams["axes.unicode_minus"] = False
+
+
+configure_matplotlib_chinese_font()
 
 
 class FCNClassifier(nn.Module):
@@ -135,7 +162,7 @@ class ModelTrainingWorker(QThread):
     log_signal = Signal(str)
     finished_signal = Signal(float)
     error_signal = Signal(str)
-    history_signal = Signal(list, list, list, list)
+    history_signal = Signal(object, object)
 
     def __init__(self, epochs, batch_size, lr):
         super().__init__()
@@ -207,8 +234,19 @@ class ModelTrainingWorker(QThread):
                 self.log_signal.emit(log_str)
                 time.sleep(TRAINING_SLEEP_SECONDS)
 
+            model.eval()
+            all_true = []
+            all_pred = []
+            for x, y in test_loader:
+                x = x.to(device)
+                y = y.to(device)
+                outputs = model(x)
+                _, predicted = torch.max(outputs, dim=1)
+                all_true.extend(y.cpu().tolist())
+                all_pred.extend(predicted.cpu().tolist())
+
             self.log_signal.emit(f"训练完成! 最佳测试准确率: {best_acc:.4f}")
-            self.history_signal.emit(train_losses, test_losses, train_accs, test_accs)
+            self.history_signal.emit(all_true, all_pred)
             self.finished_signal.emit(best_acc)
         except Exception as e:
             self.error_signal.emit(str(e))
@@ -238,64 +276,100 @@ class ErrorClassificationWidget(QWidget):
         content_row = QHBoxLayout()
         content_row.setSpacing(12)
 
-        left_panel = QGroupBox("网络超参数配置")
-        left_layout = QFormLayout(left_panel)
-        left_layout.setVerticalSpacing(12)
+        left_panel = QGroupBox("输入与训练日志")
+        left_layout = QVBoxLayout(left_panel)
+        left_layout.setSpacing(12)
+        left_layout.setContentsMargins(12, 16, 12, 12)
 
+        inputs_row = QHBoxLayout()
+        inputs_row.setSpacing(16)
+
+        epochs_box = QVBoxLayout()
+        epochs_box.setSpacing(6)
+        epochs_box.addWidget(QLabel("Epochs"))
         self._epochs_input = QSpinBox()
         self._epochs_input.setRange(*EPOCHS_RANGE)
         self._epochs_input.setValue(DEFAULT_EPOCHS)
-        left_layout.addRow("训练轮次 (Epochs):", self._epochs_input)
+        self._epochs_input.setFixedWidth(90)
+        epochs_box.addWidget(self._epochs_input)
+        epochs_box.addStretch()
+        inputs_row.addLayout(epochs_box)
 
+        batch_box = QVBoxLayout()
+        batch_box.setSpacing(6)
+        batch_box.addWidget(QLabel("Batch Size"))
         self._batch_size_input = QSpinBox()
         self._batch_size_input.setRange(*BATCH_SIZE_RANGE)
         self._batch_size_input.setSingleStep(8)
         self._batch_size_input.setValue(DEFAULT_BATCH_SIZE)
-        left_layout.addRow("批次大小 (Batch Size):", self._batch_size_input)
+        self._batch_size_input.setFixedWidth(90)
+        batch_box.addWidget(self._batch_size_input)
+        batch_box.addStretch()
+        inputs_row.addLayout(batch_box)
 
+        lr_box = QVBoxLayout()
+        lr_box.setSpacing(6)
+        lr_box.addWidget(QLabel("Learning Rate"))
         self._lr_input = QDoubleSpinBox()
         self._lr_input.setDecimals(4)
         self._lr_input.setRange(*LR_RANGE)
         self._lr_input.setSingleStep(0.001)
         self._lr_input.setValue(DEFAULT_LR)
-        left_layout.addRow("学习率 (Learning Rate):", self._lr_input)
+        self._lr_input.setFixedWidth(100)
+        lr_box.addWidget(self._lr_input)
+        lr_box.addStretch()
+        inputs_row.addLayout(lr_box)
 
-        actions = QHBoxLayout()
-        actions.addStretch()
-        self._run_btn = QPushButton("开始模型训练与分类模拟")
+        inputs_row.addStretch()
+
+        btn_box = QVBoxLayout()
+        btn_box.addStretch()
+        self._run_btn = QPushButton("开始潜在安全威胁识别与自动分类训练")
         self._run_btn.clicked.connect(self._start_training)
-        actions.addWidget(self._run_btn)
-        actions.addStretch()
-        left_layout.addRow("", actions)
+        self._run_btn.setFixedHeight(36)
+        self._run_btn.setMinimumWidth(180)
+        btn_box.addWidget(self._run_btn)
+        inputs_row.addLayout(btn_box)
 
-        right_panel = QGroupBox("训练监控面板")
-        right_layout = QVBoxLayout(right_panel)
-        right_layout.setSpacing(8)
+        left_layout.addLayout(inputs_row)
 
-        self._tabs = QTabWidget()
-
-        log_tab = QWidget()
-        log_layout = QVBoxLayout(log_tab)
-        log_layout.setContentsMargins(0, 0, 0, 0)
         self._log_output = QTextEdit()
         self._log_output.setReadOnly(True)
-        self._log_output.setPlaceholderText("点击左侧按钮开始模型训练，此处将输出Epoch日志。")
-        log_layout.addWidget(self._log_output)
-        self._tabs.addTab(log_tab, "训练日志")
+        self._log_output.setPlaceholderText("训练日志将在这里显示。")
+        self._log_output.setStyleSheet(
+            "QTextEdit{background:rgba(21,35,52,0.95);color:#e7f2ff;padding:8px;border-radius:6px}")
+        left_layout.addWidget(self._log_output, 1)
 
-        chart_tab = QWidget()
-        chart_layout = QVBoxLayout(chart_tab)
-        chart_layout.setContentsMargins(0, 0, 0, 0)
+        content_row.addWidget(left_panel, 1)
+
+        right_panel = QGroupBox("潜在安全威胁识别与自动分类结果")
+        right_layout = QVBoxLayout(right_panel)
+        right_layout.setSpacing(12)
+        right_layout.setContentsMargins(12, 16, 12, 12)
+
+        self._result_table = QTableWidget()
+        self._result_table.setStyleSheet(
+            "QTableWidget{background:#152334;color:#d4e8ff;gridline-color:#203445;border-radius:6px;}"
+            "QTableWidget::item{padding:6px}",
+        )
+        self._result_table.setAlternatingRowColors(True)
+        self._result_table.setShowGrid(True)
+        self._result_table.setSelectionMode(QAbstractItemView.NoSelection)
+        self._result_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self._result_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self._result_table.verticalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self._result_table.horizontalHeader().setDefaultAlignment(Qt.AlignCenter)
+        self._result_table.verticalHeader().setDefaultAlignment(Qt.AlignCenter)
+        right_layout.addWidget(self._result_table, 1)
+
         self._figure = Figure(dpi=100)
         self._figure.patch.set_facecolor('#1a2635')
         self._canvas = FigureCanvas(self._figure)
-        chart_layout.addWidget(self._canvas)
-        self._tabs.addTab(chart_tab, "训练曲线")
+        self._canvas.setMinimumHeight(280)
+        right_layout.addWidget(self._canvas, 1)
 
-        right_layout.addWidget(self._tabs)
-
-        content_row.addWidget(left_panel, 1)
         content_row.addWidget(right_panel, 2)
+
         main_layout.addLayout(content_row, 1)
 
         status_bar = QFrame()
@@ -364,27 +438,20 @@ class ErrorClassificationWidget(QWidget):
                 border-radius: 6px;
                 background: rgba(25, 38, 55, 0.95);
             }
-            QTabWidget::pane {
-                border: 1px solid rgba(123, 167, 210, 0.35);
-                border-radius: 4px;
-                background: rgba(21, 35, 52, 0.95);
-            }
-            QTabBar::tab {
-                background: rgba(31, 49, 70, 0.6);
-                border: 1px solid rgba(123, 167, 210, 0.35);
-                border-bottom-color: transparent;
-                border-top-left-radius: 4px;
-                border-top-right-radius: 4px;
-                min-width: 100px;
-                padding: 6px 12px;
-                color: #87a2bd;
-                font-size: 14px;
-                margin-right: 2px;
-            }
-            QTabBar::tab:selected {
-                background: rgba(21, 35, 52, 0.95);
+            QTableWidget {
+                background: #152334;
                 color: #d4e8ff;
-                border-bottom: 2px solid #63b9ff;
+                gridline-color: #2e4a63;
+            }
+            QHeaderView::section {
+                background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 rgba(31,49,70,0.95), stop:1 rgba(25,38,55,0.95));
+                color: #d9ecff;
+                padding: 6px;
+                border: none;
+                font-weight: 700;
+            }
+            QTableWidget::item {
+                padding: 6px;
             }
             """
         )
@@ -395,9 +462,16 @@ class ErrorClassificationWidget(QWidget):
         lr = self._lr_input.value()
 
         self._log_output.clear()
+
+        try:
+            self._result_table.clear()
+            self._result_table.setRowCount(0)
+            self._result_table.setColumnCount(0)
+        except Exception:
+            pass
+
         self._figure.clear()
         self._canvas.draw()
-        self._tabs.setCurrentIndex(0)
         self._run_btn.setEnabled(False)
         self._status_label.setText("状态：正在训练模型...")
 
@@ -413,29 +487,98 @@ class ErrorClassificationWidget(QWidget):
         scrollbar = self._log_output.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
 
-    def _on_history_received(self, train_losses, test_losses, train_accs, test_accs):
+    def _on_history_received(self, y_true, y_pred):
+
+        import numpy as _np
+
+        y_true = _np.array(y_true)
+        y_pred = _np.array(y_pred)
+        num_classes = NUM_CLASSES
+
+        cm = _np.zeros((num_classes, num_classes), dtype=int)
+        for t, p in zip(y_true.tolist(), y_pred.tolist()):
+            if 0 <= int(t) < num_classes and 0 <= int(p) < num_classes:
+                cm[int(t), int(p)] += 1
+
+        self._result_table.clear()
+        self._result_table.setRowCount(num_classes + 1)
+        self._result_table.setColumnCount(num_classes + 1)
+
+        h_labels = [f"预测-{SECURITY_CLASS_NAMES[i]}" for i in range(num_classes)] + ["合计"]
+        v_labels = [f"真实-{SECURITY_CLASS_NAMES[i]}" for i in range(num_classes)] + ["合计"]
+        self._result_table.setHorizontalHeaderLabels(h_labels)
+        self._result_table.setVerticalHeaderLabels(v_labels)
+
+        row_sums = cm.sum(axis=1)
+        col_sums = cm.sum(axis=0)
+        total = cm.sum()
+        for i in range(num_classes):
+            for j in range(num_classes):
+                item = QTableWidgetItem(str(int(cm[i, j])))
+                item.setTextAlignment(Qt.AlignCenter)
+                self._result_table.setItem(i, j, item)
+
+            row_item = QTableWidgetItem(str(int(row_sums[i])))
+            row_item.setTextAlignment(Qt.AlignCenter)
+            self._result_table.setItem(i, num_classes, row_item)
+
+        for j in range(num_classes):
+            col_item = QTableWidgetItem(str(int(col_sums[j])))
+            col_item.setTextAlignment(Qt.AlignCenter)
+            self._result_table.setItem(num_classes, j, col_item)
+
+        total_item = QTableWidgetItem(str(int(total)))
+        total_item.setTextAlignment(Qt.AlignCenter)
+        self._result_table.setItem(num_classes, num_classes, total_item)
+
         self._figure.clear()
 
-        ax1 = self._figure.add_subplot(211)
+        ax1 = self._figure.add_subplot(121)
         ax1.set_facecolor('#152334')
-        ax1.plot(train_losses, label='Train Loss', color='#63b9ff', linewidth=2)
-        ax1.plot(test_losses, label='Test Loss', color='#ff7b72', linewidth=2)
-        ax1.set_title("Loss Curve", color='#d4e8ff', fontsize=12)
-        ax1.legend(facecolor='#1f3146', edgecolor='#466385', labelcolor='#d4e8ff')
+        im = ax1.imshow(cm, interpolation='nearest', cmap='Blues')
+        ax1.set_title('潜在安全威胁识别混淆矩阵', color='#d4e8ff', fontsize=12)
+        ax1.set_xlabel('预测类别', color='#d4e8ff')
+        ax1.set_ylabel('真实类别', color='#d4e8ff')
+        ticks = list(range(num_classes))
+        ax1.set_xticks(ticks)
+        ax1.set_yticks(ticks)
+        ax1.set_xticklabels([SECURITY_CLASS_NAMES[i] for i in ticks], color='#d4e8ff', rotation=20, ha='right')
+        ax1.set_yticklabels([SECURITY_CLASS_NAMES[i] for i in ticks], color='#d4e8ff')
+
+        cm_max = cm.max() if cm.size and cm.max() > 0 else 1
+        for i in range(num_classes):
+            for j in range(num_classes):
+                val = int(cm[i, j])
+                txt_color = 'white' if val > cm_max / 2 else 'black'
+                ax1.text(j, i, val, ha='center', va='center', color=txt_color, fontsize=10, fontweight='600')
+
+        try:
+            self._figure.colorbar(im, ax=ax1, fraction=0.046, pad=0.04)
+        except Exception:
+            pass
         self._style_ax(ax1)
 
-        ax2 = self._figure.add_subplot(212)
+        ax2 = self._figure.add_subplot(122)
         ax2.set_facecolor('#152334')
-        ax2.plot(train_accs, label='Train Acc', color='#3fb950', linewidth=2)
-        ax2.plot(test_accs, label='Test Acc', color='#d2a8ff', linewidth=2)
-        ax2.set_title("Accuracy Curve", color='#d4e8ff', fontsize=12)
-        ax2.legend(facecolor='#1f3146', edgecolor='#466385', labelcolor='#d4e8ff')
+        with _np.errstate(divide='ignore', invalid='ignore'):
+            per_class_acc = _np.divide(_np.diag(cm), row_sums, out=_np.zeros_like(row_sums, dtype=float),
+                                       where=row_sums != 0)
+        ax2.bar(ticks, per_class_acc, color='#63b9ff')
+        ax2.set_ylim(0, 1.0)
+        ax2.set_xticks(ticks)
+        ax2.set_xticklabels([SECURITY_CLASS_NAMES[i] for i in ticks], color='#d4e8ff', rotation=20, ha='right')
+        ax2.set_ylabel('识别召回率', color='#d4e8ff')
+        ax2.set_title('各类潜在安全威胁识别召回率', color='#d4e8ff', fontsize=12)
+
+        for bar in ax2.patches:
+            bar.set_edgecolor('#2e4a63')
+            bar.set_linewidth(0.8)
+            bar.set_alpha(0.95)
+        ax2.grid(axis='y', color='#203445', linestyle='--', linewidth=0.6, alpha=0.6)
         self._style_ax(ax2)
 
-        self._figure.tight_layout()
+        self._figure.tight_layout(pad=2.0)
         self._canvas.draw()
-
-        self._tabs.setCurrentIndex(1)
 
     def _style_ax(self, ax):
         ax.tick_params(colors='#d4e8ff')

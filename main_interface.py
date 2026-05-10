@@ -16,8 +16,8 @@ from PySide6.QtWidgets import (
 from anomaly_detection import MultiScenarioAnomalyDetectionWidget
 from correlation_analysis import CorrelationAnalysisWidget
 # DLUT新增
-from error_classification import ErrorClassificationWidget  # 故障分类
-from auto_score import AutoScoreWidget  # 自动评分
+from error_classification import ErrorClassificationWidget  # 潜在安全威胁识别与自动分类
+from auto_score import AutoScoreWidget  # 多评估准则融合的风险学习分析
 
 
 class MainWindow(QMainWindow):
@@ -105,7 +105,7 @@ class MainWindow(QMainWindow):
         items = [
             ("📊", "异构数据治理", True, ["关联分析"]),
             ("🏭", "异常行为检测", False, ["多工况分层级异常检测"]),
-            ("📈", "风险动态分析", False, ["故障分类", "自动评分"]),  # DLUT
+            ("📈", "风险动态分析", False, ["潜在安全威胁识别与自动分类", "多评估准则融合的风险学习分析"]),  # DLUT
         ]
 
         # 建立按钮到子菜单、标题的映射，点击时可直接根据按钮反查内容。
@@ -259,9 +259,9 @@ class MainWindow(QMainWindow):
         # 2. 根据点击的标题显示对应页面
         if submodule_title == "多工况分层级异常检测":
             self._anomaly_content_widget.show()
-        elif submodule_title == "故障分类":
+        elif submodule_title == "潜在安全威胁识别与自动分类":
             self._error_class_content_widget.show()
-        elif submodule_title == "自动评分":
+        elif submodule_title == "多评估准则融合的风险学习分析":
             self._auto_score_content_widget.show()
         else:
             # 默认为关联分析
