@@ -18,6 +18,7 @@ from anomaly_detection import MultiScenarioAnomalyDetectionWidget
 from correlation_analysis import CorrelationAnalysisWidget
 from error_classification import ErrorClassificationWidget  # 潜在安全威胁识别与自动分类
 from auto_score import AutoScoreWidget  # 多评估准则融合的风险学习分析
+from cdq_risk_matching import CDQMatchingWidget
 from process_control_dnn_mpc import ProcessControlDnnMpcWidget
 
 
@@ -40,6 +41,7 @@ class MainWindow(QMainWindow):
         self._correlation_content_widget = None
         self._error_class_content_widget = None
         self._auto_score_content_widget = None
+        self._cdq_matching_content_widget = None
         self._process_training_content_widget = None
         self._process_mpc_content_widget = None
         self._build_ui()
@@ -109,7 +111,11 @@ class MainWindow(QMainWindow):
         items = [
             ("📊", "异构数据治理", True, ["关联分析"]),
             ("🏭", "异常行为检测", False, ["多工况分层级异常检测"]),
-            ("📈", "风险动态分析", False, ["潜在安全威胁识别与自动分类", "多评估准则融合的风险学习分析"]),
+            ("📈", "风险动态分析", False,
+             ["潜在安全威胁识别与自动分类",
+              "多评估准则融合的风险学习分析",
+              "风险场景动态匹配与适配方案生成算法",
+              ]),
             ("🎛", "化工控制过程", False, ["DNNTrain", "MPC simulation"]),
         ]
 
@@ -208,8 +214,12 @@ class MainWindow(QMainWindow):
         self._auto_score_content_widget = AutoScoreWidget()
         self._auto_score_content_widget.hide()
 
+        self._cdq_matching_content_widget = CDQMatchingWidget()
+        self._cdq_matching_content_widget.hide()
+
         body_layout.addWidget(self._error_class_content_widget, 1)
         body_layout.addWidget(self._auto_score_content_widget, 1)
+        body_layout.addWidget(self._cdq_matching_content_widget, 1)
 
         # 功能页面共用同一内容区域，通过 show/hide 完成切换。
         vbox.addWidget(title_bar)
@@ -272,6 +282,7 @@ class MainWindow(QMainWindow):
             self._correlation_content_widget,
             self._error_class_content_widget,
             self._auto_score_content_widget,
+            self._cdq_matching_content_widget,
             self._process_training_content_widget,
             self._process_mpc_content_widget,
         ):
@@ -284,6 +295,8 @@ class MainWindow(QMainWindow):
             self._error_class_content_widget.show()
         elif submodule_title == "多评估准则融合的风险学习分析":
             self._auto_score_content_widget.show()
+        elif submodule_title == "风险场景动态匹配与适配方案生成算法":
+            self._cdq_matching_content_widget.show()
         elif submodule_title == "DNNTrain":
             self._process_training_content_widget.show()
         elif submodule_title == "MPC simulation":

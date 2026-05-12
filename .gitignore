@@ -20,3 +20,4 @@ anomaly_result_*.json
 # DNN-MPC output and matlab files
 dnn_mpc/output/
 dnn_mpc/matlab
+/.idea/pyProjectModel.xml
