@@ -2,6 +2,8 @@
 import time
 import random
 import numpy as np
+import os
+import pandas as pd
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
@@ -49,14 +51,16 @@ NUM_TEST_SAMPLES = 100
 
 SEQUENCE_LENGTH = 128
 FEATURE_DIM = 10
-NUM_CLASSES = 5
+# 使用真实数据时我们将把标签映射为 3 类：
+# 0 -> 增加调整量 (原 CSV 标签 == 1)
+# 1 -> 减少调整量 (原 CSV 标签 == 2)
+# 2 -> 不调整 (原 CSV 标签 == 0 或 3)
+NUM_CLASSES = 3
 
 SECURITY_CLASS_NAMES = [
-    "正常运行",
-    "数据注入威胁",
-    "拒绝服务威胁",
-    "重放攻击威胁",
-    "拓扑篡改威胁",
+    "增加调整量",
+    "减少调整量",
+    "不调整",
 ]
 
 SYNTHETIC_NOISE_SCALE = 0.95
@@ -195,8 +199,86 @@ class ModelTrainingWorker(QThread):
             N = FEATURE_DIM
             num_classes = NUM_CLASSES
 
-            X_train, y_train = self._generate_synthetic_data(num_train, T, N, num_classes)
-            X_test, y_test = self._generate_synthetic_data(num_test, T, N, num_classes)
+            # 尝试从工作区的 input_data 下加载真实 CSV 数据（训练/测试），若不存在或加载失败则退回合成数据
+            def _load_csv_to_tensors(csv_path):
+                try:
+                    if not os.path.exists(csv_path):
+                        return None
+                    df = pd.read_csv(csv_path, header=None)
+                    if df.shape[1] < 2:
+                        return None
+                    X_raw = df.iloc[:, :-1].values.astype(float)
+                    y_raw = df.iloc[:, -1].values
+                    cols = X_raw.shape[1]
+                    t = T
+                    n = N
+
+                    # 先尝试用默认的 T,N
+                    if cols == t * n:
+                        pass
+                    elif cols % t == 0:
+                        n = cols // t
+                    elif cols % n == 0:
+                        t = cols // n
+                    else:
+                        # 寻找合适的因子（特征维度不超过 50）
+                        found = False
+                        for cand_n in range(1, min(50, cols) + 1):
+                            if cols % cand_n == 0:
+                                cand_t = cols // cand_n
+                                if 5 <= cand_t <= 2000:
+                                    n = cand_n
+                                    t = cand_t
+                                    found = True
+                                    break
+                        if not found:
+                            # 无法合理分解，则当作单通道序列
+                            t = cols
+                            n = 1
+
+                    try:
+                        X = X_raw.reshape(-1, t, n)
+                    except Exception as e:
+                        self.log_signal.emit(f"重塑 CSV 特征失败: cols={cols}, 尝试 (t,n)=({t},{n}) 错误: {e}")
+                        return None
+
+                    def _map_label(v):
+                        try:
+                            iv = int(float(v))
+                        except Exception:
+                            return 2
+                        if iv == 1:
+                            return 0  # 增加 -> class 0
+                        if iv == 2:
+                            return 1  # 减少 -> class 1
+                        # 0 或 3 -> 不调整 -> class 2
+                        return 2
+
+                    y = np.array([_map_label(v) for v in y_raw], dtype=np.int64)
+                    return torch.tensor(X, dtype=torch.float32), torch.tensor(y, dtype=torch.long)
+                except Exception as e:
+                    self.log_signal.emit(f"加载 CSV 时出错: {e}")
+                    return None
+
+            base_dir = os.path.dirname(__file__)
+            train_csv = os.path.join(base_dir, "input_data", "error_classification_train.csv")
+            test_csv = os.path.join(base_dir, "input_data", "error_classification_test.csv")
+
+            loaded_train = _load_csv_to_tensors(train_csv)
+            loaded_test = _load_csv_to_tensors(test_csv)
+
+            if loaded_train is not None and loaded_test is not None:
+                X_train, y_train = loaded_train
+                X_test, y_test = loaded_test
+                num_train = X_train.shape[0]
+                num_test = X_test.shape[0]
+                T = X_train.shape[1]
+                N = X_train.shape[2]
+                self.log_signal.emit(f"已加载真实 CSV 数据: train={num_train}, test={num_test}, 序列长度={T}, 特征维度={N}")
+            else:
+                self.log_signal.emit("未检测到可用的 CSV 数据，使用合成数据进行训练。")
+                X_train, y_train = self._generate_synthetic_data(num_train, T, N, num_classes)
+                X_test, y_test = self._generate_synthetic_data(num_test, T, N, num_classes)
 
             train_dataset = TensorDataset(X_train, y_train)
             test_dataset = TensorDataset(X_test, y_test)
@@ -324,7 +406,7 @@ class ErrorClassificationWidget(QWidget):
 
         btn_box = QVBoxLayout()
         btn_box.addStretch()
-        self._run_btn = QPushButton("开始潜在安全威胁识别与自动分类训练")
+        self._run_btn = QPushButton("开始训练")
         self._run_btn.clicked.connect(self._start_training)
         self._run_btn.setFixedHeight(36)
         self._run_btn.setMinimumWidth(180)
@@ -342,7 +424,7 @@ class ErrorClassificationWidget(QWidget):
 
         content_row.addWidget(left_panel, 1)
 
-        right_panel = QGroupBox("潜在安全威胁识别与自动分类结果")
+        right_panel = QGroupBox("分类结果")
         right_layout = QVBoxLayout(right_panel)
         right_layout.setSpacing(12)
         right_layout.setContentsMargins(12, 16, 12, 12)
@@ -536,7 +618,7 @@ class ErrorClassificationWidget(QWidget):
         ax1 = self._figure.add_subplot(121)
         ax1.set_facecolor('#152334')
         im = ax1.imshow(cm, interpolation='nearest', cmap='Blues')
-        ax1.set_title('潜在安全威胁识别混淆矩阵', color='#d4e8ff', fontsize=12)
+        ax1.set_title('混淆矩阵', color='#d4e8ff', fontsize=12)
         ax1.set_xlabel('预测类别', color='#d4e8ff')
         ax1.set_ylabel('真实类别', color='#d4e8ff')
         ticks = list(range(num_classes))
@@ -568,7 +650,7 @@ class ErrorClassificationWidget(QWidget):
         ax2.set_xticks(ticks)
         ax2.set_xticklabels([SECURITY_CLASS_NAMES[i] for i in ticks], color='#d4e8ff', rotation=20, ha='right')
         ax2.set_ylabel('识别召回率', color='#d4e8ff')
-        ax2.set_title('各类潜在安全威胁识别召回率', color='#d4e8ff', fontsize=12)
+        ax2.set_title('识别召回率', color='#d4e8ff', fontsize=12)
 
         for bar in ax2.patches:
             bar.set_edgecolor('#2e4a63')
