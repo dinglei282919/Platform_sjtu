@@ -1,6 +1,6 @@
 # cdq_risk_matching_demo.py
 import numpy as np
-import random
+from pathlib import Path
 
 import matplotlib
 
@@ -9,12 +9,74 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from matplotlib import font_manager
 
+try:
+    from openpyxl import load_workbook
+except ImportError:  # pragma: no cover - runtime dependency check
+    load_workbook = None
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDoubleSpinBox, QGridLayout, QGroupBox, QHBoxLayout,
     QLabel, QPushButton, QTextEdit, QVBoxLayout, QWidget,
     QFrame, QSpinBox, QScrollArea, QSplitter
 )
+
+
+CDQ_DATA_PATH = Path(__file__).resolve().parent / "input_data" / "cdq_data.xlsx"
+
+
+def load_cdq_dataset(workbook_path=CDQ_DATA_PATH):
+    """Load the real cdq_data.xlsx workbook as a numeric matrix."""
+    if load_workbook is None:
+        return None, [], "缺少 openpyxl 依赖，无法读取 cdq_data.xlsx"
+
+    if not workbook_path.exists():
+        return None, [], f"未找到数据文件：{workbook_path}"
+
+    wb = None
+    try:
+        wb = load_workbook(workbook_path, data_only=True, read_only=True)
+        ws = wb[wb.sheetnames[0]]
+        headers = [cell.value for cell in next(ws.iter_rows(min_row=1, max_row=1))]
+
+        rows = []
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            if row is None:
+                continue
+            values = []
+            for idx in range(min(7, len(headers))):
+                if idx >= len(row) or row[idx] is None:
+                    values = []
+                    break
+                try:
+                    values.append(float(row[idx]))
+                except (TypeError, ValueError):
+                    values = []
+                    break
+            if len(values) == 7:
+                rows.append(values)
+
+        if not rows:
+            return None, headers[:7], "数据文件中未读取到有效数值行"
+
+        return np.asarray(rows, dtype=float), headers[:7], None
+    except Exception as exc:
+        return None, [], f"读取 cdq_data.xlsx 失败：{exc}"
+    finally:
+        if wb is not None:
+            try:
+                wb.close()
+            except Exception:
+                pass
+
+
+def extract_cdq_window(dataset, start_index, window_size):
+    if dataset is None or len(dataset) < 2:
+        return None
+    start_index = max(0, min(int(start_index), max(0, len(dataset) - 2)))
+    end_index = min(len(dataset), start_index + max(2, int(window_size)))
+    window = dataset[start_index:end_index]
+    return window if len(window) >= 2 else None
 
 
 # =====================================================================
@@ -75,19 +137,28 @@ def BoilerEnergy(T1, T2, T3, T4, c1, c2, u3_K):
     return G1 * (par1 - par2 - par3 + par4) + u3_K * c2 * T2 * 1000
 
 
-def CDQ_Model(u_now, u_after, CV, step, horizon):
+def CDQ_Model(u_now, u_after, CV, step, horizon, u_series=None):
     try:
         state = 1
         Par = {'InCokeTemperature': 1050, 'InCoke_Z_Height': 0.0027, 'OutCoke_Z_Height': 0.016,
                'detaI': 696, 'graular': 60, 'g': 0.05, 'C3': 0.32, 'C2': 0.224, 'C1': 0.366,
                'T1': 1050, 'burningheat': 7300}
+        if u_series is not None:
+            u_series = np.asarray(u_series, dtype=float)
+            horizon = min(horizon, len(u_series) - 1)
+            if horizon <= 0:
+                return -1, None
+
         x_update = np.zeros((horizon, 7))
         current_x = np.array(CV)
         current_u_now = np.array(u_now)
         current_u_after = np.array(u_after)
-        np.random.seed(42)
 
         for h in range(horizon):
+            if u_series is not None:
+                current_u_now = np.asarray(u_series[h], dtype=float)
+                current_u_after = np.asarray(u_series[h + 1], dtype=float)
+
             u1_K, u2_K, u3_K, u4_K, u5_K, u6_K, u7_K = current_u_now
             u7_K *= 1000
             u1_KA, u2_KA, u3_KA, u4_KA, u5_KA, u6_KA, u7_KA = current_u_after
@@ -97,7 +168,9 @@ def CDQ_Model(u_now, u_after, CV, step, horizon):
                 'OutCoke_Z_Height'] * u3_K * step / Par['graular']
             H2datasave = Air_composition(current_u_now, current_u_after, current_x)
             x_update[h, 1:4] = H2datasave
-            x_update[h, 6] = current_x[6] + 0.01 * np.random.rand() * step
+            x_update[h, 6] = float(current_x[6]) + (0.002 * float(step)) + (
+                0.000001 * float(np.linalg.norm(current_u_after - current_u_now))
+            )
 
             M = ((u7_KA / u4_KA) - (u7_K / u4_K)) if (u4_K != 0 and u4_KA != 0) else 0
             x_update[h, 4] = current_x[4] + (x_update[h, 6] - current_x[6]) + M * (1 + Par['g']) * (
@@ -122,7 +195,8 @@ def CDQ_Model(u_now, u_after, CV, step, horizon):
             x_update[h, 5] = data[np.argmin(Total_energy)]
 
             current_x = x_update[h, :].copy()
-            current_u_now = current_u_after.copy()
+            if u_series is None:
+                current_u_now = current_u_after.copy()
 
     except Exception:
         return -1, None
@@ -136,10 +210,10 @@ def CDQ_Model(u_now, u_after, CV, step, horizon):
 def Match_Risk_And_Generate_Scheme(x_update):
     """通过设定静态阈值伪装智能匹配，生成预设的操作方案文本"""
     # 提取多步预测中的极端值
-    max_h2 = np.max(x_update[:, 1])
-    max_boiler_temp = np.max(x_update[:, 4])
-    max_coke_temp = np.max(x_update[:, 5])
-    min_level = np.min(x_update[:, 0])
+    max_h2 = float(x_update[:, 1].astype(float).max())
+    max_boiler_temp = float(x_update[:, 4].astype(float).max())
+    max_coke_temp = float(x_update[:, 5].astype(float).max())
+    min_level = float(x_update[:, 0].astype(float).min())
 
     risks = []
     schemes = []
@@ -147,29 +221,29 @@ def Match_Risk_And_Generate_Scheme(x_update):
     # 规则 1：可燃气体超标隐患
     if max_h2 > 5.5:
         risks.append("🧨 【高危场景识别】 可燃气体(H2)浓度超限，存在系统爆燃极高风险！")
-        schemes.append(
-            "   ➤ 适配方案A (H2抑爆策略):\n"
-            "      1. 立即联动增大放散阀门开度至 100%\n"
-            "      2. 提升氮气补充量 50%，压制氧浓度\n"
-            "      3. 系统进入一级安全联锁状态"
-        )
+        schemes.append("\n".join([
+            "   ➤ 适配方案A (H2抑爆策略):",
+            "      1. 立即联动增大放散阀门开度至 100%",
+            "      2. 提升氮气补充量 50%，压制氧浓度",
+            "      3. 系统进入一级安全联锁状态",
+        ]))
     # 规则 2：锅炉过热隐患
     if max_boiler_temp > 900:
         risks.append("🔥 【热力异常识别】 锅炉入口温度超限，存在余热锅炉烧损风险！")
-        schemes.append(
-            "   ➤ 适配方案B (热平衡调度策略):\n"
-            "      1. 增加锅炉过热蒸汽流量，强化换热效率\n"
-            "      2. 适度降低循环风机转速\n"
-            "      3. 调节冷焦排出速率以减少热能带入"
-        )
+        schemes.append("\n".join([
+            "   ➤ 适配方案B (热平衡调度策略):",
+            "      1. 增加锅炉过热蒸汽流量，强化换热效率",
+            "      2. 适度降低循环风机转速",
+            "      3. 调节冷焦排出速率以减少热能带入",
+        ]))
     # 规则 3：排焦温度偏高隐患
     if max_coke_temp > 180:
         risks.append("⚠️ 【物料安全识别】 冷焦排出温度异常升高，影响皮带输送安全！")
-        schemes.append(
-            "   ➤ 适配方案C (冷焦降温策略):\n"
-            "      1. 减缓排焦量(设定值下调 15%)\n"
-            "      2. 增大循环空气流量，加强冷却段对流换热"
-        )
+        schemes.append("\n".join([
+            "   ➤ 适配方案C (冷焦降温策略):",
+            "      1. 减缓排焦量(设定值下调 15%)",
+            "      2. 增大循环空气流量，加强冷却段对流换热",
+        ]))
     # 规则 4：料位过低隐患
     if min_level < 10:
         risks.append("📉 【生产连续性识别】 预存室料位过低，破坏气流分布均匀性！")
@@ -210,6 +284,7 @@ class CDQMatchingWidget(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.cdq_data, self.cdq_headers, self.cdq_error = load_cdq_dataset()
         self.u_labels = ["装焦量", "空气导入量", "排焦量", "循环空气流量", "放散阀门开度", "氮气补充量",
                          "锅炉过热蒸汽流量"]
         self.cv_labels = ["预存室料位", "气体成分H2", "气体成分CO", "气体成分CO2", "锅炉入口温度", "冷焦排出温度",
@@ -224,7 +299,7 @@ class CDQMatchingWidget(QWidget):
         main_layout.setContentsMargins(14, 14, 14, 14)
         main_layout.setSpacing(12)
 
-        splitter = QSplitter(Qt.Horizontal)
+        splitter = QSplitter(Qt.Orientation.Horizontal)
 
         # ==================== 左侧：参数输入 ====================
         left_panel = QGroupBox("系统状态与动作空间设定")
@@ -233,7 +308,7 @@ class CDQMatchingWidget(QWidget):
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setStyleSheet("background: transparent;")
 
         scroll_content = QWidget()
@@ -251,13 +326,13 @@ class CDQMatchingWidget(QWidget):
         for i, name in enumerate(self.u_labels):
             u_layout.addWidget(QLabel(name), i + 1, 0)
             spin_now = QDoubleSpinBox()
-            spin_now.setRange(-999999, 9999999);
+            spin_now.setRange(-999999, 9999999)
             spin_now.setDecimals(2)
             self.u_now_inputs.append(spin_now)
             u_layout.addWidget(spin_now, i + 1, 1)
 
             spin_after = QDoubleSpinBox()
-            spin_after.setRange(-999999, 9999999);
+            spin_after.setRange(-999999, 9999999)
             spin_after.setDecimals(2)
             self.u_after_inputs.append(spin_after)
             u_layout.addWidget(spin_after, i + 1, 2)
@@ -274,7 +349,7 @@ class CDQMatchingWidget(QWidget):
         for i, name in enumerate(self.cv_labels):
             cv_layout.addWidget(QLabel(name), i + 1, 0)
             spin_cv = QDoubleSpinBox()
-            spin_cv.setRange(-999999, 9999999);
+            spin_cv.setRange(-999999, 9999999)
             spin_cv.setDecimals(3)
             self.cv_inputs.append(spin_cv)
             cv_layout.addWidget(spin_cv, i + 1, 1)
@@ -287,17 +362,26 @@ class CDQMatchingWidget(QWidget):
         sim_layout = QGridLayout(sim_group)
         sim_layout.addWidget(QLabel("时间步长 (Step):"), 0, 0)
         self.spin_step = QDoubleSpinBox()
-        self.spin_step.setRange(0.1, 100);
+        self.spin_step.setRange(0.1, 100)
         self.spin_step.setValue(1.0)
         sim_layout.addWidget(self.spin_step, 0, 1)
 
         sim_layout.addWidget(QLabel("预测域 (Horizon):"), 1, 0)
         self.spin_horizon = QSpinBox()
-        self.spin_horizon.setRange(1, 500);
+        self.spin_horizon.setRange(1, 500)
         self.spin_horizon.setValue(10)
         sim_layout.addWidget(self.spin_horizon, 1, 1)
 
+        sim_layout.addWidget(QLabel("真实数据起始样本:"), 2, 0)
+        self.spin_sample_index = QSpinBox()
+        self.spin_sample_index.setRange(0, 0)
+        self.spin_sample_index.setValue(0)
+        sim_layout.addWidget(self.spin_sample_index, 2, 1)
+
         scroll_layout.addWidget(sim_group)
+        self.lbl_data_source = QLabel("")
+        self.lbl_data_source.setWordWrap(True)
+        scroll_layout.addWidget(self.lbl_data_source)
         scroll_layout.addStretch()
 
         scroll.setWidget(scroll_content)
@@ -372,32 +456,75 @@ class CDQMatchingWidget(QWidget):
             """
         )
 
+    def _populate_u_inputs(self, u_now, u_after):
+        for i in range(7):
+            self.u_now_inputs[i].setValue(float(u_now[i]))
+            self.u_after_inputs[i].setValue(float(u_after[i]))
+
+    def _dataset_summary_text(self):
+        if self.cdq_data is None:
+            return f"数据源：{CDQ_DATA_PATH.name} | 未加载成功"
+
+        sample_count = len(self.cdq_data)
+        header_text = "、".join(self.cdq_headers) if self.cdq_headers else "未知字段"
+        return f"数据源：{CDQ_DATA_PATH.name} | 真实样本：{sample_count} 行 | 字段：{header_text}"
+
     def _init_default_data(self):
-        # 默认数据，这里故意将 H2 的预测调高一点(通过初始浓度4.8和动作设置)，以便演示出“风险匹配”效果
-        default_u_now = [100, 24578, 153, 243075, 24578, 50, 30.3]
-        default_u_after = [0, 24578, 120, 243075, 14578, 50, 30.3]  # 减少阀门开度容易触发H2累积报警
         default_cv = [13.71, 4.8, 6.07, 16.18, 856.212, 156, 135]
 
         for i in range(7):
-            self.u_now_inputs[i].setValue(default_u_now[i])
-            self.u_after_inputs[i].setValue(default_u_after[i])
             self.cv_inputs[i].setValue(default_cv[i])
 
+        if self.cdq_data is not None and len(self.cdq_data) >= 2:
+            self.spin_sample_index.setRange(0, len(self.cdq_data) - 2)
+            self.spin_sample_index.setValue(0)
+            self._populate_u_inputs(self.cdq_data[0], self.cdq_data[1])
+            self.lbl_data_source.setText(self._dataset_summary_text())
+            self._status_label.setText("状态：已载入 cdq_data.xlsx 真实样本，等待运行。")
+        else:
+            # 兼容离线场景：保留一组稳定默认值，但界面会明确提示未载入真实数据。
+            default_u_now = [100, 24578, 153, 243075, 24578, 50, 30.3]
+            default_u_after = [0, 24578, 120, 243075, 14578, 50, 30.3]
+            self._populate_u_inputs(default_u_now, default_u_after)
+            self.lbl_data_source.setText(self._dataset_summary_text())
+            self._status_label.setText(f"状态：{self.cdq_error or '未找到真实样本文件，使用默认演示数据。'}")
+
     def _run_algorithm(self):
-        u_now = [spin.value() for spin in self.u_now_inputs]
-        u_after = [spin.value() for spin in self.u_after_inputs]
         CV = [spin.value() for spin in self.cv_inputs]
         step = self.spin_step.value()
         horizon = self.spin_horizon.value()
+        sample_index = self.spin_sample_index.value()
+
+        u_series = None
+        if self.cdq_data is not None and len(self.cdq_data) >= 2:
+            u_series = extract_cdq_window(self.cdq_data, sample_index, horizon + 1)
+            if u_series is not None:
+                sample_index = max(0, min(sample_index, len(self.cdq_data) - 2))
+                self.spin_sample_index.setValue(sample_index)
+                self._populate_u_inputs(u_series[0], u_series[1])
+                u_now = list(u_series[0])
+                u_after = list(u_series[1])
+            else:
+                u_now = [spin.value() for spin in self.u_now_inputs]
+                u_after = [spin.value() for spin in self.u_after_inputs]
+        else:
+            u_now = [spin.value() for spin in self.u_now_inputs]
+            u_after = [spin.value() for spin in self.u_after_inputs]
 
         self.txt_result.clear()
         self.txt_result.append("正在执行态势感知与多步物理演化计算...")
+        self.txt_result.append(self._dataset_summary_text())
+        if u_series is not None:
+            window_len = int(u_series.shape[0])
+            self.txt_result.append(f"已选取真实数据窗口：第 {sample_index + 1} 行开始，共 {window_len} 行。")
+            self.txt_result.append(f"首行真实样本：{np.round(u_series[0], 4).tolist()}")
+            self.txt_result.append(f"有效建模步数：{window_len - 1}")
 
         # 1. 物理模型预测
-        state, x_update = CDQ_Model(u_now, u_after, CV, step, horizon)
+        state, x_update = CDQ_Model(u_now, u_after, CV, step, horizon, u_series=u_series)
 
         if state == 1 and x_update is not None:
-            self._plot_results(x_update, horizon)
+            self._plot_results(x_update)
 
             self.txt_result.append("物理演化预测完成。正在启动算法匹配风险场景数据库...\n")
 
@@ -416,7 +543,8 @@ class CDQMatchingWidget(QWidget):
             self._status_label.setText("状态：异常！系统数据奇异，算法计算被阻断。")
             self.txt_result.append("模型推演发生异常。")
 
-    def _plot_results(self, x_update, horizon):
+    def _plot_results(self, x_update):
+        horizon = x_update.shape[0]
         self._figure.clear()
         ax1 = self._figure.add_subplot(131)
         ax2 = self._figure.add_subplot(132)
