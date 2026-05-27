@@ -83,7 +83,7 @@ class MultiScenarioAnomalyDetectionWidget(QWidget):
         param_layout = QFormLayout(param_group)
         param_layout.setVerticalSpacing(10)
 
-        self._mcr_root_input = QLineEdit(r"D:\MATLAB\MATLAB Runtime\R2023a")
+        self._mcr_root_input = QLineEdit(r"E:\MATLAB2024")
         param_layout.addRow("MATLAB Runtime路径:", self._mcr_root_input)
 
         percent_holder = QFrame()
@@ -372,10 +372,10 @@ class MultiScenarioAnomalyDetectionWidget(QWidget):
         runtime_dir = mcr_root / "runtime" / "win64"
         bin_dir = mcr_root / "bin" / "win64"
         extern_dir = mcr_root / "extern" / "bin" / "win64"
-        dll_path = runtime_dir / "mclmcrrt9_14.dll"
+        dll_path = runtime_dir / "mclmcrrt24_2.dll"
 
         if not dll_path.exists():
-            raise FileNotFoundError(f"未找到 MATLAB Runtime 9.14 DLL: {dll_path}")
+            raise FileNotFoundError(f"未找到 MATLAB Runtime R2024b DLL: {dll_path}")
 
         current = os.environ.get("PATH", "")
         current_parts = current.split(os.pathsep) if current else []
@@ -470,7 +470,7 @@ class MultiScenarioAnomalyDetectionWidget(QWidget):
             self.workspace_dir / ".venv_fw8_mcr914" / "python.exe",
             Path(sys.executable).resolve().parent / ".venv_fw8_mcr914" / "python.exe",
         ]
-        # MATLAB Runtime 9.14 对 Python 版本敏感，优先寻找项目内置的兼容解释器。
+        # MATLAB Runtime R2024b 对 Python 版本敏感，优先寻找项目内置的兼容解释器。
         python_exe = next((p for p in python_candidates if p.exists()), None)
         if python_exe is None:
             checked = " | ".join(str(p) for p in python_candidates)

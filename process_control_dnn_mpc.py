@@ -278,7 +278,7 @@ class ProcessControlDnnMpcWidget(QWidget):
         self._package_name_input = QLineEdit(DEFAULT_DNN_MPC_PACKAGE_NAME)
         path_form.addRow("Python包名:", self._package_name_input)
 
-        self._mcr_root_input = QLineEdit(r"D:\MATLAB2024")
+        self._mcr_root_input = QLineEdit(r"E:\MATLAB2024")
         self._mcr_root_input.setToolTip("MATLAB R2024b 或 MATLAB Runtime R2024b 根目录。")
         path_form.addRow("MCR_ROOT:", self._make_path_row(self._mcr_root_input))
 

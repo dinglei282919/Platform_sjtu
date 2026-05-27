@@ -20,6 +20,7 @@ from error_classification import ErrorClassificationWidget  # 潜在安全威胁
 from auto_score import AutoScoreWidget  # 多评估准则融合的风险学习分析
 from cdq_risk_matching import CDQMatchingWidget
 from process_control_dnn_mpc import ProcessControlDnnMpcWidget
+from second_order_dynamic_system import SecondOrderDynamicSystemWidget
 
 
 class MainWindow(QMainWindow):
@@ -39,6 +40,7 @@ class MainWindow(QMainWindow):
         self._content_title_label = None
         self._anomaly_content_widget = None
         self._correlation_content_widget = None
+        self._second_order_content_widget = None
         self._error_class_content_widget = None
         self._auto_score_content_widget = None
         self._cdq_matching_content_widget = None
@@ -109,7 +111,7 @@ class MainWindow(QMainWindow):
         layout.setSpacing(8)
 
         items = [
-            ("📊", "异构数据治理", True, ["关联分析"]),
+            ("📊", "异构数据治理", True, ["关联分析", "二阶非线性动态系统"]),
             ("🏭", "异常行为检测", False, ["多工况分层级异常检测"]),
             ("📈", "风险动态分析", False,
              ["潜在安全威胁识别与自动分类",
@@ -187,6 +189,14 @@ class MainWindow(QMainWindow):
         self._correlation_content_widget = correlation_content
         self._correlation_content_widget.hide()
 
+        second_order_content = QFrame()
+        second_order_layout = QVBoxLayout(second_order_content)
+        second_order_layout.setContentsMargins(0, 0, 0, 0)
+        second_order_layout.setSpacing(0)
+        second_order_layout.addWidget(SecondOrderDynamicSystemWidget())
+        self._second_order_content_widget = second_order_content
+        self._second_order_content_widget.hide()
+
         process_training_content = QFrame()
         process_training_layout = QVBoxLayout(process_training_content)
         process_training_layout.setContentsMargins(0, 0, 0, 0)
@@ -205,6 +215,7 @@ class MainWindow(QMainWindow):
 
         body_layout.addWidget(self._anomaly_content_widget, 1)
         body_layout.addWidget(self._correlation_content_widget, 1)
+        body_layout.addWidget(self._second_order_content_widget, 1)
         body_layout.addWidget(self._process_training_content_widget, 1)
         body_layout.addWidget(self._process_mpc_content_widget, 1)
 
@@ -280,6 +291,7 @@ class MainWindow(QMainWindow):
         for widget in (
             self._anomaly_content_widget,
             self._correlation_content_widget,
+            self._second_order_content_widget,
             self._error_class_content_widget,
             self._auto_score_content_widget,
             self._cdq_matching_content_widget,
@@ -291,6 +303,8 @@ class MainWindow(QMainWindow):
 
         if submodule_title == "多工况分层级异常检测":
             self._anomaly_content_widget.show()
+        elif submodule_title == "二阶非线性动态系统":
+            self._second_order_content_widget.show()
         elif submodule_title == "潜在安全威胁识别与自动分类":
             self._error_class_content_widget.show()
         elif submodule_title == "多评估准则融合的风险学习分析":

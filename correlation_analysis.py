@@ -18,6 +18,7 @@ class SharedParameterStore:
     """在不同界面模块之间暂存并传递关联分析生成的参数。"""
 
     _correlation_params = None
+    _second_order_simulation_result = None
 
     @classmethod
     def set_correlation_params(cls, percent_min, percent_max, sigma1, sigma2):
@@ -38,6 +39,16 @@ class SharedParameterStore:
             return None
         # 返回副本，避免外部调用者直接修改类级缓存。
         return dict(cls._correlation_params)
+
+    @classmethod
+    def set_second_order_simulation_result(cls, payload):
+        cls._second_order_simulation_result = dict(payload) if isinstance(payload, dict) else payload
+
+    @classmethod
+    def get_second_order_simulation_result(cls):
+        if cls._second_order_simulation_result is None:
+            return None
+        return dict(cls._second_order_simulation_result)
 
 
 class CorrelationAnalysisWidget(QWidget):
