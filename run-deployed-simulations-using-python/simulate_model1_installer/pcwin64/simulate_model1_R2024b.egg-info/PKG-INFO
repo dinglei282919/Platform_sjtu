@@ -1,0 +1,9 @@
+Metadata-Version: 2.1
+Name: simulate-model1-R2024b
+Version: 24.2
+Summary: A Python interface to simulate_model1
+Home-page: https://www.mathworks.com/
+Author: MathWorks
+Platform: Linux
+Platform: Windows
+Platform: macOS
