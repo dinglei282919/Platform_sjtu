@@ -46,6 +46,8 @@ class MainWindow(QMainWindow):
         self._cdq_matching_content_widget = None
         self._process_training_content_widget = None
         self._process_mpc_content_widget = None
+        self._sis_detection_content_widget = None
+        self._sil_validation_content_widget = None
         self._build_ui()
 
     def _build_ui(self):
@@ -92,9 +94,10 @@ class MainWindow(QMainWindow):
 
         return bar
 
-    def _make_nav_button(self, icon: str, text: str, checked=False):
+    def _make_nav_button(self, icon: str, text: str, checked=False, has_dropdown=True):
         """创建统一样式的一级导航按钮。"""
-        btn = QPushButton(f"{icon}  {text}  ⌄")
+        suffix = "  ⌄" if has_dropdown else ""
+        btn = QPushButton(f"{icon}  {text}{suffix}")
         btn.setCheckable(True)
         btn.setChecked(checked)
         btn.setObjectName("navButton")
@@ -118,12 +121,14 @@ class MainWindow(QMainWindow):
               "多评估准则融合的风险学习分析",
               "风险场景动态匹配与适配方案生成算法",
               ]),
-            ("🎛", "化工控制过程", False, ["DNNTrain", "MPC simulation"]),
+            ("🎛", "风险管控优化决策", False, ["DNNTrain", "MPC simulation"]),
+            ("🛡", "SIS自主化检测", False, []),
+            ("✅", "在线SIL验证", False, []),
         ]
 
         # 建立按钮到子菜单、标题的映射，点击时可直接根据按钮反查内容。
         for icon, text, checked, menu_items in items:
-            button = self._make_nav_button(icon, text, checked=checked)
+            button = self._make_nav_button(icon, text, checked=checked, has_dropdown=bool(menu_items))
             layout.addWidget(button)
             button.clicked.connect(lambda _checked=False, b=button: self._toggle_dropdown(b))
             self._nav_menu_map[button] = menu_items
@@ -213,11 +218,27 @@ class MainWindow(QMainWindow):
         self._process_mpc_content_widget = process_mpc_content
         self._process_mpc_content_widget.hide()
 
+        sis_detection_content = QFrame()
+        sis_detection_layout = QVBoxLayout(sis_detection_content)
+        sis_detection_layout.setContentsMargins(0, 0, 0, 0)
+        sis_detection_layout.setSpacing(0)
+        self._sis_detection_content_widget = sis_detection_content
+        self._sis_detection_content_widget.hide()
+
+        sil_validation_content = QFrame()
+        sil_validation_layout = QVBoxLayout(sil_validation_content)
+        sil_validation_layout.setContentsMargins(0, 0, 0, 0)
+        sil_validation_layout.setSpacing(0)
+        self._sil_validation_content_widget = sil_validation_content
+        self._sil_validation_content_widget.hide()
+
         body_layout.addWidget(self._anomaly_content_widget, 1)
         body_layout.addWidget(self._correlation_content_widget, 1)
         body_layout.addWidget(self._second_order_content_widget, 1)
         body_layout.addWidget(self._process_training_content_widget, 1)
         body_layout.addWidget(self._process_mpc_content_widget, 1)
+        body_layout.addWidget(self._sis_detection_content_widget, 1)
+        body_layout.addWidget(self._sil_validation_content_widget, 1)
 
         self._error_class_content_widget = ErrorClassificationWidget()
         self._error_class_content_widget.hide()
@@ -270,24 +291,25 @@ class MainWindow(QMainWindow):
 
     def _toggle_dropdown(self, button):
         """响应一级导航点击，切换下拉菜单显示状态并更新选中按钮。"""
+        menu_items = self._nav_menu_map.get(button, [])
+        nav_title = self._nav_title_map.get(button, "")
         if self._dropdown.isVisible() and self._active_dropdown_button is button:
             self._dropdown.hide()
             return
         self._active_dropdown_button = button
         for nav_btn in self._nav_menu_map:
             nav_btn.setChecked(nav_btn is button)
+        if not menu_items:
+            self._on_empty_module_clicked(nav_title)
+            return
         # 先刷新菜单内容，再计算位置，保证面板尺寸参与定位。
-        self._set_dropdown_items(self._nav_title_map.get(button, ""), self._nav_menu_map.get(button, []))
+        self._set_dropdown_items(nav_title, menu_items)
         self._position_dropdown()
         self._dropdown.show()
         self._dropdown.raise_()
 
-    def _on_submodule_clicked(self, nav_title, submodule_title):
-        """响应子模块点击，更新标题并显示对应功能页面。"""
-        self._dropdown.hide()
-        if self._content_title_label is not None:
-            self._content_title_label.setText(f"{nav_title} - {submodule_title}")
-
+    def _hide_content_widgets(self):
+        """隐藏所有功能内容页。"""
         for widget in (
             self._anomaly_content_widget,
             self._correlation_content_widget,
@@ -297,9 +319,31 @@ class MainWindow(QMainWindow):
             self._cdq_matching_content_widget,
             self._process_training_content_widget,
             self._process_mpc_content_widget,
+            self._sis_detection_content_widget,
+            self._sil_validation_content_widget,
         ):
             if widget is not None:
                 widget.hide()
+
+    def _on_empty_module_clicked(self, nav_title):
+        """显示无子模块的一级功能空白页。"""
+        self._dropdown.hide()
+        if self._content_title_label is not None:
+            self._content_title_label.setText(nav_title)
+
+        self._hide_content_widgets()
+        if nav_title == "SIS自主化检测":
+            self._sis_detection_content_widget.show()
+        elif nav_title == "在线SIL验证":
+            self._sil_validation_content_widget.show()
+
+    def _on_submodule_clicked(self, nav_title, submodule_title):
+        """响应子模块点击，更新标题并显示对应功能页面。"""
+        self._dropdown.hide()
+        if self._content_title_label is not None:
+            self._content_title_label.setText(f"{nav_title} - {submodule_title}")
+
+        self._hide_content_widgets()
 
         if submodule_title == "多工况分层级异常检测":
             self._anomaly_content_widget.show()
