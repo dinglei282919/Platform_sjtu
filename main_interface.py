@@ -1,5 +1,5 @@
+# -*- coding: utf-8 -*-
 import sys
-
 from PySide6.QtCore import QPoint, Qt, QTimer
 from PySide6.QtGui import QFont, QFontMetrics
 from PySide6.QtWidgets import (
@@ -14,22 +14,45 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from anomaly_detection import MultiScenarioAnomalyDetectionWidget
-from correlation_analysis import CorrelationAnalysisWidget
-from error_classification import ErrorClassificationWidget  # 潜在安全威胁识别与自动分类
-from auto_score import AutoScoreWidget  # 多评估准则融合的风险学习分析
-from cdq_risk_matching import CDQMatchingWidget
-from process_control_dnn_mpc import ProcessControlDnnMpcWidget
-from second_order_dynamic_system import SecondOrderDynamicSystemWidget
+# ---- 原有模块导入（若缺失则用 try-except 保护） ----
+try:
+    from anomaly_detection import MultiScenarioAnomalyDetectionWidget
+except ImportError:
+    MultiScenarioAnomalyDetectionWidget = None
+try:
+    from correlation_analysis import CorrelationAnalysisWidget
+except ImportError:
+    CorrelationAnalysisWidget = None
+try:
+    from error_classification import ErrorClassificationWidget
+except ImportError:
+    ErrorClassificationWidget = None
+try:
+    from auto_score import AutoScoreWidget
+except ImportError:
+    AutoScoreWidget = None
+try:
+    from cdq_risk_matching import CDQMatchingWidget
+except ImportError:
+    CDQMatchingWidget = None
+try:
+    from process_control_dnn_mpc import ProcessControlDnnMpcWidget
+except ImportError:
+    ProcessControlDnnMpcWidget = None
+try:
+    from second_order_dynamic_system import SecondOrderDynamicSystemWidget
+except ImportError:
+    SecondOrderDynamicSystemWidget = None
+
+# ---- 新增导入 ----
+from sdg_hazop import SDG_HazopWidget
+from sil_validation import SILValidationWidget
 
 
 class MainWindow(QMainWindow):
-    """主窗口，负责顶部导航、下拉菜单和功能页面之间的切换。"""
-
     def __init__(self):
-        """初始化主窗口尺寸、导航状态和两个功能页面容器。"""
         super().__init__()
-        self.setWindowTitle("工业安全智能决策平台")
+        self.setWindowTitle("流程行业动态风险管控工具集平台")
         self.setMinimumSize(1180, 760)
         self.resize(1500, 860)
         self._dropdown = None
@@ -38,6 +61,8 @@ class MainWindow(QMainWindow):
         self._nav_title_map = {}
         self._active_dropdown_button = None
         self._content_title_label = None
+
+        # 所有页面容器
         self._anomaly_content_widget = None
         self._correlation_content_widget = None
         self._second_order_content_widget = None
@@ -48,10 +73,14 @@ class MainWindow(QMainWindow):
         self._process_mpc_content_widget = None
         self._sis_detection_content_widget = None
         self._sil_validation_content_widget = None
+
+        # 预创建两个新模块的实例（避免重复加载）
+        self._sis_widget = SDG_HazopWidget()
+        self._sil_widget = SILValidationWidget()
+
         self._build_ui()
 
     def _build_ui(self):
-        """组装主界面的页头、功能导航栏和内容区域。"""
         root = QWidget()
         root.setObjectName("root")
         self.setCentralWidget(root)
@@ -60,16 +89,15 @@ class MainWindow(QMainWindow):
         root_layout.setContentsMargins(16, 12, 16, 14)
         root_layout.setSpacing(10)
 
-        # 主界面从上到下依次是页头、一级功能栏和功能内容区。
         root_layout.addWidget(self._build_header())
         root_layout.addWidget(self._build_function_bar())
         root_layout.addWidget(self._build_content(), 1)
 
         self._apply_styles()
+        # 默认进入 SIS自主化检测 -> SDG-HAZOP
         self._on_submodule_clicked("异构数据治理", "关联分析")
 
     def _build_header(self):
-        """创建顶部标题栏和右侧快捷图标区域。"""
         bar = QFrame()
         bar.setObjectName("headerBar")
         bar.setFixedHeight(64)
@@ -79,7 +107,7 @@ class MainWindow(QMainWindow):
 
         logo = QLabel("◈")
         logo.setObjectName("logoBlock")
-        title = QLabel("工业安全智能决策平台")
+        title = QLabel("流程行业动态风险管控工具集平台")
         title.setObjectName("pageTitle")
 
         layout.addWidget(logo)
@@ -95,7 +123,6 @@ class MainWindow(QMainWindow):
         return bar
 
     def _make_nav_button(self, icon: str, text: str, checked=False, has_dropdown=True):
-        """创建统一样式的一级导航按钮。"""
         suffix = "  ⌄" if has_dropdown else ""
         btn = QPushButton(f"{icon}  {text}{suffix}")
         btn.setCheckable(True)
@@ -105,7 +132,6 @@ class MainWindow(QMainWindow):
         return btn
 
     def _build_function_bar(self):
-        """创建一级功能导航栏，并绑定每个按钮的下拉菜单数据。"""
         bar = QFrame()
         bar.setObjectName("functionBar")
         bar.setFixedHeight(58)
@@ -113,20 +139,19 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(8)
 
+        # 菜单项：为 SIS自主化检测 和 在线SIL验证 增加子菜单
         items = [
             ("📊", "异构数据治理", True, ["关联分析", "二阶非线性动态系统"]),
-            ("🏭", "异常行为检测", False, ["多工况分层级异常检测"]),
+            ("🏭", "异常行为检测", False, ["基于移动目标防御的异常检测"]),
             ("📈", "风险动态分析", False,
              ["潜在安全威胁识别与自动分类",
               "多评估准则融合的风险学习分析",
-              "风险场景动态匹配与适配方案生成算法",
-              ]),
-            ("🎛", "风险管控优化决策", False, ["DNNTrain", "MPC simulation"]),
-            ("🛡", "SIS自主化检测", False, []),
-            ("✅", "在线SIL验证", False, []),
+              "风险场景动态匹配与适配方案生成算法"]),
+            ("🎛", "风险管控优化决策", False, ["控制模型训练评估", "优化控制仿真验证"]),
+            ("🛡", "SIS自主化检测", False, ["SDG-HAZOP"]),
+            ("✅", "在线SIL验证", False, ["基于GSPN-MC模型的动态化SIL验证方法"]),
         ]
 
-        # 建立按钮到子菜单、标题的映射，点击时可直接根据按钮反查内容。
         for icon, text, checked, menu_items in items:
             button = self._make_nav_button(icon, text, checked=checked, has_dropdown=bool(menu_items))
             layout.addWidget(button)
@@ -143,7 +168,6 @@ class MainWindow(QMainWindow):
         return bar
 
     def _build_dropdown(self):
-        """创建悬浮下拉面板，后续按当前导航项动态填充子模块。"""
         panel = QFrame(self, Qt.Popup | Qt.FramelessWindowHint)
         panel.setObjectName("dropdownPanel")
         panel.setFixedSize(420, 260)
@@ -154,7 +178,6 @@ class MainWindow(QMainWindow):
         return panel
 
     def _build_content(self):
-        """创建内容标题栏和可切换的功能页面容器。"""
         container = QFrame()
         container.setObjectName("contentRoot")
         vbox = QVBoxLayout(container)
@@ -166,10 +189,9 @@ class MainWindow(QMainWindow):
         title_bar.setFixedHeight(56)
         title_layout = QHBoxLayout(title_bar)
         title_layout.setContentsMargins(18, 0, 18, 0)
-        title = QLabel("异构数据治理 - 关联分析")
-        title.setObjectName("contentTitle")
-        self._content_title_label = title
-        title_layout.addWidget(title)
+        self._content_title_label = QLabel("SIS自主化检测 - SDG-HAZOP")
+        self._content_title_label.setObjectName("contentTitle")
+        title_layout.addWidget(self._content_title_label)
         title_layout.addStretch()
 
         body = QFrame()
@@ -178,95 +200,121 @@ class MainWindow(QMainWindow):
         body_layout.setContentsMargins(0, 0, 0, 0)
         body_layout.setSpacing(0)
 
-        anomaly_content = QFrame()
-        anomaly_layout = QVBoxLayout(anomaly_content)
-        anomaly_layout.setContentsMargins(0, 0, 0, 0)
-        anomaly_layout.setSpacing(0)
-        anomaly_layout.addWidget(MultiScenarioAnomalyDetectionWidget())
-        self._anomaly_content_widget = anomaly_content
-        self._anomaly_content_widget.hide()
+        # ---- 异常行为检测 ----
+        if MultiScenarioAnomalyDetectionWidget is not None:
+            anomaly_content = QFrame()
+            anomaly_layout = QVBoxLayout(anomaly_content)
+            anomaly_layout.setContentsMargins(0, 0, 0, 0)
+            anomaly_layout.setSpacing(0)
+            anomaly_layout.addWidget(MultiScenarioAnomalyDetectionWidget())
+            self._anomaly_content_widget = anomaly_content
+            self._anomaly_content_widget.hide()
+            body_layout.addWidget(self._anomaly_content_widget, 1)
 
-        correlation_content = QFrame()
-        correlation_layout = QVBoxLayout(correlation_content)
-        correlation_layout.setContentsMargins(0, 0, 0, 0)
-        correlation_layout.setSpacing(0)
-        correlation_layout.addWidget(CorrelationAnalysisWidget())
-        self._correlation_content_widget = correlation_content
-        self._correlation_content_widget.hide()
+        # ---- 关联分析（默认） ----
+        if CorrelationAnalysisWidget is not None:
+            correlation_content = QFrame()
+            correlation_layout = QVBoxLayout(correlation_content)
+            correlation_layout.setContentsMargins(0, 0, 0, 0)
+            correlation_layout.setSpacing(0)
+            correlation_layout.addWidget(CorrelationAnalysisWidget())
+            self._correlation_content_widget = correlation_content
+            self._correlation_content_widget.hide()
+            body_layout.addWidget(self._correlation_content_widget, 1)
 
-        second_order_content = QFrame()
-        second_order_layout = QVBoxLayout(second_order_content)
-        second_order_layout.setContentsMargins(0, 0, 0, 0)
-        second_order_layout.setSpacing(0)
-        second_order_layout.addWidget(SecondOrderDynamicSystemWidget())
-        self._second_order_content_widget = second_order_content
-        self._second_order_content_widget.hide()
+        # ---- 二阶非线性动态系统 ----
+        if SecondOrderDynamicSystemWidget is not None:
+            second_order_content = QFrame()
+            second_order_layout = QVBoxLayout(second_order_content)
+            second_order_layout.setContentsMargins(0, 0, 0, 0)
+            second_order_layout.setSpacing(0)
+            second_order_layout.addWidget(SecondOrderDynamicSystemWidget())
+            self._second_order_content_widget = second_order_content
+            self._second_order_content_widget.hide()
+            body_layout.addWidget(self._second_order_content_widget, 1)
 
-        process_training_content = QFrame()
-        process_training_layout = QVBoxLayout(process_training_content)
-        process_training_layout.setContentsMargins(0, 0, 0, 0)
-        process_training_layout.setSpacing(0)
-        process_training_layout.addWidget(ProcessControlDnnMpcWidget(page_mode="training"))
-        self._process_training_content_widget = process_training_content
-        self._process_training_content_widget.hide()
+        # ---- 风险管控优化决策 ----
+        if ProcessControlDnnMpcWidget is not None:
+            process_training_content = QFrame()
+            process_training_layout = QVBoxLayout(process_training_content)
+            process_training_layout.setContentsMargins(0, 0, 0, 0)
+            process_training_layout.setSpacing(0)
+            process_training_layout.addWidget(ProcessControlDnnMpcWidget(page_mode="training"))
+            self._process_training_content_widget = process_training_content
+            self._process_training_content_widget.hide()
+            body_layout.addWidget(self._process_training_content_widget, 1)
 
-        process_mpc_content = QFrame()
-        process_mpc_layout = QVBoxLayout(process_mpc_content)
-        process_mpc_layout.setContentsMargins(0, 0, 0, 0)
-        process_mpc_layout.setSpacing(0)
-        process_mpc_layout.addWidget(ProcessControlDnnMpcWidget(page_mode="mpc"))
-        self._process_mpc_content_widget = process_mpc_content
-        self._process_mpc_content_widget.hide()
+            process_mpc_content = QFrame()
+            process_mpc_layout = QVBoxLayout(process_mpc_content)
+            process_mpc_layout.setContentsMargins(0, 0, 0, 0)
+            process_mpc_layout.setSpacing(0)
+            process_mpc_layout.addWidget(ProcessControlDnnMpcWidget(page_mode="mpc"))
+            self._process_mpc_content_widget = process_mpc_content
+            self._process_mpc_content_widget.hide()
+            body_layout.addWidget(self._process_mpc_content_widget, 1)
 
-        sis_detection_content = QFrame()
-        sis_detection_layout = QVBoxLayout(sis_detection_content)
-        sis_detection_layout.setContentsMargins(0, 0, 0, 0)
-        sis_detection_layout.setSpacing(0)
-        self._sis_detection_content_widget = sis_detection_content
+        # ---- 风险动态分析子模块 ----
+        if ErrorClassificationWidget is not None:
+            error_class_content = QFrame()
+            error_class_layout = QVBoxLayout(error_class_content)
+            error_class_layout.setContentsMargins(0, 0, 0, 0)
+            error_class_layout.setSpacing(0)
+            error_class_layout.addWidget(ErrorClassificationWidget())
+            self._error_class_content_widget = error_class_content
+            self._error_class_content_widget.hide()
+            body_layout.addWidget(self._error_class_content_widget, 1)
+
+        if AutoScoreWidget is not None:
+            auto_score_content = QFrame()
+            auto_score_layout = QVBoxLayout(auto_score_content)
+            auto_score_layout.setContentsMargins(0, 0, 0, 0)
+            auto_score_layout.setSpacing(0)
+            auto_score_layout.addWidget(AutoScoreWidget())
+            self._auto_score_content_widget = auto_score_content
+            self._auto_score_content_widget.hide()
+            body_layout.addWidget(self._auto_score_content_widget, 1)
+
+        if CDQMatchingWidget is not None:
+            cdq_content = QFrame()
+            cdq_layout = QVBoxLayout(cdq_content)
+            cdq_layout.setContentsMargins(0, 0, 0, 0)
+            cdq_layout.setSpacing(0)
+            cdq_layout.addWidget(CDQMatchingWidget())
+            self._cdq_matching_content_widget = cdq_content
+            self._cdq_matching_content_widget.hide()
+            body_layout.addWidget(self._cdq_matching_content_widget, 1)
+
+        # ---- 新增：SIS自主化检测 ----
+        self._sis_detection_content_widget = QFrame()
+        self._sis_detection_content_widget.setObjectName("moduleContainer")
+        sis_layout = QVBoxLayout(self._sis_detection_content_widget)
+        sis_layout.setContentsMargins(0, 0, 0, 0)
+        sis_layout.setSpacing(0)
+        sis_layout.addWidget(self._sis_widget)
         self._sis_detection_content_widget.hide()
-
-        sil_validation_content = QFrame()
-        sil_validation_layout = QVBoxLayout(sil_validation_content)
-        sil_validation_layout.setContentsMargins(0, 0, 0, 0)
-        sil_validation_layout.setSpacing(0)
-        self._sil_validation_content_widget = sil_validation_content
-        self._sil_validation_content_widget.hide()
-
-        body_layout.addWidget(self._anomaly_content_widget, 1)
-        body_layout.addWidget(self._correlation_content_widget, 1)
-        body_layout.addWidget(self._second_order_content_widget, 1)
-        body_layout.addWidget(self._process_training_content_widget, 1)
-        body_layout.addWidget(self._process_mpc_content_widget, 1)
         body_layout.addWidget(self._sis_detection_content_widget, 1)
+
+        # ---- 新增：在线SIL验证 ----
+        self._sil_validation_content_widget = QFrame()
+        self._sil_validation_content_widget.setObjectName("moduleContainer")
+        sil_layout = QVBoxLayout(self._sil_validation_content_widget)
+        sil_layout.setContentsMargins(0, 0, 0, 0)
+        sil_layout.setSpacing(0)
+        sil_layout.addWidget(self._sil_widget)
+        self._sil_validation_content_widget.hide()
         body_layout.addWidget(self._sil_validation_content_widget, 1)
 
-        self._error_class_content_widget = ErrorClassificationWidget()
-        self._error_class_content_widget.hide()
-
-        self._auto_score_content_widget = AutoScoreWidget()
-        self._auto_score_content_widget.hide()
-
-        self._cdq_matching_content_widget = CDQMatchingWidget()
-        self._cdq_matching_content_widget.hide()
-
-        body_layout.addWidget(self._error_class_content_widget, 1)
-        body_layout.addWidget(self._auto_score_content_widget, 1)
-        body_layout.addWidget(self._cdq_matching_content_widget, 1)
-
-        # 功能页面共用同一内容区域，通过 show/hide 完成切换。
         vbox.addWidget(title_bar)
         vbox.addWidget(body, 1)
         return container
 
     def _set_dropdown_items(self, nav_title, items):
-        """根据当前一级导航项刷新下拉菜单中的子模块按钮。"""
         while self._dropdown_layout.count():
             item = self._dropdown_layout.takeAt(0)
             widget = item.widget()
             if widget is not None:
                 widget.deleteLater()
 
-        # 根据子模块文本宽度动态调整下拉菜单，避免长标题被截断。
         item_height = 52
         font = QFont("Microsoft YaHei UI")
         font.setPixelSize(22)
@@ -290,7 +338,6 @@ class MainWindow(QMainWindow):
         self._dropdown.setFixedSize(panel_width, min(max(panel_height, 140), 460))
 
     def _toggle_dropdown(self, button):
-        """响应一级导航点击，切换下拉菜单显示状态并更新选中按钮。"""
         menu_items = self._nav_menu_map.get(button, [])
         nav_title = self._nav_title_map.get(button, "")
         if self._dropdown.isVisible() and self._active_dropdown_button is button:
@@ -302,14 +349,26 @@ class MainWindow(QMainWindow):
         if not menu_items:
             self._on_empty_module_clicked(nav_title)
             return
-        # 先刷新菜单内容，再计算位置，保证面板尺寸参与定位。
         self._set_dropdown_items(nav_title, menu_items)
         self._position_dropdown()
         self._dropdown.show()
         self._dropdown.raise_()
 
-    def _hide_content_widgets(self):
-        """隐藏所有功能内容页。"""
+    def _on_empty_module_clicked(self, nav_title):
+        self._dropdown.hide()
+        if self._content_title_label is not None:
+            self._content_title_label.setText(nav_title)
+        if self._active_dropdown_button:
+            items = self._nav_menu_map.get(self._active_dropdown_button, [])
+            if items:
+                self._on_submodule_clicked(nav_title, items[0])
+
+    def _on_submodule_clicked(self, nav_title, submodule_title):
+        self._dropdown.hide()
+        if self._content_title_label is not None:
+            self._content_title_label.setText(f"{nav_title} - {submodule_title}")
+
+        # 隐藏所有容器
         for widget in (
             self._anomaly_content_widget,
             self._correlation_content_widget,
@@ -325,27 +384,8 @@ class MainWindow(QMainWindow):
             if widget is not None:
                 widget.hide()
 
-    def _on_empty_module_clicked(self, nav_title):
-        """显示无子模块的一级功能空白页。"""
-        self._dropdown.hide()
-        if self._content_title_label is not None:
-            self._content_title_label.setText(nav_title)
-
-        self._hide_content_widgets()
-        if nav_title == "SIS自主化检测":
-            self._sis_detection_content_widget.show()
-        elif nav_title == "在线SIL验证":
-            self._sil_validation_content_widget.show()
-
-    def _on_submodule_clicked(self, nav_title, submodule_title):
-        """响应子模块点击，更新标题并显示对应功能页面。"""
-        self._dropdown.hide()
-        if self._content_title_label is not None:
-            self._content_title_label.setText(f"{nav_title} - {submodule_title}")
-
-        self._hide_content_widgets()
-
-        if submodule_title == "多工况分层级异常检测":
+        # 显示目标容器
+        if submodule_title == "基于移动目标防御的异常检测":
             self._anomaly_content_widget.show()
         elif submodule_title == "二阶非线性动态系统":
             self._second_order_content_widget.show()
@@ -355,40 +395,50 @@ class MainWindow(QMainWindow):
             self._auto_score_content_widget.show()
         elif submodule_title == "风险场景动态匹配与适配方案生成算法":
             self._cdq_matching_content_widget.show()
-        elif submodule_title == "DNNTrain":
+        elif submodule_title == "控制模型训练评估":
             self._process_training_content_widget.show()
-        elif submodule_title == "MPC simulation":
+        elif submodule_title == "优化控制仿真验证":
             self._process_mpc_content_widget.show()
+        elif submodule_title == "SDG-HAZOP":
+            self._sis_detection_content_widget.show()
+            if not hasattr(self._sis_widget, '_signal_connected'):
+                self._sis_widget.request_sil_validation.connect(self._on_request_sil)
+                self._sis_widget._signal_connected = True
+        elif submodule_title == "基于GSPN-MC模型的动态化SIL验证方法":
+            self._sil_validation_content_widget.show()
         else:
-            self._correlation_content_widget.show()
+            if self._correlation_content_widget is not None:
+                self._correlation_content_widget.show()
 
-    def resizeEvent(self, event):  # noqa: N802
-        """窗口尺寸变化时重新定位下拉菜单。"""
+    def _on_request_sil(self, node_id, prob, sev):
+        self._on_submodule_clicked("在线SIL验证", "SIL 验证")
+        if hasattr(self._sil_widget, 'set_recommended_params'):
+            self._sil_widget.set_recommended_params(node_id, prob, sev)
+        QMessageBox.information(
+            self,
+            "SIL 验证请求",
+            f"节点 {node_id} 需要 SIL 验证\n概率: {prob:.4e}\n严重性: {sev}\n已切换到 SIL 验证模块。"
+        )
+
+    def resizeEvent(self, event):
         super().resizeEvent(event)
         self._position_dropdown()
 
-    def closeEvent(self, event):  # noqa: N802
-        """后台任务运行中时阻止窗口被销毁，避免 QThread 仍在运行。"""
-        running_widgets = []
-        for widget in self.findChildren(QWidget):
-            checker = getattr(widget, "has_running_worker", None)
-            if callable(checker) and checker():
-                running_widgets.append(widget)
-
-        if running_widgets:
-            QMessageBox.warning(self, "后台任务运行中", "请等待当前 MATLAB/计算任务完成后再关闭平台。")
-            event.ignore()
-            return
-
+    def closeEvent(self, event):
+        for widget in (self._sis_widget, self._sil_widget):
+            if widget is not None:
+                checker = getattr(widget, "has_running_worker", None)
+                if callable(checker) and checker():
+                    QMessageBox.warning(self, "后台任务运行中", "请等待当前计算任务完成后再关闭。")
+                    event.ignore()
+                    return
         super().closeEvent(event)
 
-    def showEvent(self, event):  # noqa: N802
-        """窗口显示后延迟定位下拉菜单，确保控件尺寸已计算完成。"""
+    def showEvent(self, event):
         super().showEvent(event)
         QTimer.singleShot(0, self._position_dropdown)
 
     def _position_dropdown(self):
-        """把下拉菜单定位到当前导航按钮下方，并限制在屏幕可见范围内。"""
         if not self._dropdown or not self._active_dropdown_button:
             return
         anchor = self._active_dropdown_button.mapToGlobal(QPoint(0, 0))
@@ -396,13 +446,11 @@ class MainWindow(QMainWindow):
         y = anchor.y() + self._active_dropdown_button.height() + 8
         screen = QApplication.screenAt(anchor) or QApplication.primaryScreen()
         if screen:
-            # 约束 x 坐标，防止窗口靠近屏幕边缘时下拉面板超出可视区域。
             bounds = screen.availableGeometry()
             x = max(bounds.left() + 8, min(x, bounds.right() - self._dropdown.width() - 8))
         self._dropdown.move(x, y)
 
     def _apply_styles(self):
-        """集中设置主窗口、导航栏、内容区和滚动条的 Qt 样式。"""
         self.setStyleSheet(
             """
             * {
@@ -512,6 +560,47 @@ class MainWindow(QMainWindow):
                 border-radius: 0 0 14px 14px;
                 background: transparent;
             }
+            /* 模块容器背景深色 */
+            QFrame#moduleContainer {
+                background: rgba(13, 31, 59, 0.95);
+                border: none;
+            }
+            QGroupBox {
+                border: 1px solid rgba(123, 176, 247, 0.3);
+                border-radius: 8px;
+                margin-top: 1ex;
+                color: #d8e7ff;
+                background: rgba(13, 31, 59, 0.8);
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px 0 5px;
+                color: #c3d8f6;
+            }
+            QLineEdit, QComboBox, QTextEdit {
+                background: rgba(13, 31, 59, 0.8);
+                border: 1px solid rgba(123, 176, 247, 0.3);
+                border-radius: 4px;
+                padding: 4px;
+                color: #d8e7ff;
+            }
+            QLineEdit:focus, QComboBox:focus {
+                border-color: rgba(123, 176, 247, 0.8);
+            }
+            QPushButton {
+                background: rgba(62, 109, 165, 0.3);
+                border: 1px solid rgba(123, 176, 247, 0.3);
+                border-radius: 6px;
+                padding: 6px 12px;
+                color: #d8e7ff;
+            }
+            QPushButton:hover {
+                background: rgba(99, 157, 230, 0.4);
+            }
+            QLabel {
+                color: #d8e7ff;
+            }
             QScrollBar:vertical {
                 width: 10px;
                 background: transparent;
@@ -533,8 +622,11 @@ class MainWindow(QMainWindow):
 
 
 def main():
-    """创建 Qt 应用、显示主窗口并进入事件循环。"""
     app = QApplication(sys.argv)
     window = MainWindow()
     window.show()
     sys.exit(app.exec())
+
+
+if __name__ == "__main__":
+    main()
