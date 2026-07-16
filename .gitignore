@@ -21,3 +21,5 @@ anomaly_result_*.json
 dnn_mpc/output/
 dnn_mpc/matlab
 /.idea/pyProjectModel.xml
+
+.vscode/
