@@ -113,6 +113,14 @@ python Framework.py
 E:\MATLAB2024
 ```
 
+### 异常检测的流程工业参数
+
+- `随机攻击强度范围（%）`：每次随机攻击试验的强度区间，默认 `5%–10%`，可设范围 `5%–50%`。调用 Runtime 时会除以 100 转换为 `percent_range=[0.05, 0.10]`。
+- `测量噪声强度（%）`：默认 `2%`。
+- `过程扰动强度（%）`：默认 `5%`。
+- 两项参数的可设范围均为 `1%–30%`。
+- 当前实现是对既有 `gridattackpkg` 的兼容映射：测量噪声和过程扰动的百分比均除以 10 后传入 Runtime。该映射不改变已编译 MATLAB 包的底层数学模型。
+
 - DNN-MPC 模块的 `MCR_ROOT` 也应填写：
 
 ```text
@@ -234,7 +242,6 @@ body_layout.addWidget(self._new_module_content_widget, 1)
 ```python
 for widget in (
     self._anomaly_content_widget,
-    self._correlation_content_widget,
     self._new_module_content_widget,
 ):
     if widget is not None:

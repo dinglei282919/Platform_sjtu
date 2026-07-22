@@ -28,15 +28,16 @@ class AutoScoreWidget(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.metrics_def = [
-            "热电比",
-            "供电标煤耗",
-            "供热标煤耗",
-            "汽机负荷率",
-            "能量转换比",
-            "自发电占比"
-        ]
-        self._val_labels = {}
+        self.metric_configs = {
+            "热电比": {"range": (0.45, 0.75), "default": 0.60, "decimals": 3, "step": 0.001},
+            "供电标煤耗": {"range": (150.0, 250.0), "default": 200.0, "decimals": 2, "step": 0.1},
+            "供热标煤耗": {"range": (30.0, 45.0), "default": 38.0, "decimals": 2, "step": 0.1},
+            "汽机负荷率": {"range": (0.60, 1.00), "default": 0.80, "decimals": 3, "step": 0.001},
+            "能量转换比": {"range": (0.40, 1.00), "default": 0.60, "decimals": 3, "step": 0.001},
+            "自发电占比": {"range": (0.50, 0.90), "default": 0.70, "decimals": 3, "step": 0.001},
+        }
+        self.metrics_def = list(self.metric_configs)
+        self._value_spins = {}
         self._weight_spins = {}
         self._current_data = {}
         self._build_ui()
@@ -72,11 +73,14 @@ class AutoScoreWidget(QWidget):
             name_lbl = QLabel(metric)
             name_lbl.setAlignment(Qt.AlignCenter)
 
-            val_lbl = QLabel("等待生成")
-            val_lbl.setAlignment(Qt.AlignCenter)
-            val_lbl.setStyleSheet(
-                "background: rgba(21, 35, 52, 0.95); border: 1px solid rgba(143, 182, 220, 0.35); border-radius: 4px; padding: 4px;")
-            self._val_labels[metric] = val_lbl
+            config = self.metric_configs[metric]
+            value_spin = QDoubleSpinBox()
+            value_spin.setRange(*config["range"])
+            value_spin.setDecimals(config["decimals"])
+            value_spin.setSingleStep(config["step"])
+            value_spin.setValue(config["default"])
+            value_spin.setAlignment(Qt.AlignCenter)
+            self._value_spins[metric] = value_spin
 
             weight_spin = QDoubleSpinBox()
             weight_spin.setRange(0.0, 10.0)
@@ -85,7 +89,7 @@ class AutoScoreWidget(QWidget):
             self._weight_spins[metric] = weight_spin
 
             grid_layout.addWidget(name_lbl, row, 0)
-            grid_layout.addWidget(val_lbl, row, 1)
+            grid_layout.addWidget(value_spin, row, 1)
             grid_layout.addWidget(weight_spin, row, 2)
 
         left_layout.addLayout(grid_layout)
@@ -96,7 +100,7 @@ class AutoScoreWidget(QWidget):
         self._generate_btn.clicked.connect(self._generate_random_data)
         self._score_btn = QPushButton("执行加权评分")
         self._score_btn.clicked.connect(self._execute_scoring)
-        self._score_btn.setEnabled(False)
+        self._score_btn.setEnabled(True)
 
         actions.addWidget(self._generate_btn)
         actions.addWidget(self._score_btn)
@@ -166,7 +170,7 @@ class AutoScoreWidget(QWidget):
         status_bar.setObjectName("autoScoreStatusBar")
         status_layout = QHBoxLayout(status_bar)
         status_layout.setContentsMargins(10, 2, 10, 2)
-        self._status_label = QLabel("状态：等待生成数据")
+        self._status_label = QLabel("状态：可手动修改数值并执行评分")
         status_layout.addWidget(self._status_label)
         status_layout.addStretch()
         main_layout.addWidget(status_bar)
@@ -237,7 +241,7 @@ class AutoScoreWidget(QWidget):
         )
 
     def _generate_random_data(self):
-        self._current_data = {
+        generated_data = {
             "热电比": round(random.uniform(0.50, 0.70), 3),
             "供电标煤耗": round(random.uniform(190, 230), 2),
             "供热标煤耗": round(random.uniform(36, 42), 2),
@@ -247,9 +251,8 @@ class AutoScoreWidget(QWidget):
         }
 
         for metric in self.metrics_def:
-            self._val_labels[metric].setText(str(self._current_data[metric]))
+            self._value_spins[metric].setValue(generated_data[metric])
 
-        self._score_btn.setEnabled(True)
         self._status_label.setText("状态：数据已生成，等待评分")
 
     def _calculate_single_score(self, metric, val):
@@ -299,6 +302,10 @@ class AutoScoreWidget(QWidget):
     def _execute_scoring(self):
         scores = []
         weights = []
+        self._current_data = {
+            metric: self._value_spins[metric].value()
+            for metric in self.metrics_def
+        }
 
         for metric in self.metrics_def:
             val = self._current_data[metric]
@@ -308,8 +315,8 @@ class AutoScoreWidget(QWidget):
 
         total_weight = sum(weights)
         if total_weight <= 0:
-            total_weight = 1.0
             weights = [1.0] * len(self.metrics_def)
+            total_weight = float(len(weights))
 
         normalized_weights = [w / total_weight for w in weights]
         weighted_total = sum(s * w for s, w in zip(scores, normalized_weights))

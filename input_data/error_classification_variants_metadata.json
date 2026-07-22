@@ -1,0 +1,101 @@
+{
+  "feature_count": 600,
+  "purpose": "用于算法敏感性演示的确定性派生数据，不代表新增真实工业采样。",
+  "raw_label_mapping": {
+    "0": 2,
+    "1": 0,
+    "2": 1,
+    "3": 2
+  },
+  "reshape": [
+    60,
+    10
+  ],
+  "source_raw_label_counts": {
+    "test": {
+      "0": 10,
+      "1": 10,
+      "2": 10,
+      "3": 10
+    },
+    "train": {
+      "0": 10,
+      "1": 10,
+      "2": 10,
+      "3": 10
+    }
+  },
+  "source_shapes": {
+    "test": [
+      40,
+      601
+    ],
+    "train": [
+      40,
+      601
+    ]
+  },
+  "sources": {
+    "test": "input_data/error_classification_test.csv",
+    "train": "input_data/error_classification_train.csv"
+  },
+  "statistics_fit_on": "training_set_only",
+  "variants": {
+    "easy": {
+      "display_name": "数据集2",
+      "formula": "global_mean + center_scale * (class_center - global_mean) + within_scale * (sample - class_center) + noise_scale * feature_std * N(0, 1)",
+      "outputs": {
+        "test": "error_classification_easy_test.csv",
+        "train": "error_classification_easy_train.csv"
+      },
+      "parameters": {
+        "center_scale": 2.0,
+        "noise_scale": 0.03,
+        "within_scale": 0.45
+      },
+      "seed": 20260715,
+      "sha256": {
+        "test": "21ee05d913862e8bcf61053096d8955089a211e540b6c5d8ee92752a5e64c8ed",
+        "train": "87b98dd9f9efabb67113a70f6400c7046961cbb06a38ca7354580cf33eaba2ec"
+      },
+      "shapes": {
+        "test": [
+          40,
+          601
+        ],
+        "train": [
+          40,
+          601
+        ]
+      }
+    },
+    "hard": {
+      "display_name": "数据集3",
+      "formula": "global_mean + center_scale * (class_center - global_mean) + within_scale * (sample - class_center) + noise_scale * feature_std * N(0, 1)",
+      "outputs": {
+        "test": "error_classification_hard_test.csv",
+        "train": "error_classification_hard_train.csv"
+      },
+      "parameters": {
+        "center_scale": 0.08,
+        "noise_scale": 1.0,
+        "within_scale": 0.2
+      },
+      "seed": 20260716,
+      "sha256": {
+        "test": "01edd6ac4e6e974e23dbfce0d9deba0fabb64ee045735ac3c6bbdd8bd334bf91",
+        "train": "067d574ac55c646949a8a172e358e11a252cd30a8e6956bf4b34d67de25ffbef"
+      },
+      "shapes": {
+        "test": [
+          40,
+          601
+        ],
+        "train": [
+          40,
+          601
+        ]
+      }
+    }
+  }
+}

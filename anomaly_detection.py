@@ -11,7 +11,6 @@ from PySide6.QtCore import QPointF, Qt
 from PySide6.QtGui import QColor, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
-    QCheckBox,
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
@@ -22,14 +21,11 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QTextEdit,
     QVBoxLayout,
     QWidget,
 )
-# 参数传递见_apply_correlation_params函数
-from correlation_analysis import SharedParameterStore
-
-
 class MultiScenarioAnomalyDetectionWidget(QWidget):
     """多工况异常检测页面，负责参数输入、模型运行、结果展示和导出。"""
 
@@ -42,12 +38,10 @@ class MultiScenarioAnomalyDetectionWidget(QWidget):
         self.last_result = None
 
         self._mcr_root_input = None
-        self._percent_min_input = None
-        self._percent_max_input = None
-        self._sigma1_input = None
-        self._sigma2_input = None
-        self._use_correlation_params_checkbox = None
-        self._apply_correlation_params_btn = None
+        self._attack_min_input = None
+        self._attack_max_input = None
+        self._measurement_noise_input = None
+        self._process_disturbance_input = None
         self._run_btn = None
         self._refresh_btn = None
         self._export_btn = None
@@ -58,6 +52,7 @@ class MultiScenarioAnomalyDetectionWidget(QWidget):
         self._topology_switch_btn = None
         self._detection_switch_btn = None
         self._current_image_mode = "topology"
+        self._source_image_pixmap = None
         self._result_preview = None
 
         self._build_ui()
@@ -90,27 +85,18 @@ class MultiScenarioAnomalyDetectionWidget(QWidget):
         percent_layout = QHBoxLayout(percent_holder)
         percent_layout.setContentsMargins(0, 0, 0, 0)
         percent_layout.setSpacing(6)
-        self._percent_min_input = self._new_spin(0.05, 0.5, 0.05)
-        self._percent_max_input = self._new_spin(0.05, 0.5, 0.10)
-        percent_layout.addWidget(self._percent_min_input, 1)
+        self._attack_min_input = self._new_percent_spin(5.0, 5.0, 50.0)
+        self._attack_max_input = self._new_percent_spin(10.0, 5.0, 50.0)
+        percent_layout.addWidget(self._attack_min_input, 1)
         percent_layout.addWidget(QLabel("~"))
-        percent_layout.addWidget(self._percent_max_input, 1)
-        param_layout.addRow("攻击幅度 [0.05, 0.5]:", percent_holder)
+        percent_layout.addWidget(self._attack_max_input, 1)
+        param_layout.addRow("随机攻击强度范围（%）:", percent_holder)
 
-        self._sigma1_input = self._new_spin(0.01, 0.3, 0.2)
-        param_layout.addRow("实部噪声 [0.01, 0.3]:", self._sigma1_input)
+        self._measurement_noise_input = self._new_percent_spin(2.0)
+        param_layout.addRow("测量噪声强度（%）:", self._measurement_noise_input)
 
-        self._sigma2_input = self._new_spin(0.01, 0.3, 0.1)
-        param_layout.addRow("虚部噪声 [0.01, 0.3]:", self._sigma2_input)
-
-        source_row = QHBoxLayout()
-        source_row.setSpacing(8)
-        self._use_correlation_params_checkbox = QCheckBox("从异构数据治理-关联分析读取生成参数")
-        source_row.addWidget(self._use_correlation_params_checkbox, 1)
-        self._apply_correlation_params_btn = QPushButton("读取并应用")
-        self._apply_correlation_params_btn.clicked.connect(self._apply_correlation_params)
-        source_row.addWidget(self._apply_correlation_params_btn)
-        param_layout.addRow("参数来源:", source_row)
+        self._process_disturbance_input = self._new_percent_spin(5.0)
+        param_layout.addRow("过程扰动强度（%）:", self._process_disturbance_input)
 
         run_row = QHBoxLayout()
         run_row.addStretch()
@@ -300,6 +286,18 @@ class MultiScenarioAnomalyDetectionWidget(QWidget):
         spin.setValue(value)
         return spin
 
+    def _new_percent_spin(self, value, minimum=1.0, maximum=30.0):
+        spin = self._new_spin(minimum, maximum, value)
+        spin.setDecimals(1)
+        spin.setSingleStep(1.0)
+        spin.setSuffix(" %")
+        return spin
+
+    @staticmethod
+    def _to_runtime_noise_parameters(measurement_noise_pct, process_disturbance_pct):
+        """将按工程量程输入的百分比映射为旧 MATLAB 包的兼容参数。"""
+        return measurement_noise_pct / 10.0, process_disturbance_pct / 10.0
+
     def _create_image_panel(self, title):
         """创建带标题和图片占位区域的结果图展示面板。"""
         panel = QFrame()
@@ -313,7 +311,8 @@ class MultiScenarioAnomalyDetectionWidget(QWidget):
 
         image_label = QLabel("暂无图像")
         image_label.setAlignment(Qt.AlignCenter)
-        image_label.setMinimumHeight(470)
+        image_label.setMinimumHeight(320)
+        image_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Expanding)
         image_label.setStyleSheet(
             "border: 1px solid rgba(129, 169, 206, 0.45);"
             "background: rgba(18, 32, 48, 0.92);"
@@ -391,33 +390,14 @@ class MultiScenarioAnomalyDetectionWidget(QWidget):
 
     def _validate_inputs(self):
         """读取并校验攻击幅度与噪声参数，返回规范化后的输入值。"""
-        percent_min = self._percent_min_input.value()
-        percent_max = self._percent_max_input.value()
-        sigma1 = self._sigma1_input.value()
-        sigma2 = self._sigma2_input.value()
+        attack_min_pct = self._attack_min_input.value()
+        attack_max_pct = self._attack_max_input.value()
+        measurement_noise_pct = self._measurement_noise_input.value()
+        process_disturbance_pct = self._process_disturbance_input.value()
 
-        if percent_min > percent_max:
+        if attack_min_pct > attack_max_pct:
             raise ValueError("攻击幅度最小值不能大于最大值。")
-        return percent_min, percent_max, sigma1, sigma2
-
-    def _apply_correlation_params(self, notify_if_missing=True):
-        """从关联分析共享缓存读取参数，并写入异常检测参数表单。"""
-        params = SharedParameterStore.get_correlation_params()
-        if not params:
-            if notify_if_missing:
-                QMessageBox.information(
-                    self,
-                    "无可用参数",
-                    "尚未从“异构数据治理 - 关联分析”模块生成参数。",
-                )
-            return False
-
-        self._percent_min_input.setValue(params["percent_min"])
-        self._percent_max_input.setValue(params["percent_max"])
-        self._sigma1_input.setValue(params["sigma1"])
-        self._sigma2_input.setValue(params["sigma2"])
-        self._set_status(f"已读取关联分析参数 ({params['timestamp']})")
-        return True
+        return attack_min_pct, attack_max_pct, measurement_noise_pct, process_disturbance_pct
 
     def _import_runtime_modules(self):
         """按打包和源码两种运行方式查找并导入运行所需模块。"""
@@ -507,6 +487,9 @@ class MultiScenarioAnomalyDetectionWidget(QWidget):
         merged_output = "\n".join(
             part for part in [proc.stdout.strip(), proc.stderr.strip()] if part
         )
+        # 底层包的固定参数名不应泄漏到流程工业界面日志。
+        merged_output = merged_output.replace("sigma1", "measurement_noise_runtime_value")
+        merged_output = merged_output.replace("sigma2", "process_disturbance_runtime_value")
         if proc.returncode != 0:
             raise RuntimeError(
                 f"外部 Python 运行失败(退出码={proc.returncode})。\n{merged_output}"
@@ -519,16 +502,13 @@ class MultiScenarioAnomalyDetectionWidget(QWidget):
 
     def _run_detection(self):
         """执行异常检测主流程：校验参数、运行核心算法、检查输出并刷新界面。"""
-        # 若用户选择复用关联分析参数，先尝试从共享缓存同步到当前表单。
-        if (
-            self._use_correlation_params_checkbox is not None
-            and self._use_correlation_params_checkbox.isChecked()
-        ):
-            if not self._apply_correlation_params(notify_if_missing=True):
-                return
-
         try:
-            percent_min, percent_max, sigma1, sigma2 = self._validate_inputs()
+            (
+                attack_min_pct,
+                attack_max_pct,
+                measurement_noise_pct,
+                process_disturbance_pct,
+            ) = self._validate_inputs()
         except Exception as exc:  # noqa: BLE001
             QMessageBox.warning(self, "参数错误", str(exc))
             return
@@ -545,6 +525,12 @@ class MultiScenarioAnomalyDetectionWidget(QWidget):
 
         handle = None
         try:
+            sigma1, sigma2 = self._to_runtime_noise_parameters(
+                measurement_noise_pct,
+                process_disturbance_pct,
+            )
+            percent_min = attack_min_pct / 100.0
+            percent_max = attack_max_pct / 100.0
             # 准备运行环境和输出目录，确保后续算法调用有可写位置。
             mcr_root = Path(mcr_root_text)
             dll_path = self._prepare_runtime_paths(mcr_root)
@@ -597,9 +583,10 @@ class MultiScenarioAnomalyDetectionWidget(QWidget):
                 "mcr_dll": str(dll_path),
                 "overrides": {
                     "percent_range": [percent_min, percent_max],
-                    "sigma1": sigma1,
-                    "sigma2": sigma2,
                 },
+                "attack_strength_percent_range": [attack_min_pct, attack_max_pct],
+                "measurement_noise_percent": measurement_noise_pct,
+                "process_disturbance_percent": process_disturbance_pct,
                 "outputs": {
                     "stage2_results_mat": str(stage2_file),
                     "topology_png": str(topology_png),
@@ -644,21 +631,33 @@ class MultiScenarioAnomalyDetectionWidget(QWidget):
             label.setToolTip(str(image_path))
             return
 
-        target_width = max(240, label.width() - 8)
-        target_height = max(160, label.height() - 8)
-        # 按标签当前尺寸等比缩放，避免图片拉伸变形。
-        scaled = pixmap.scaled(
-            target_width,
-            target_height,
+        self._source_image_pixmap = pixmap
+        label.setText("")
+        label.setToolTip(str(image_path))
+        self._fit_current_image()
+
+    def _fit_current_image(self):
+        """始终从原图等比缩放到当前可视区，避免重复缩放造成裁剪或失真。"""
+        if self._image_view_label is None or self._source_image_pixmap is None:
+            return
+        available = self._image_view_label.contentsRect().adjusted(4, 4, -4, -4).size()
+        if available.width() <= 0 or available.height() <= 0:
+            return
+        scaled = self._source_image_pixmap.scaled(
+            available,
             Qt.KeepAspectRatio,
             Qt.SmoothTransformation,
         )
-        label.setText("")
-        label.setPixmap(scaled)
-        label.setToolTip(str(image_path))
+        self._image_view_label.setPixmap(scaled)
+
+    def resizeEvent(self, event):  # noqa: N802
+        """页面尺寸变化时重新适配图片，保证始终完整显示。"""
+        super().resizeEvent(event)
+        self._fit_current_image()
 
     def _set_black_placeholder(self, label, tip_text):
         """绘制深色占位图，保证结果区域在无图片时仍有稳定视觉反馈。"""
+        self._source_image_pixmap = None
         width = max(320, label.width() if label.width() > 0 else 640)
         height = max(180, label.height() if label.height() > 0 else 220)
         canvas = QPixmap(width, height)

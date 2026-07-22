@@ -20,10 +20,6 @@ try:
 except ImportError:
     MultiScenarioAnomalyDetectionWidget = None
 try:
-    from correlation_analysis import CorrelationAnalysisWidget
-except ImportError:
-    CorrelationAnalysisWidget = None
-try:
     from error_classification import ErrorClassificationWidget
 except ImportError:
     ErrorClassificationWidget = None
@@ -39,10 +35,6 @@ try:
     from process_control_dnn_mpc import ProcessControlDnnMpcWidget
 except ImportError:
     ProcessControlDnnMpcWidget = None
-try:
-    from second_order_dynamic_system import SecondOrderDynamicSystemWidget
-except ImportError:
-    SecondOrderDynamicSystemWidget = None
 
 # ---- 新增导入 ----
 from sdg_hazop import SDG_HazopWidget
@@ -63,9 +55,8 @@ class MainWindow(QMainWindow):
         self._content_title_label = None
 
         # 所有页面容器
+        self._data_governance_content_widget = None
         self._anomaly_content_widget = None
-        self._correlation_content_widget = None
-        self._second_order_content_widget = None
         self._error_class_content_widget = None
         self._auto_score_content_widget = None
         self._cdq_matching_content_widget = None
@@ -95,7 +86,7 @@ class MainWindow(QMainWindow):
 
         self._apply_styles()
         # 默认进入 SIS自主化检测 -> SDG-HAZOP
-        self._on_submodule_clicked("异构数据治理", "关联分析")
+        self._on_submodule_clicked("SIS自主化检测", "SDG-HAZOP")
 
     def _build_header(self):
         bar = QFrame()
@@ -141,14 +132,14 @@ class MainWindow(QMainWindow):
 
         # 菜单项：为 SIS自主化检测 和 在线SIL验证 增加子菜单
         items = [
-            ("📊", "异构数据治理", True, ["关联分析", "二阶非线性动态系统"]),
+            ("📊", "异构数据治理", False, []),
             ("🏭", "异常行为检测", False, ["基于移动目标防御的异常检测"]),
             ("📈", "风险动态分析", False,
              ["潜在安全威胁识别与自动分类",
               "多评估准则融合的风险学习分析",
               "风险场景动态匹配与适配方案生成算法"]),
             ("🎛", "风险管控优化决策", False, ["控制模型训练评估", "优化控制仿真验证"]),
-            ("🛡", "SIS自主化检测", False, ["SDG-HAZOP"]),
+            ("🛡", "SIS自主化检测", True, ["SDG-HAZOP"]),
             ("✅", "在线SIL验证", False, ["基于GSPN-MC模型的动态化SIL验证方法"]),
         ]
 
@@ -200,6 +191,25 @@ class MainWindow(QMainWindow):
         body_layout.setContentsMargins(0, 0, 0, 0)
         body_layout.setSpacing(0)
 
+        # ---- 异构数据治理（暂无子模块） ----
+        self._data_governance_content_widget = QFrame()
+        self._data_governance_content_widget.setObjectName("moduleContainer")
+        governance_layout = QVBoxLayout(self._data_governance_content_widget)
+        governance_layout.setContentsMargins(48, 48, 48, 48)
+        governance_layout.setSpacing(16)
+        governance_layout.addStretch()
+        empty_title = QLabel("暂无可用子模块")
+        empty_title.setAlignment(Qt.AlignCenter)
+        empty_title.setStyleSheet("color: #d9ecff; font-size: 28px; font-weight: 700;")
+        empty_tip = QLabel("异构数据治理能力将在后续版本中继续扩展")
+        empty_tip.setAlignment(Qt.AlignCenter)
+        empty_tip.setStyleSheet("color: #91b7d8; font-size: 17px;")
+        governance_layout.addWidget(empty_title)
+        governance_layout.addWidget(empty_tip)
+        governance_layout.addStretch()
+        self._data_governance_content_widget.hide()
+        body_layout.addWidget(self._data_governance_content_widget, 1)
+
         # ---- 异常行为检测 ----
         if MultiScenarioAnomalyDetectionWidget is not None:
             anomaly_content = QFrame()
@@ -210,28 +220,6 @@ class MainWindow(QMainWindow):
             self._anomaly_content_widget = anomaly_content
             self._anomaly_content_widget.hide()
             body_layout.addWidget(self._anomaly_content_widget, 1)
-
-        # ---- 关联分析（默认） ----
-        if CorrelationAnalysisWidget is not None:
-            correlation_content = QFrame()
-            correlation_layout = QVBoxLayout(correlation_content)
-            correlation_layout.setContentsMargins(0, 0, 0, 0)
-            correlation_layout.setSpacing(0)
-            correlation_layout.addWidget(CorrelationAnalysisWidget())
-            self._correlation_content_widget = correlation_content
-            self._correlation_content_widget.hide()
-            body_layout.addWidget(self._correlation_content_widget, 1)
-
-        # ---- 二阶非线性动态系统 ----
-        if SecondOrderDynamicSystemWidget is not None:
-            second_order_content = QFrame()
-            second_order_layout = QVBoxLayout(second_order_content)
-            second_order_layout.setContentsMargins(0, 0, 0, 0)
-            second_order_layout.setSpacing(0)
-            second_order_layout.addWidget(SecondOrderDynamicSystemWidget())
-            self._second_order_content_widget = second_order_content
-            self._second_order_content_widget.hide()
-            body_layout.addWidget(self._second_order_content_widget, 1)
 
         # ---- 风险管控优化决策 ----
         if ProcessControlDnnMpcWidget is not None:
@@ -358,21 +346,20 @@ class MainWindow(QMainWindow):
         self._dropdown.hide()
         if self._content_title_label is not None:
             self._content_title_label.setText(nav_title)
+        if nav_title == "异构数据治理":
+            self._hide_content_widgets()
+            self._data_governance_content_widget.show()
+            return
         if self._active_dropdown_button:
             items = self._nav_menu_map.get(self._active_dropdown_button, [])
             if items:
                 self._on_submodule_clicked(nav_title, items[0])
 
-    def _on_submodule_clicked(self, nav_title, submodule_title):
-        self._dropdown.hide()
-        if self._content_title_label is not None:
-            self._content_title_label.setText(f"{nav_title} - {submodule_title}")
-
-        # 隐藏所有容器
+    def _hide_content_widgets(self):
+        """隐藏所有功能页，保证模块切换时不残留上一页内容。"""
         for widget in (
+            self._data_governance_content_widget,
             self._anomaly_content_widget,
-            self._correlation_content_widget,
-            self._second_order_content_widget,
             self._error_class_content_widget,
             self._auto_score_content_widget,
             self._cdq_matching_content_widget,
@@ -384,11 +371,16 @@ class MainWindow(QMainWindow):
             if widget is not None:
                 widget.hide()
 
+    def _on_submodule_clicked(self, nav_title, submodule_title):
+        self._dropdown.hide()
+        if self._content_title_label is not None:
+            self._content_title_label.setText(f"{nav_title} - {submodule_title}")
+
+        self._hide_content_widgets()
+
         # 显示目标容器
         if submodule_title == "基于移动目标防御的异常检测":
             self._anomaly_content_widget.show()
-        elif submodule_title == "二阶非线性动态系统":
-            self._second_order_content_widget.show()
         elif submodule_title == "潜在安全威胁识别与自动分类":
             self._error_class_content_widget.show()
         elif submodule_title == "多评估准则融合的风险学习分析":
@@ -406,12 +398,9 @@ class MainWindow(QMainWindow):
                 self._sis_widget._signal_connected = True
         elif submodule_title == "基于GSPN-MC模型的动态化SIL验证方法":
             self._sil_validation_content_widget.show()
-        else:
-            if self._correlation_content_widget is not None:
-                self._correlation_content_widget.show()
 
     def _on_request_sil(self, node_id, prob, sev):
-        self._on_submodule_clicked("在线SIL验证", "SIL 验证")
+        self._on_submodule_clicked("在线SIL验证", "基于GSPN-MC模型的动态化SIL验证方法")
         if hasattr(self._sil_widget, 'set_recommended_params'):
             self._sil_widget.set_recommended_params(node_id, prob, sev)
         QMessageBox.information(

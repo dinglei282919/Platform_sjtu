@@ -17,6 +17,7 @@ from matplotlib import font_manager
 
 from PySide6.QtCore import QThread, Signal, Qt
 from PySide6.QtWidgets import (
+    QComboBox,
     QDoubleSpinBox,
     QFrame,
     QGroupBox,
@@ -46,10 +47,6 @@ DEFAULT_EPOCHS = 50
 DEFAULT_BATCH_SIZE = 32
 DEFAULT_LR = 0.001
 
-NUM_TRAIN_SAMPLES = 500
-NUM_TEST_SAMPLES = 100
-
-SEQUENCE_LENGTH = 128
 FEATURE_DIM = 10
 # 使用真实数据时我们将把标签映射为 3 类：
 # 0 -> 增加调整量 (原 CSV 标签 == 1)
@@ -63,17 +60,33 @@ SECURITY_CLASS_NAMES = [
     "不调整",
 ]
 
-SYNTHETIC_NOISE_SCALE = 0.95
-SINE_AMPLITUDE = 0.2
-COSINE_AMPLITUDE = 0.25
-CLASS_OFFSET_SCALE = 0.1
-
 DEFAULT_WEIGHT_DECAY = 1e-4
 TRAINING_SLEEP_SECONDS = 0.08
 
 EPOCHS_RANGE = (1, 500)
 BATCH_SIZE_RANGE = (8, 256)
 LR_RANGE = (0.0001, 0.1)
+
+DATASET_CONFIGS = {
+    "original": {
+        "name": "数据集1",
+        "train": "error_classification_train.csv",
+        "test": "error_classification_test.csv",
+    },
+    "easy": {
+        "name": "数据集2",
+        "train": "error_classification_easy_train.csv",
+        "test": "error_classification_easy_test.csv",
+    },
+    "hard": {
+        "name": "数据集3",
+        "train": "error_classification_hard_train.csv",
+        "test": "error_classification_hard_test.csv",
+    },
+}
+EXPECTED_CSV_COLUMNS = 601
+EXPECTED_FEATURE_COLUMNS = 600
+ALLOWED_RAW_LABELS = {0, 1, 2, 3}
 
 
 def configure_matplotlib_chinese_font():
@@ -168,24 +181,49 @@ class ModelTrainingWorker(QThread):
     error_signal = Signal(str)
     history_signal = Signal(object, object)
 
-    def __init__(self, epochs, batch_size, lr):
+    def __init__(self, epochs, batch_size, lr, dataset_key="original"):
         super().__init__()
         self.epochs = epochs
         self.batch_size = batch_size
         self.lr = lr
+        self.dataset_key = dataset_key
 
-    def _generate_synthetic_data(self, num_samples, T, N, num_classes):
-        X = torch.randn(num_samples, T, N) * SYNTHETIC_NOISE_SCALE
-        y = torch.randint(0, num_classes, (num_samples,))
+    def _load_csv_to_tensors(self, csv_path):
+        if not os.path.isfile(csv_path):
+            raise FileNotFoundError(f"所选数据集文件不存在: {csv_path}")
 
-        t = torch.linspace(0, 4 * np.pi, T)
-        for i in range(num_samples):
-            c = y[i].item()
-            X[i, :, c % N] += torch.sin(t * (c + 1)) * SINE_AMPLITUDE
-            X[i, :, (c + 1) % N] += torch.cos(t * (c + 2)) * COSINE_AMPLITUDE
-            X[i, :, :] += c * CLASS_OFFSET_SCALE
+        try:
+            df = pd.read_csv(csv_path, header=None)
+        except Exception as exc:
+            raise ValueError(f"无法读取数据集文件 {csv_path}: {exc}") from exc
+        if df.shape[1] != EXPECTED_CSV_COLUMNS:
+            raise ValueError(
+                f"数据集结构错误: {os.path.basename(csv_path)} 应为 601 列，"
+                f"实际为 {df.shape[1]} 列"
+            )
 
-        return X, y
+        try:
+            X_raw = df.iloc[:, :-1].to_numpy(dtype=np.float64)
+            raw_labels_float = df.iloc[:, -1].to_numpy(dtype=np.float64)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"数据集包含非数值内容: {os.path.basename(csv_path)}") from exc
+        if not np.isfinite(X_raw).all() or not np.isfinite(raw_labels_float).all():
+            raise ValueError(f"数据集包含 NaN 或 Inf: {os.path.basename(csv_path)}")
+        if not np.equal(raw_labels_float, np.floor(raw_labels_float)).all():
+            raise ValueError(f"数据集包含非整数标签: {os.path.basename(csv_path)}")
+
+        raw_labels = raw_labels_float.astype(np.int64)
+        illegal_labels = sorted(set(raw_labels.tolist()) - ALLOWED_RAW_LABELS)
+        if illegal_labels:
+            raise ValueError(
+                f"数据集包含非法标签 {illegal_labels}: {os.path.basename(csv_path)}；"
+                "允许的原始标签为 0、1、2、3"
+            )
+
+        sequence_length = EXPECTED_FEATURE_COLUMNS // FEATURE_DIM
+        X = X_raw.reshape(-1, sequence_length, FEATURE_DIM)
+        y = np.where(raw_labels == 1, 0, np.where(raw_labels == 2, 1, 2)).astype(np.int64)
+        return torch.tensor(X, dtype=torch.float32), torch.tensor(y, dtype=torch.long)
 
     def run(self):
         try:
@@ -193,92 +231,34 @@ class ModelTrainingWorker(QThread):
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
             self.log_signal.emit(f"准备开始训练，使用设备: {device}")
 
-            num_train = NUM_TRAIN_SAMPLES
-            num_test = NUM_TEST_SAMPLES
-            T = SEQUENCE_LENGTH
-            N = FEATURE_DIM
             num_classes = NUM_CLASSES
 
-            # 尝试从工作区的 input_data 下加载真实 CSV 数据（训练/测试），若不存在或加载失败则退回合成数据
-            def _load_csv_to_tensors(csv_path):
-                try:
-                    if not os.path.exists(csv_path):
-                        return None
-                    df = pd.read_csv(csv_path, header=None)
-                    if df.shape[1] < 2:
-                        return None
-                    X_raw = df.iloc[:, :-1].values.astype(float)
-                    y_raw = df.iloc[:, -1].values
-                    cols = X_raw.shape[1]
-                    t = T
-                    n = N
-
-                    # 先尝试用默认的 T,N
-                    if cols == t * n:
-                        pass
-                    elif cols % t == 0:
-                        n = cols // t
-                    elif cols % n == 0:
-                        t = cols // n
-                    else:
-                        # 寻找合适的因子（特征维度不超过 50）
-                        found = False
-                        for cand_n in range(1, min(50, cols) + 1):
-                            if cols % cand_n == 0:
-                                cand_t = cols // cand_n
-                                if 5 <= cand_t <= 2000:
-                                    n = cand_n
-                                    t = cand_t
-                                    found = True
-                                    break
-                        if not found:
-                            # 无法合理分解，则当作单通道序列
-                            t = cols
-                            n = 1
-
-                    try:
-                        X = X_raw.reshape(-1, t, n)
-                    except Exception as e:
-                        self.log_signal.emit(f"重塑 CSV 特征失败: cols={cols}, 尝试 (t,n)=({t},{n}) 错误: {e}")
-                        return None
-
-                    def _map_label(v):
-                        try:
-                            iv = int(float(v))
-                        except Exception:
-                            return 2
-                        if iv == 1:
-                            return 0  # 增加 -> class 0
-                        if iv == 2:
-                            return 1  # 减少 -> class 1
-                        # 0 或 3 -> 不调整 -> class 2
-                        return 2
-
-                    y = np.array([_map_label(v) for v in y_raw], dtype=np.int64)
-                    return torch.tensor(X, dtype=torch.float32), torch.tensor(y, dtype=torch.long)
-                except Exception as e:
-                    self.log_signal.emit(f"加载 CSV 时出错: {e}")
-                    return None
-
             base_dir = os.path.dirname(__file__)
-            train_csv = os.path.join(base_dir, "input_data", "error_classification_train.csv")
-            test_csv = os.path.join(base_dir, "input_data", "error_classification_test.csv")
+            dataset = DATASET_CONFIGS.get(self.dataset_key)
+            if dataset is None:
+                raise ValueError(f"未知的数据集标识: {self.dataset_key}")
+            train_csv = os.path.join(base_dir, "input_data", dataset["train"])
+            test_csv = os.path.join(base_dir, "input_data", dataset["test"])
 
-            loaded_train = _load_csv_to_tensors(train_csv)
-            loaded_test = _load_csv_to_tensors(test_csv)
+            self.log_signal.emit(f"当前数据集: {dataset['name']}")
+            self.log_signal.emit(f"训练集路径: {train_csv}")
+            self.log_signal.emit(f"测试集路径: {test_csv}")
+            X_train, y_train = self._load_csv_to_tensors(train_csv)
+            X_test, y_test = self._load_csv_to_tensors(test_csv)
+            if X_train.shape[1:] != X_test.shape[1:]:
+                raise ValueError(
+                    "训练集与测试集输入形状不一致: "
+                    f"{tuple(X_train.shape[1:])} != {tuple(X_test.shape[1:])}"
+                )
 
-            if loaded_train is not None and loaded_test is not None:
-                X_train, y_train = loaded_train
-                X_test, y_test = loaded_test
-                num_train = X_train.shape[0]
-                num_test = X_test.shape[0]
-                T = X_train.shape[1]
-                N = X_train.shape[2]
-                self.log_signal.emit(f"已加载真实 CSV 数据: train={num_train}, test={num_test}, 序列长度={T}, 特征维度={N}")
-            else:
-                self.log_signal.emit("未检测到可用的 CSV 数据，使用合成数据进行训练。")
-                X_train, y_train = self._generate_synthetic_data(num_train, T, N, num_classes)
-                X_test, y_test = self._generate_synthetic_data(num_test, T, N, num_classes)
+            num_train = X_train.shape[0]
+            num_test = X_test.shape[0]
+            T = X_train.shape[1]
+            N = X_train.shape[2]
+            self.log_signal.emit(
+                f"数据加载完成: 训练样本={num_train}, 测试样本={num_test}, "
+                f"输入形状=({T}, {N})"
+            )
 
             train_dataset = TensorDataset(X_train, y_train)
             test_dataset = TensorDataset(X_test, y_test)
@@ -337,6 +317,7 @@ class ModelTrainingWorker(QThread):
 class ErrorClassificationWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._dataset_input = None
         self._epochs_input = None
         self._batch_size_input = None
         self._lr_input = None
@@ -365,6 +346,17 @@ class ErrorClassificationWidget(QWidget):
 
         inputs_row = QHBoxLayout()
         inputs_row.setSpacing(16)
+
+        dataset_box = QVBoxLayout()
+        dataset_box.setSpacing(6)
+        dataset_box.addWidget(QLabel("数据集"))
+        self._dataset_input = QComboBox()
+        for dataset_key, dataset in DATASET_CONFIGS.items():
+            self._dataset_input.addItem(dataset["name"], dataset_key)
+        self._dataset_input.setFixedWidth(150)
+        dataset_box.addWidget(self._dataset_input)
+        dataset_box.addStretch()
+        inputs_row.addLayout(dataset_box)
 
         epochs_box = QVBoxLayout()
         epochs_box.setSpacing(6)
@@ -488,7 +480,7 @@ class ErrorClassificationWidget(QWidget):
                 color: #d2e5fb;
                 font-size: 14px;
             }
-            QSpinBox, QDoubleSpinBox, QTextEdit {
+            QComboBox, QSpinBox, QDoubleSpinBox, QTextEdit {
                 border: 1px solid rgba(143, 182, 220, 0.35);
                 border-radius: 5px;
                 background: rgba(21, 35, 52, 0.95);
@@ -542,6 +534,7 @@ class ErrorClassificationWidget(QWidget):
         epochs = self._epochs_input.value()
         batch_size = self._batch_size_input.value()
         lr = self._lr_input.value()
+        dataset_key = self._dataset_input.currentData()
 
         self._log_output.clear()
 
@@ -555,9 +548,10 @@ class ErrorClassificationWidget(QWidget):
         self._figure.clear()
         self._canvas.draw()
         self._run_btn.setEnabled(False)
+        self._dataset_input.setEnabled(False)
         self._status_label.setText("状态：正在训练模型...")
 
-        self._worker = ModelTrainingWorker(epochs, batch_size, lr)
+        self._worker = ModelTrainingWorker(epochs, batch_size, lr, dataset_key)
         self._worker.log_signal.connect(self._append_log)
         self._worker.history_signal.connect(self._on_history_received)
         self._worker.finished_signal.connect(self._on_training_finished)
@@ -669,9 +663,11 @@ class ErrorClassificationWidget(QWidget):
 
     def _on_training_finished(self, best_acc):
         self._run_btn.setEnabled(True)
+        self._dataset_input.setEnabled(True)
         self._status_label.setText(f"状态：训练完成 (最高精度: {best_acc:.2%})")
 
     def _on_training_error(self, err_msg):
         self._run_btn.setEnabled(True)
+        self._dataset_input.setEnabled(True)
         self._log_output.append(f"发生错误: {err_msg}")
         self._status_label.setText("状态：训练异常中断")
