@@ -1,6 +1,7 @@
 # auto_score.py
-import random
 import numpy as np
+
+from platform_core.scoring import METRIC_CONFIGS, evaluate, random_values, single_score
 
 import matplotlib
 
@@ -29,12 +30,13 @@ class AutoScoreWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.metric_configs = {
-            "热电比": {"range": (0.45, 0.75), "default": 0.60, "decimals": 3, "step": 0.001},
-            "供电标煤耗": {"range": (150.0, 250.0), "default": 200.0, "decimals": 2, "step": 0.1},
-            "供热标煤耗": {"range": (30.0, 45.0), "default": 38.0, "decimals": 2, "step": 0.1},
-            "汽机负荷率": {"range": (0.60, 1.00), "default": 0.80, "decimals": 3, "step": 0.001},
-            "能量转换比": {"range": (0.40, 1.00), "default": 0.60, "decimals": 3, "step": 0.001},
-            "自发电占比": {"range": (0.50, 0.90), "default": 0.70, "decimals": 3, "step": 0.001},
+            name: {
+                "range": (config["minimum"], config["maximum"]),
+                "default": config["default"],
+                "decimals": config["decimals"],
+                "step": config["step"],
+            }
+            for name, config in METRIC_CONFIGS.items()
         }
         self.metrics_def = list(self.metric_configs)
         self._value_spins = {}
@@ -241,14 +243,7 @@ class AutoScoreWidget(QWidget):
         )
 
     def _generate_random_data(self):
-        generated_data = {
-            "热电比": round(random.uniform(0.50, 0.70), 3),
-            "供电标煤耗": round(random.uniform(190, 230), 2),
-            "供热标煤耗": round(random.uniform(36, 42), 2),
-            "汽机负荷率": round(random.uniform(0.65, 0.95), 3),
-            "能量转换比": round(random.uniform(0.45, 0.75), 3),
-            "自发电占比": round(random.uniform(0.55, 0.85), 3)
-        }
+        generated_data = random_values()
 
         for metric in self.metrics_def:
             self._value_spins[metric].setValue(generated_data[metric])
@@ -256,72 +251,21 @@ class AutoScoreWidget(QWidget):
         self._status_label.setText("状态：数据已生成，等待评分")
 
     def _calculate_single_score(self, metric, val):
-        score = 60.0
-        if metric == "热电比":
-            if 0.58 <= val <= 0.62:
-                score = 100.0
-            elif val < 0.58:
-                score = 100.0 - 40.0 * ((0.58 - val) / (0.58 - 0.45))
-            else:
-                score = 100.0 - 40.0 * ((val - 0.62) / (0.75 - 0.62))
-
-        elif metric == "供电标煤耗":
-            if val <= 200:
-                score = 100.0
-            else:
-                score = 100.0 - 40.0 * ((val - 200) / (250 - 200))
-
-        elif metric == "供热标煤耗":
-            if val <= 38:
-                score = 100.0
-            else:
-                score = 100.0 - 40.0 * ((val - 38) / (45 - 38))
-
-        elif metric == "汽机负荷率":
-            if val >= 0.8:
-                score = 100.0
-            else:
-                score = 100.0 - 40.0 * ((0.8 - val) / (0.8 - 0.6))
-
-        elif metric == "能量转换比":
-            if val >= 0.6:
-                score = 100.0
-            else:
-                score = 100.0 - 40.0 * ((0.6 - val) / (0.6 - 0.4))
-
-        elif metric == "自发电占比":
-            if 0.65 <= val <= 0.75:
-                score = 100.0
-            elif val < 0.65:
-                score = 100.0 - 40.0 * ((0.65 - val) / (0.65 - 0.5))
-            else:
-                score = 100.0 - 40.0 * ((val - 0.75) / (0.9 - 0.75))
-
-        return max(60.0, min(100.0, score))
+        return single_score(metric, val)
 
     def _execute_scoring(self):
-        scores = []
-        weights = []
         self._current_data = {
             metric: self._value_spins[metric].value()
             for metric in self.metrics_def
         }
-
-        for metric in self.metrics_def:
-            val = self._current_data[metric]
-            pts = self._calculate_single_score(metric, val)
-            scores.append(pts)
-            weights.append(self._weight_spins[metric].value())
-
-        total_weight = sum(weights)
-        if total_weight <= 0:
-            weights = [1.0] * len(self.metrics_def)
-            total_weight = float(len(weights))
-
-        normalized_weights = [w / total_weight for w in weights]
-        weighted_total = sum(s * w for s, w in zip(scores, normalized_weights))
-
-        safety_score = 1.0 - (weighted_total / 100.0)
+        result = evaluate(
+            self._current_data,
+            {metric: self._weight_spins[metric].value() for metric in self.metrics_def},
+        )
+        scores = result["radar"]["scores"]
+        normalized_weights = [item["normalized_weight"] for item in result["items"]]
+        weighted_total = result["total_score"]
+        safety_score = result["danger_score"] / 100.0
 
         self._plot_radar_chart(scores)
 

@@ -14,6 +14,11 @@ env/
 *_result.png
 anomaly_result_*.json
 
+# Local Web frontend build and session task files
+web_frontend/node_modules/
+web_frontend/dist/
+web_runtime/
+
 #history files
 .history
 

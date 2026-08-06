@@ -1,0 +1,137 @@
+"""Focused regression tests for the local B/S first-phase services."""
+
+from __future__ import annotations
+
+import time
+import unittest
+
+from fastapi.testclient import TestClient
+
+from platform_core.scoring import default_values, evaluate
+from web_backend.app import app
+
+
+class SharedScoringTests(unittest.TestCase):
+    def test_defaults_and_zero_weight_fallback(self) -> None:
+        values = default_values()
+        result = evaluate(values, {metric: 0 for metric in values})
+        self.assertEqual(result["weighting_mode"], "equal_fallback")
+        self.assertEqual(result["total_score"], 100.0)
+        self.assertEqual(result["danger_score"], 0.0)
+
+
+class LocalApiTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.client = TestClient(app)
+
+    def tearDown(self) -> None:
+        self.client.close()
+
+    def test_health_scoring_and_sdg(self) -> None:
+        self.assertEqual(self.client.get("/api/health").status_code, 200)
+        score = self.client.post("/api/score/evaluate", json={"values": default_values(), "weights": {}})
+        self.assertEqual(score.status_code, 200)
+        self.assertEqual(score.json()["total_score"], 100.0)
+
+        example = self.client.get("/api/sdg/example")
+        self.assertEqual(example.status_code, 200)
+        editor_config = self.client.get("/api/sdg/config")
+        self.assertEqual(editor_config.status_code, 200)
+        self.assertEqual([item["label"] for item in editor_config.json()["fuzzy_terms"]], ["很小", "小", "较小", "中等", "较大", "大", "很大"])
+        self.assertEqual(editor_config.json()["node_defaults"]["id"], "R1")
+        analyzed = self.client.post("/api/sdg/analyze", json=example.json())
+        self.assertEqual(analyzed.status_code, 200)
+        analysis = analyzed.json()
+        self.assertGreaterEqual(len(analysis["sil_recommendations"]), 1)
+        self.assertEqual(analysis["sis_required_nodes"], [item["node_id"] for item in analysis["sil_recommendations"]])
+        self.assertEqual(len(analysis["backward_paths"]), 2)
+        self.assertTrue(all(item["paths"] for item in analysis["backward_paths"]))
+
+    def test_training_defaults_and_existing_result_images(self) -> None:
+        modules = self.client.get("/api/modules")
+        self.assertEqual(modules.status_code, 200)
+        training_module = next(item for item in modules.json() if item["id"] == "training")
+        self.assertEqual(training_module["status"], "available")
+
+        defaults = self.client.get("/api/training/defaults")
+        self.assertEqual(defaults.status_code, 200)
+        self.assertEqual(defaults.json()["package_name"], "dnnmpcpkg")
+        self.assertEqual(defaults.json()["hidden_layers"], "64,64")
+
+        for image_name in ("training_performance.png", "prediction_error.png"):
+            image = self.client.get(f"/api/training/images/{image_name}")
+            self.assertEqual(image.status_code, 200)
+            self.assertEqual(image.headers["content-type"], "image/png")
+
+    def test_mpc_defaults_and_existing_result_images(self) -> None:
+        modules = self.client.get("/api/modules")
+        self.assertEqual(modules.status_code, 200)
+        mpc_module = next(item for item in modules.json() if item["id"] == "dnn-mpc")
+        self.assertEqual(mpc_module["status"], "available")
+
+        defaults = self.client.get("/api/mpc/defaults")
+        self.assertEqual(defaults.status_code, 200)
+        self.assertEqual(defaults.json()["prediction_horizon"], 5)
+        self.assertIn("process_control_nn_model.mat", defaults.json()["model_path"])
+
+        for image_name in ("process_control_trajectory.png", "control_input.png", "tracking_error.png", "cost_curve.png"):
+            image = self.client.get(f"/api/mpc/images/{image_name}")
+            self.assertEqual(image.status_code, 200)
+            self.assertEqual(image.headers["content-type"], "image/png")
+
+    def test_cdq_config_and_sample_first_analysis(self) -> None:
+        config_response = self.client.get("/api/cdq/config")
+        self.assertEqual(config_response.status_code, 200)
+        config = config_response.json()
+        self.assertEqual(len(config["u_labels"]), 7)
+        self.assertEqual(len(config["cv_labels"]), 7)
+        self.assertEqual(len(config["initial_u_now"]), 7)
+        self.assertEqual(len(config["initial_u_after"]), 7)
+
+        analyzed = self.client.post(
+            "/api/cdq/analyze",
+            json={
+                "step": config["default_step"],
+                "horizon": 3,
+                "sample_index": 0,
+                "cv": config["default_cv"],
+                "u_now": config["initial_u_now"],
+                "u_after": config["initial_u_after"],
+            },
+        )
+        self.assertEqual(analyzed.status_code, 200, analyzed.text)
+        result = analyzed.json()
+        self.assertEqual(result["data_source"]["mode"], "dataset")
+        self.assertEqual(result["data_source"]["sample_index"], 0)
+        self.assertEqual(len(result["inputs"]["u_now"]), 7)
+        self.assertEqual(len(result["series"]["steps"]), 3)
+        self.assertEqual(len(result["risks"]), len(result["schemes"]))
+
+    def test_sil_task_reaches_a_terminal_state(self) -> None:
+        created = self.client.post(
+            "/api/sil/tasks",
+            json={
+                "m": 1,
+                "n": 1,
+                "lambda_fit": 111.11,
+                "ti": 8760,
+                "mrt": 8,
+                "nsim": 1,
+                "years": 1001,
+                "ccf_mode": "total",
+                "total_beta": 0.1,
+            },
+        )
+        self.assertEqual(created.status_code, 200)
+        task_id = created.json()["task_id"]
+        for _ in range(40):
+            task = self.client.get(f"/api/tasks/{task_id}").json()
+            if task["status"] in {"succeeded", "failed"}:
+                break
+            time.sleep(0.1)
+        self.assertEqual(task["status"], "succeeded", task)
+        self.assertIn("pfdavg", task["result"])
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -1,3 +1,23 @@
+# 本机 Web 版（B/S）
+
+桌面端（CS）和本机 Web 端（BS）并行保留。本机 Web 版只绑定 `127.0.0.1:8000`，不向局域网开放。
+
+项目架构、源码边界、BS/CS 模块映射和新增模块规范以根目录 [`AGENTS.md`](AGENTS.md) 为权威说明；本文保留面向人工使用的安装、启动和 CS 模块教程。
+
+首次启动前安装 Node.js LTS，并在项目根目录执行：
+
+```powershell
+.\scripts\run_web_local.ps1
+```
+
+脚本会在首次运行时构建 React 前端、启动 FastAPI 服务并打开浏览器。访问地址固定为：
+
+```text
+http://127.0.0.1:8000
+```
+
+前端源码变更后可执行 `.\scripts\run_web_local.ps1 -Rebuild`。当前 BS 端已包含多评估准则评分、SDG-HAZOP、SIL 验证、风险场景适配方案生成、安全威胁分类、异常行为检测以及 DNN-MPC 的训练评估和优化控制仿真；CS 桌面端仍保留全部对应功能。
+
 # 安装与使用教程
 
 本文档说明如何为平台创建 Python 3.10.20 环境、安装依赖、配置 MATLAB Runtime R2024b，并启动程序。
