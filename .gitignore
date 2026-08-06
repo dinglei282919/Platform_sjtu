@@ -26,3 +26,5 @@ web_runtime/
 dnn_mpc/output/
 dnn_mpc/matlab
 /.idea/pyProjectModel.xml
+
+.vscode/
