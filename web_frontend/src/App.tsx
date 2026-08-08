@@ -8,6 +8,11 @@ type Task = { id: string; title: string; status: string; logs: string[]; result?
 type Recommendation = { node_id: string; node_name: string; frequency: number; severity: number; rrf: number; target_sil: number }
 type SdgNode = { id: string; name: string; type: 'R' | 'P' | 'C'; probability: number }
 type SdgEdge = { source: string; target: string; type: '+' | '-'; probability: number }
+type AnomalyNumericField = 'attack_min_pct' | 'attack_max_pct' | 'measurement_noise_pct' | 'process_disturbance_pct'
+type AnomalyField = 'mcr_root' | AnomalyNumericField
+type AnomalyForm = { mcr_root: string } & Record<AnomalyNumericField, string>
+type AnomalyValidationError = { field: AnomalyField; message: string }
+type ErrorDialogState = { title: string; message: string }
 
 type NavigationItem = { id: ModuleId; name: string; deferred?: boolean }
 type NavigationGroup = { id: string; icon: string; name: string; items: NavigationItem[] }
@@ -43,6 +48,56 @@ const SIL_DEFAULT_FORM: SilForm = {
   estimate_k: 5,
   estimate_low: 20,
   estimate_high: 80,
+}
+
+const anomalyNumericRules: Record<AnomalyNumericField, { label: string; minimum: number; maximum: number }> = {
+  attack_min_pct: { label: '随机攻击强度最小值', minimum: 5, maximum: 50 },
+  attack_max_pct: { label: '随机攻击强度最大值', minimum: 5, maximum: 50 },
+  measurement_noise_pct: { label: '测量噪声强度', minimum: 1, maximum: 30 },
+  process_disturbance_pct: { label: '过程扰动强度', minimum: 1, maximum: 30 },
+}
+
+const anomalyFieldOrder: AnomalyField[] = ['mcr_root', 'attack_min_pct', 'attack_max_pct', 'measurement_noise_pct', 'process_disturbance_pct']
+
+function anomalyNumericValue(form: AnomalyForm, field: AnomalyNumericField): number | null {
+  const rawValue = form[field].trim()
+  if (!rawValue) return null
+  const value = Number(rawValue)
+  return Number.isFinite(value) ? value : null
+}
+
+function validateAnomalyField(form: AnomalyForm, field: AnomalyField): AnomalyValidationError | null {
+  if (field === 'mcr_root') {
+    return form.mcr_root.trim() ? null : { field, message: '请填写 MATLAB Runtime 根目录。' }
+  }
+
+  const rule = anomalyNumericRules[field]
+  const rawValue = form[field].trim()
+  if (!rawValue) return { field, message: `${rule.label}不能为空。` }
+  const value = Number(rawValue)
+  if (!Number.isFinite(value)) return { field, message: `${rule.label}必须是有限数值。` }
+  if (value < rule.minimum || value > rule.maximum) {
+    return { field, message: `${rule.label}必须在 ${rule.minimum}%～${rule.maximum}% 之间（含边界）。` }
+  }
+
+  if (field === 'attack_min_pct' || field === 'attack_max_pct') {
+    const attackMin = anomalyNumericValue(form, 'attack_min_pct')
+    const attackMax = anomalyNumericValue(form, 'attack_max_pct')
+    const attackMinInRange = attackMin !== null && attackMin >= 5 && attackMin <= 50
+    const attackMaxInRange = attackMax !== null && attackMax >= 5 && attackMax <= 50
+    if (attackMinInRange && attackMaxInRange && attackMin > attackMax) {
+      return { field, message: '攻击幅度最小值不能大于最大值。' }
+    }
+  }
+  return null
+}
+
+function validateAnomalyForm(form: AnomalyForm): AnomalyValidationError | null {
+  for (const field of anomalyFieldOrder) {
+    const error = validateAnomalyField(form, field)
+    if (error) return error
+  }
+  return null
 }
 
 const navigationGroups: NavigationGroup[] = [
@@ -114,28 +169,63 @@ function TaskPanel({ task }: { task: Task | null }) {
   </section>
 }
 
+function ErrorDialog({ title, message, onClose }: { title: string; message: string; onClose: () => void }) {
+  const dialogRef = useRef<HTMLDialogElement>(null)
+  useEffect(() => {
+    const dialog = dialogRef.current
+    if (dialog && !dialog.open) dialog.showModal()
+    return () => {
+      if (dialog?.open) dialog.close()
+    }
+  }, [])
+  return <dialog ref={dialogRef} className="anomaly-error-dialog" role="alertdialog" aria-modal="true" aria-labelledby="anomaly-error-dialog-title" aria-describedby="anomaly-error-dialog-message" onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); onClose() } }} onCancel={event => { event.preventDefault(); onClose() }}>
+    <header><h3 id="anomaly-error-dialog-title">{title}</h3><button type="button" className="anomaly-dialog-close" aria-label="关闭错误弹窗" onClick={onClose}>×</button></header>
+    <div id="anomaly-error-dialog-message" className="anomaly-dialog-message">{message}</div>
+    <footer><button type="button" autoFocus onClick={onClose}>确定</button></footer>
+  </dialog>
+}
+
 function AnomalyPage() {
-  const [form, setForm] = useState({
+  const [form, setForm] = useState<AnomalyForm>({
     mcr_root: 'E:\\MATLAB2024',
-    attack_min_pct: 5,
-    attack_max_pct: 10,
-    measurement_noise_pct: 2,
-    process_disturbance_pct: 5,
+    attack_min_pct: '5',
+    attack_max_pct: '10',
+    measurement_noise_pct: '2',
+    process_disturbance_pct: '5',
   })
   const [taskId, setTaskId] = useState<string | null>(null)
   const [imageMode, setImageMode] = useState<'topology' | 'detection'>('topology')
   const [imageRevision, setImageRevision] = useState(0)
   const [imageError, setImageError] = useState(false)
   const [error, setError] = useState('')
+  const [validationError, setValidationError] = useState('')
+  const [dialog, setDialog] = useState<ErrorDialogState | null>(null)
+  const fieldRefs = useRef<Record<AnomalyField, HTMLInputElement | null>>({ mcr_root: null, attack_min_pct: null, attack_max_pct: null, measurement_noise_pct: null, process_disturbance_pct: null })
+  const runButtonRef = useRef<HTMLButtonElement>(null)
+  const dialogReturnFocusRef = useRef<HTMLElement | null>(null)
+  const notifiedTaskFailures = useRef(new Set<string>())
   const task = useTask(taskId)
   const result = task?.result as Record<string, any> | undefined
   const running = task?.status === 'queued' || task?.status === 'running'
-  const statusText = error || task?.status === 'failed' ? '执行失败' : task?.status === 'succeeded' ? '执行完成' : running ? '运行中' : '待执行'
-  const statusEnglish = error || task?.status === 'failed' ? 'Failed' : task?.status === 'succeeded' ? 'Completed' : running ? 'Running' : 'Idle'
+  const pageError = validationError || error || task?.error || ''
+  const statusText = pageError || task?.status === 'failed' ? '执行失败' : task?.status === 'succeeded' ? '执行完成' : running ? '运行中' : '待执行'
+  const statusEnglish = pageError || task?.status === 'failed' ? 'Failed' : task?.status === 'succeeded' ? 'Completed' : running ? 'Running' : 'Idle'
   const imageName = imageMode === 'detection' ? 'detection_probability.png' : 'topology.png'
   const imageTitle = imageMode === 'detection' ? '检测概率图 (detection_probability.png)' : '网络拓扑图 (topology.png)'
   const imageUrl = `/api/anomaly/images/${imageName}?v=${encodeURIComponent(String(result?.image_revision ?? imageRevision))}`
   const report = result ? JSON.stringify(result, null, 2) : task?.error ? `执行失败：${task.error}` : ''
+
+  const showErrorDialog = useCallback((title: string, message: string, returnFocus: HTMLElement | null) => {
+    dialogReturnFocusRef.current = returnFocus
+    setDialog({ title, message })
+  }, [])
+
+  const closeErrorDialog = useCallback(() => {
+    const returnFocus = dialogReturnFocusRef.current
+    setDialog(null)
+    dialogReturnFocusRef.current = null
+    window.requestAnimationFrame(() => returnFocus?.focus())
+  }, [])
 
   useEffect(() => {
     if (task?.status === 'succeeded') {
@@ -144,14 +234,44 @@ function AnomalyPage() {
     }
   }, [task?.status, task?.result])
 
-  const update = (key: keyof typeof form, value: string | number) => setForm(previous => ({ ...previous, [key]: value }))
+  useEffect(() => {
+    if (task?.status !== 'failed' || !task.error || notifiedTaskFailures.current.has(task.id)) return
+    notifiedTaskFailures.current.add(task.id)
+    showErrorDialog('异常检测执行失败', task.error, runButtonRef.current)
+  }, [task?.error, task?.id, task?.status, showErrorDialog])
+
+  const update = (key: AnomalyField, value: string) => setForm(previous => ({ ...previous, [key]: value }))
+  const validateOnBlur = (field: AnomalyField) => {
+    const fieldError = validateAnomalyField(form, field)
+    if (fieldError) {
+      setValidationError(fieldError.message)
+      showErrorDialog('参数错误', fieldError.message, fieldRefs.current[field])
+      return
+    }
+    setValidationError(validateAnomalyForm(form)?.message ?? '')
+  }
   const submit = async () => {
+    const formError = validateAnomalyForm(form)
+    if (formError) {
+      setValidationError(formError.message)
+      showErrorDialog('参数错误', formError.message, fieldRefs.current[formError.field])
+      return
+    }
     try {
+      setValidationError('')
       setError('')
-      const nextTask = await post<{ task_id: string }>('/anomaly/tasks', form)
+      const nextTask = await post<{ task_id: string }>('/anomaly/tasks', {
+        mcr_root: form.mcr_root.trim(),
+        attack_min_pct: Number(form.attack_min_pct),
+        attack_max_pct: Number(form.attack_max_pct),
+        measurement_noise_pct: Number(form.measurement_noise_pct),
+        process_disturbance_pct: Number(form.process_disturbance_pct),
+      })
       setTaskId(nextTask.task_id)
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      const message = e instanceof Error ? e.message : String(e)
+      setError(message)
+      showErrorDialog('异常检测执行失败', message, runButtonRef.current)
     }
   }
   const exportResult = () => {
@@ -172,11 +292,11 @@ function AnomalyPage() {
         <div className="anomaly-box-body">
           <section className="anomaly-box anomaly-param-group">
             <h3>参数设置</h3>
-            <div className="anomaly-param-row"><label htmlFor="anomaly-mcr">MATLAB Runtime路径:</label><input id="anomaly-mcr" type="text" value={form.mcr_root} onChange={e => update('mcr_root', e.target.value)}/></div>
-            <div className="anomaly-param-row"><label>随机攻击强度范围（%）:</label><div className="anomaly-range"><input aria-label="随机攻击强度最小值" type="number" value={form.attack_min_pct} min={5} max={50} step={1} onChange={e => update('attack_min_pct', Number(e.target.value))}/><span>~</span><input aria-label="随机攻击强度最大值" type="number" value={form.attack_max_pct} min={5} max={50} step={1} onChange={e => update('attack_max_pct', Number(e.target.value))}/></div></div>
-            <div className="anomaly-param-row"><label htmlFor="anomaly-noise">测量噪声强度（%）:</label><input id="anomaly-noise" type="number" value={form.measurement_noise_pct} min={1} max={30} step={1} onChange={e => update('measurement_noise_pct', Number(e.target.value))}/></div>
-            <div className="anomaly-param-row"><label htmlFor="anomaly-disturbance">过程扰动强度（%）:</label><input id="anomaly-disturbance" type="number" value={form.process_disturbance_pct} min={1} max={30} step={1} onChange={e => update('process_disturbance_pct', Number(e.target.value))}/></div>
-            <div className="anomaly-centered-action"><button type="button" onClick={() => void submit()} disabled={running}>运行异常结果</button></div>
+            <div className="anomaly-param-row"><label htmlFor="anomaly-mcr">MATLAB Runtime路径:</label><input ref={element => { fieldRefs.current.mcr_root = element }} id="anomaly-mcr" type="text" value={form.mcr_root} onChange={e => update('mcr_root', e.target.value)} onBlur={() => validateOnBlur('mcr_root')}/></div>
+            <div className="anomaly-param-row"><label>随机攻击强度范围（%）:</label><div className="anomaly-range"><input ref={element => { fieldRefs.current.attack_min_pct = element }} aria-label="随机攻击强度最小值" type="number" value={form.attack_min_pct} min={5} max={50} step={1} onChange={e => update('attack_min_pct', e.target.value)} onBlur={() => validateOnBlur('attack_min_pct')}/><span>~</span><input ref={element => { fieldRefs.current.attack_max_pct = element }} aria-label="随机攻击强度最大值" type="number" value={form.attack_max_pct} min={5} max={50} step={1} onChange={e => update('attack_max_pct', e.target.value)} onBlur={() => validateOnBlur('attack_max_pct')}/></div></div>
+            <div className="anomaly-param-row"><label htmlFor="anomaly-noise">测量噪声强度（%）:</label><input ref={element => { fieldRefs.current.measurement_noise_pct = element }} id="anomaly-noise" type="number" value={form.measurement_noise_pct} min={1} max={30} step={1} onChange={e => update('measurement_noise_pct', e.target.value)} onBlur={() => validateOnBlur('measurement_noise_pct')}/></div>
+            <div className="anomaly-param-row"><label htmlFor="anomaly-disturbance">过程扰动强度（%）:</label><input ref={element => { fieldRefs.current.process_disturbance_pct = element }} id="anomaly-disturbance" type="number" value={form.process_disturbance_pct} min={1} max={30} step={1} onChange={e => update('process_disturbance_pct', e.target.value)} onBlur={() => validateOnBlur('process_disturbance_pct')}/></div>
+            <div className="anomaly-centered-action"><button ref={runButtonRef} type="button" onClick={() => void submit()} disabled={running}>运行异常结果</button></div>
           </section>
           <section className="anomaly-box anomaly-export-group">
             <h3>导出设置</h3>
@@ -194,7 +314,8 @@ function AnomalyPage() {
       </section>
     </div>
     <div className="anomaly-status-bar"><span>状态：{statusText}</span><span>Status: {statusEnglish}</span></div>
-    {(error || task?.error) && <ErrorBox text={error || task?.error || '异常检测失败'} />}
+    {pageError && <ErrorBox text={pageError} />}
+    {dialog && <ErrorDialog title={dialog.title} message={dialog.message} onClose={closeErrorDialog} />}
   </Page>
 }
 

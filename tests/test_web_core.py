@@ -6,9 +6,10 @@ import time
 import unittest
 
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from platform_core.scoring import default_values, evaluate
-from web_backend.app import app
+from web_backend.app import AnomalyTaskRequest, app
 
 
 class SharedScoringTests(unittest.TestCase):
@@ -78,6 +79,38 @@ class LocalApiTests(unittest.TestCase):
             image = self.client.get(f"/api/mpc/images/{image_name}")
             self.assertEqual(image.status_code, 200)
             self.assertEqual(image.headers["content-type"], "image/png")
+
+    def test_anomaly_request_accepts_inclusive_boundaries(self) -> None:
+        request = AnomalyTaskRequest(
+            mcr_root=r" E:\MATLAB2024 ",
+            attack_min_pct=5,
+            attack_max_pct=50,
+            measurement_noise_pct=1,
+            process_disturbance_pct=30,
+        )
+        self.assertEqual(request.mcr_root, r"E:\MATLAB2024")
+        self.assertEqual(request.attack_min_pct, 5)
+        self.assertEqual(request.attack_max_pct, 50)
+        self.assertEqual(request.measurement_noise_pct, 1)
+        self.assertEqual(request.process_disturbance_pct, 30)
+
+    def test_anomaly_request_rejects_invalid_parameters_before_task_creation(self) -> None:
+        invalid_payloads = [
+            {"attack_min_pct": 4.9},
+            {"attack_max_pct": 50.1},
+            {"measurement_noise_pct": 0.9},
+            {"process_disturbance_pct": 30.1},
+            {"attack_min_pct": 20, "attack_max_pct": 10},
+            {"mcr_root": "   "},
+        ]
+        for payload in invalid_payloads:
+            with self.subTest(payload=payload):
+                response = self.client.post("/api/anomaly/tasks", json=payload)
+                self.assertEqual(response.status_code, 422, response.text)
+                self.assertNotIn("task_id", response.json())
+
+        with self.assertRaises(ValidationError):
+            AnomalyTaskRequest(attack_min_pct=float("nan"))
 
     def test_cdq_config_and_sample_first_analysis(self) -> None:
         config_response = self.client.get("/api/cdq/config")

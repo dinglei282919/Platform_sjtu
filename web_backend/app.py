@@ -10,7 +10,7 @@ from typing import Any, Literal
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -80,10 +80,24 @@ class ClassificationTaskRequest(BaseModel):
 
 class AnomalyTaskRequest(BaseModel):
     mcr_root: str = r"E:\MATLAB2024"
-    attack_min_pct: float = 5.0
-    attack_max_pct: float = 10.0
-    measurement_noise_pct: float = 2.0
-    process_disturbance_pct: float = 5.0
+    attack_min_pct: float = Field(default=5.0, ge=5.0, le=50.0, allow_inf_nan=False)
+    attack_max_pct: float = Field(default=10.0, ge=5.0, le=50.0, allow_inf_nan=False)
+    measurement_noise_pct: float = Field(default=2.0, ge=1.0, le=30.0, allow_inf_nan=False)
+    process_disturbance_pct: float = Field(default=5.0, ge=1.0, le=30.0, allow_inf_nan=False)
+
+    @field_validator("mcr_root")
+    @classmethod
+    def validate_mcr_root(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("请填写 MATLAB Runtime 根目录。")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_attack_range(self) -> "AnomalyTaskRequest":
+        if self.attack_min_pct > self.attack_max_pct:
+            raise ValueError("攻击幅度最小值不能大于最大值。")
+        return self
 
 
 class TrainingTaskRequest(BaseModel):

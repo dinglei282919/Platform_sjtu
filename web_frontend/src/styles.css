@@ -414,6 +414,16 @@ main { min-width: 0; padding: 16px; }
 .anomaly-image-placeholder { padding: 20px; text-align: center; font-size: 15px; }
 .anomaly-status-bar { min-height: 36px; flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 5px 10px; border: 1px solid rgba(126, 168, 208, .35); border-radius: 6px; background: rgba(25, 38, 55, .95); color: #cfe3fb; font-size: 14px; font-weight: 600; }
 .anomaly-page > .error { flex: 0 0 auto; margin-top: 0; }
+.anomaly-error-dialog { width: min(480px, calc(100vw - 32px)); max-width: 100%; padding: 0; overflow: hidden; color: #e9f3ff; border: 1px solid rgba(255, 116, 102, .72); border-radius: 10px; background: #17283a; box-shadow: 0 24px 70px rgba(0, 0, 0, .62), 0 0 0 1px rgba(255, 255, 255, .04) inset; }
+.anomaly-error-dialog::backdrop { background: rgba(3, 10, 18, .72); backdrop-filter: blur(3px); }
+.anomaly-error-dialog header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; border-bottom: 1px solid rgba(255, 116, 102, .32); background: linear-gradient(90deg, rgba(118, 39, 37, .62), rgba(36, 49, 65, .88)); }
+.anomaly-error-dialog h3 { margin: 0; color: #ffd8d4; font-size: 18px; }
+.anomaly-dialog-close { width: 32px; height: 32px; padding: 0; border: 0; border-radius: 5px; color: #dcecff; background: transparent; font-size: 24px; line-height: 1; }
+.anomaly-dialog-close:hover, .anomaly-dialog-close:focus-visible { color: #fff; background: rgba(255, 255, 255, .12); }
+.anomaly-dialog-message { min-height: 76px; padding: 20px 18px; color: #f4d8d5; font-size: 15px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+.anomaly-error-dialog footer { display: flex; justify-content: flex-end; padding: 0 18px 16px; }
+.anomaly-error-dialog footer button { min-width: 86px; min-height: 38px; border-color: #d9675e; background: linear-gradient(180deg, #b54e48, #873b38); }
+.anomaly-error-dialog footer button:hover, .anomaly-error-dialog footer button:focus-visible { border-color: #ff958b; background: linear-gradient(180deg, #cc5b53, #99433f); }
 @media (min-width: 761px) {
   .anomaly-box > h3 { font-size: 18px; }
   .anomaly-param-group h3, .anomaly-export-group h3 { font-size: 17px; }
