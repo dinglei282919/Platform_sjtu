@@ -11,6 +11,16 @@ const fieldLabels: Record<string, string> = {
   attack_max_pct: '随机攻击强度最大值',
   measurement_noise_pct: '测量噪声强度',
   process_disturbance_pct: '过程扰动强度',
+  package_dir: 'Python 包目录',
+  package_name: 'Python 包名',
+  output_dir: '输出目录',
+  model_path: '模型文件',
+  sample_count: '训练样本数',
+  epochs: '训练轮数',
+  hidden_layers: '隐藏层规模',
+  dataset_path: '外部数据集',
+  sim_time: '仿真时长',
+  prediction_horizon: '预测步长',
 }
 
 function formatValidationIssue(issue: ApiValidationIssue): string {
