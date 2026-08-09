@@ -19,7 +19,7 @@ if str(ROOT) not in sys.path:
 FRONTEND_DIST = ROOT / "web_frontend" / "dist"
 
 from web_backend.task_manager import TaskManager
-from web_backend.services import anomaly, cdq, classification, mpc, scoring, sdg, sil, training
+from web_backend.services import anomaly, cdq, classification, mpc, path_picker, scoring, sdg, sil, training
 
 
 task_manager = TaskManager()
@@ -106,10 +106,69 @@ class TrainingTaskRequest(BaseModel):
     mcr_root: str = r"E:\MATLAB2024"
     output_dir: str = str(training.DEFAULT_OUTPUT_DIR)
     model_path: str = str(training.DEFAULT_OUTPUT_DIR / "process_control_nn_model.mat")
-    sample_count: int = 1000
-    epochs: int = 50
+    sample_count: int = Field(default=1000, ge=100, le=100000)
+    epochs: int = Field(default=50, ge=1, le=5000)
     hidden_layers: str = "64,64"
     dataset_path: str = ""
+
+    @field_validator("package_name")
+    @classmethod
+    def validate_package_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized or not all(part.isidentifier() for part in normalized.split(".")):
+            raise ValueError("Python 包名格式不正确，只能使用合法的 Python 模块名。")
+        return normalized
+
+    @field_validator("package_dir")
+    @classmethod
+    def validate_package_dir(cls, value: str) -> str:
+        normalized = value.strip()
+        if normalized and not Path(normalized).is_absolute():
+            raise ValueError("Python 包目录必须是本机绝对路径；也可以留空以使用当前环境中已安装的包。")
+        return normalized
+
+    @field_validator("mcr_root", "output_dir")
+    @classmethod
+    def validate_required_directory(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("路径不能为空。")
+        if not Path(normalized).is_absolute():
+            raise ValueError("路径必须是本机绝对路径。")
+        return normalized
+
+    @field_validator("model_path")
+    @classmethod
+    def validate_model_path(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized or not Path(normalized).is_absolute():
+            raise ValueError("模型文件必须使用本机绝对路径。")
+        if Path(normalized).suffix.lower() != ".mat":
+            raise ValueError("模型文件必须使用 .mat 扩展名。")
+        return normalized
+
+    @field_validator("dataset_path")
+    @classmethod
+    def validate_dataset_path(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            return ""
+        if not Path(normalized).is_absolute():
+            raise ValueError("外部数据集必须使用本机绝对路径。")
+        if Path(normalized).suffix.lower() != ".mat":
+            raise ValueError("外部数据集必须是 .mat 文件。")
+        return normalized
+
+    @field_validator("hidden_layers")
+    @classmethod
+    def validate_hidden_layers(cls, value: str) -> str:
+        try:
+            layers = [int(part.strip()) for part in value.split(",")]
+        except (AttributeError, ValueError) as exc:
+            raise ValueError("隐藏层规模必须是用逗号分隔的正整数，例如 64,64。") from exc
+        if not layers or len(layers) > 10 or any(layer < 1 or layer > 4096 for layer in layers):
+            raise ValueError("隐藏层最多设置 10 层，每层神经元数量必须是 1～4096 之间的整数。")
+        return ",".join(str(layer) for layer in layers)
 
 
 class MpcTaskRequest(BaseModel):
@@ -118,8 +177,48 @@ class MpcTaskRequest(BaseModel):
     mcr_root: str = r"E:\MATLAB2024"
     output_dir: str = str(mpc.DEFAULT_OUTPUT_DIR)
     model_path: str = str(mpc.DEFAULT_OUTPUT_DIR / "process_control_nn_model.mat")
-    sim_time: float = 1.0
-    prediction_horizon: int = 5
+    sim_time: float = Field(default=1.0, ge=0.2, le=20.0, allow_inf_nan=False)
+    prediction_horizon: int = Field(default=5, ge=1, le=60)
+
+    @field_validator("package_name")
+    @classmethod
+    def validate_package_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized or not all(part.isidentifier() for part in normalized.split(".")):
+            raise ValueError("Python 包名格式不正确，只能使用合法的 Python 模块名。")
+        return normalized
+
+    @field_validator("package_dir")
+    @classmethod
+    def validate_package_dir(cls, value: str) -> str:
+        normalized = value.strip()
+        if normalized and not Path(normalized).is_absolute():
+            raise ValueError("Python 包目录必须是本机绝对路径；也可以留空以使用当前环境中已安装的包。")
+        return normalized
+
+    @field_validator("mcr_root", "output_dir")
+    @classmethod
+    def validate_required_directory(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("路径不能为空。")
+        if not Path(normalized).is_absolute():
+            raise ValueError("路径必须是本机绝对路径。")
+        return normalized
+
+    @field_validator("model_path")
+    @classmethod
+    def validate_model_path(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized or not Path(normalized).is_absolute():
+            raise ValueError("模型文件必须使用本机绝对路径。")
+        if Path(normalized).suffix.lower() != ".mat":
+            raise ValueError("模型文件必须使用 .mat 扩展名。")
+        return normalized
+
+class LocalPathSelectRequest(BaseModel):
+    kind: Literal["directory", "open-mat", "save-mat"]
+    initial_path: str = ""
 
 
 @asynccontextmanager
@@ -145,6 +244,16 @@ def _bad_request(exc: Exception) -> HTTPException:
 @app.get("/api/health")
 def health() -> dict[str, Any]:
     return {"status": "ok", "mode": "local-only", "host": "127.0.0.1", "frontend_built": (FRONTEND_DIST / "index.html").is_file()}
+
+
+@app.post("/api/local-paths/select")
+def select_local_path(request: LocalPathSelectRequest) -> dict[str, str]:
+    try:
+        selected = path_picker.choose_local_path(request.kind, request.initial_path)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return {"path": selected}
+
 
 
 @app.get("/api/modules")

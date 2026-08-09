@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import time
 import unittest
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from platform_core.scoring import default_values, evaluate
-from web_backend.app import AnomalyTaskRequest, app
+from web_backend.app import AnomalyTaskRequest, MpcTaskRequest, TrainingTaskRequest, app
 
 
 class SharedScoringTests(unittest.TestCase):
@@ -27,6 +28,19 @@ class LocalApiTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.client.close()
+
+    @patch("web_backend.app.path_picker.choose_local_path")
+    def test_local_path_dialog_returns_absolute_path(self, choose_mock) -> None:
+        selected_path = r"H:\repository\Platform_sjtu\dnn_mpc\output"
+        choose_mock.return_value = selected_path
+        response = self.client.post(
+            "/api/local-paths/select",
+            json={"kind": "directory", "initial_path": selected_path},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"path": selected_path})
+        choose_mock.assert_called_once_with("directory", selected_path)
+
 
     def test_health_scoring_and_sdg(self) -> None:
         self.assertEqual(self.client.get("/api/health").status_code, 200)
@@ -111,6 +125,70 @@ class LocalApiTests(unittest.TestCase):
 
         with self.assertRaises(ValidationError):
             AnomalyTaskRequest(attack_min_pct=float("nan"))
+
+    def test_dnn_training_request_accepts_inclusive_boundaries(self) -> None:
+        minimum = TrainingTaskRequest(
+            package_dir="",
+            mcr_root=r"H:\software\matlab software\R2024b Runtime\R2024b",
+            output_dir=r"H:\repository\Platform_sjtu\dnn_mpc\output",
+            model_path=r"H:\repository\Platform_sjtu\dnn_mpc\output\model.mat",
+            sample_count=100,
+            epochs=1,
+            hidden_layers="1",
+        )
+        maximum = TrainingTaskRequest(
+            package_dir=r"H:\repository\Platform_sjtu\dnn_mpc\build_python",
+            mcr_root=r"H:\software\matlab software\R2024b Runtime\R2024b",
+            output_dir=r"H:\repository\Platform_sjtu\dnn_mpc\output",
+            model_path=r"H:\repository\Platform_sjtu\dnn_mpc\output\model.mat",
+            sample_count=100000,
+            epochs=5000,
+            hidden_layers=",".join(["4096"] * 10),
+        )
+        self.assertEqual(minimum.sample_count, 100)
+        self.assertEqual(maximum.epochs, 5000)
+        self.assertEqual(len(maximum.hidden_layers.split(",")), 10)
+
+    def test_dnn_training_request_rejects_parameters_and_paths_before_task_creation(self) -> None:
+        invalid_payloads = [
+            {"sample_count": 99},
+            {"sample_count": 100001},
+            {"epochs": 0},
+            {"epochs": 5001},
+            {"hidden_layers": "64,0"},
+            {"hidden_layers": ",".join(["64"] * 11)},
+            {"package_name": "dnn-mpc"},
+            {"package_dir": r"dnn_mpc\build_python"},
+            {"mcr_root": r"relative\runtime"},
+            {"output_dir": r"relative\output"},
+            {"model_path": r"H:\repository\Platform_sjtu\dnn_mpc\output\model.txt"},
+            {"dataset_path": r"relative\dataset.mat"},
+        ]
+        for payload in invalid_payloads:
+            with self.subTest(payload=payload):
+                response = self.client.post("/api/training/tasks", json=payload)
+                self.assertEqual(response.status_code, 422, response.text)
+                self.assertNotIn("task_id", response.json())
+
+    def test_mpc_request_rejects_parameters_and_paths_before_task_creation(self) -> None:
+        invalid_payloads = [
+            {"sim_time": 0.19},
+            {"sim_time": 20.01},
+            {"prediction_horizon": 0},
+            {"prediction_horizon": 61},
+            {"package_name": "dnn-mpc"},
+            {"mcr_root": r"relative\runtime"},
+            {"output_dir": r"relative\output"},
+            {"model_path": r"H:\repository\Platform_sjtu\dnn_mpc\output\model.txt"},
+        ]
+        for payload in invalid_payloads:
+            with self.subTest(payload=payload):
+                response = self.client.post("/api/mpc/tasks", json=payload)
+                self.assertEqual(response.status_code, 422, response.text)
+                self.assertNotIn("task_id", response.json())
+
+        with self.assertRaises(ValidationError):
+            MpcTaskRequest(sim_time=float("nan"))
 
     def test_cdq_config_and_sample_first_analysis(self) -> None:
         config_response = self.client.get("/api/cdq/config")
