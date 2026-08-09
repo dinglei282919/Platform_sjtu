@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type FocusEvent, type ReactNode } from 'react'
 import * as echarts from 'echarts'
 import { api, post } from './api'
 
@@ -163,6 +163,103 @@ function validateAnomalyForm(form: AnomalyForm): AnomalyValidationError | null {
   for (const field of anomalyFieldOrder) {
     const error = validateAnomalyField(form, field)
     if (error) return error
+  }
+  return null
+}
+
+// ---- 风险动态分析三模块：参数边界校验（与后端一致，供边界弹窗使用） ----
+
+const CLASSIFICATION_DATASET_IDS = ['original', 'easy', 'hard']
+type ClassificationFormValues = { dataset: string; epochs: number; batch_size: number; learning_rate: number }
+
+function validateClassificationForm(form: ClassificationFormValues): FormValidationIssue | null {
+  if (!CLASSIFICATION_DATASET_IDS.includes(form.dataset)) return { title: '参数错误', message: '请选择有效的数据集。' }
+  if (!Number.isFinite(form.epochs) || !Number.isInteger(form.epochs) || form.epochs < 1 || form.epochs > 500) {
+    return { title: '参数错误', message: 'Epochs 必须是 1～500 之间的整数（含边界）。' }
+  }
+  if (!Number.isFinite(form.batch_size) || !Number.isInteger(form.batch_size) || form.batch_size < 8 || form.batch_size > 256) {
+    return { title: '参数错误', message: 'Batch Size 必须是 8～256 之间的整数（含边界）。' }
+  }
+  if (!Number.isFinite(form.learning_rate) || form.learning_rate < 0.0001 || form.learning_rate > 0.1) {
+    return { title: '参数错误', message: 'Learning Rate 必须在 0.0001～0.1 之间（含边界）。' }
+  }
+  return null
+}
+
+type ScoreMetricConfig = { minimum: number; maximum: number }
+
+function validateScoreValues(
+  values: Record<string, number>,
+  weights: Record<string, number>,
+  metrics: Record<string, ScoreMetricConfig>,
+): FormValidationIssue | null {
+  for (const [name, item] of Object.entries(metrics)) {
+    const value = Number(values[name])
+    if (!Number.isFinite(value)) return { title: '参数错误', message: `指标“${name}”必须是有效数值。` }
+    if (value < item.minimum || value > item.maximum) {
+      return { title: '参数错误', message: `指标“${name}”必须在 ${item.minimum}～${item.maximum} 范围内（含边界）。` }
+    }
+    const weight = Number(weights[name] ?? 1)
+    if (!Number.isFinite(weight) || weight < 0 || weight > 10) {
+      return { title: '参数错误', message: `指标“${name}”的权重必须在 0～10 范围内（含边界）。` }
+    }
+  }
+  return null
+}
+
+function validateScoreField(
+  kind: 'value' | 'weight',
+  name: string,
+  value: number,
+  metrics: Record<string, ScoreMetricConfig>,
+): FormValidationIssue | null {
+  if (kind === 'value') {
+    const item = metrics[name]
+    if (!item) return { title: '参数错误', message: `未知指标：${name}` }
+    if (!Number.isFinite(value)) return { title: '参数错误', message: `指标“${name}”必须是有效数值。` }
+    if (value < item.minimum || value > item.maximum) {
+      return { title: '参数错误', message: `指标“${name}”必须在 ${item.minimum}～${item.maximum} 范围内（含边界）。` }
+    }
+    return null
+  }
+  if (!Number.isFinite(value)) return { title: '参数错误', message: `指标“${name}”的权重必须是有效数值。` }
+  if (value < 0 || value > 10) {
+    return { title: '参数错误', message: `指标“${name}”的权重必须在 0～10 范围内（含边界）。` }
+  }
+  return null
+}
+
+function validateCdqForm(
+  step: number,
+  horizon: number,
+  sampleIndex: number,
+  sampleCount: number,
+  cv: number[],
+  uNow: number[],
+  uAfter: number[],
+): FormValidationIssue | null {
+  if (!Number.isFinite(step) || step < 0.1 || step > 100) {
+    return { title: '参数错误', message: '时间步长 (Step) 必须在 0.1～100 之间（含边界）。' }
+  }
+  if (!Number.isFinite(horizon) || !Number.isInteger(horizon) || horizon < 1 || horizon > 500) {
+    return { title: '参数错误', message: '预测域 (Horizon) 必须是 1～500 之间的整数（含边界）。' }
+  }
+  const sampleMax = Math.max(0, sampleCount - 2)
+  if (!Number.isFinite(sampleIndex) || !Number.isInteger(sampleIndex) || sampleIndex < 0 || sampleIndex > sampleMax) {
+    return { title: '参数错误', message: `真实数据起始样本必须是 0～${sampleMax} 之间的整数（含边界）。` }
+  }
+  const vectorChecks: Array<{ label: string; values: number[] }> = [
+    { label: '当前动作 (U_now)', values: uNow },
+    { label: '预选动作 (U_after)', values: uAfter },
+    { label: '实时工况特征向量 (CV)', values: cv },
+  ]
+  for (const { label, values } of vectorChecks) {
+    if (values.length !== 7) return { title: '参数错误', message: `${label}必须包含 7 个数值。` }
+    for (let index = 0; index < values.length; index += 1) {
+      if (!Number.isFinite(values[index])) {
+        return { title: '参数错误', message: `${label}第 ${index + 1} 项必须是有效数值。` }
+      }
+    }
   }
   return null
 }
@@ -392,9 +489,55 @@ function ScorePage() {
   const [weights, setWeights] = useState<Record<string, number>>({})
   const [result, setResult] = useState<Record<string, any> | null>(null)
   const [error, setError] = useState('')
+  const [dialog, setDialog] = useState<ErrorDialogState | null>(null)
+  const runButtonRef = useRef<HTMLButtonElement>(null)
+  const dialogReturnFocusRef = useRef<HTMLElement | null>(null)
   useEffect(() => { void api<Record<string, any>>('/score/config').then(data => { setConfig(data); setValues(data.defaults); setWeights(data.default_weights) }).catch(e => setError(e.message)) }, [])
-  const evaluate = async () => { try { setError(''); setResult(await post('/score/evaluate', { values, weights })) } catch (e) { setError(e instanceof Error ? e.message : String(e)) } }
-  const randomize = async () => { try { setValues(await post<Record<string, number>>('/score/random')) } catch (e) { setError(e instanceof Error ? e.message : String(e)) } }
+  const showErrorDialog = useCallback((title: string, message: string, returnFocus: HTMLElement | null) => {
+    dialogReturnFocusRef.current = returnFocus
+    setDialog({ title, message })
+  }, [])
+  const closeErrorDialog = useCallback(() => {
+    const returnFocus = dialogReturnFocusRef.current
+    setDialog(null)
+    dialogReturnFocusRef.current = null
+    window.requestAnimationFrame(() => returnFocus?.focus())
+  }, [])
+  const evaluate = async () => {
+    const issue = config ? validateScoreValues(values, weights, config.metrics) : null
+    if (issue) {
+      setError(issue.message)
+      showErrorDialog(issue.title, issue.message, runButtonRef.current)
+      return
+    }
+    try {
+      setError('')
+      setResult(await post('/score/evaluate', { values, weights }))
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e)
+      setError(message)
+      showErrorDialog('评分执行失败', message, runButtonRef.current)
+    }
+  }
+  const randomize = async () => {
+    try {
+      setError('')
+      setValues(await post<Record<string, number>>('/score/random'))
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e)
+      setError(message)
+      showErrorDialog('随机数据生成失败', message, runButtonRef.current)
+    }
+  }
+  const validateMetricBlur = (event: FocusEvent<HTMLInputElement>, kind: 'value' | 'weight', name: string) => {
+    if (!config?.metrics) return
+    const value = kind === 'value' ? Number(values[name]) : Number(weights[name] ?? 0)
+    const issue = validateScoreField(kind, name, value, config.metrics)
+    if (issue) {
+      setError(issue.message)
+      showErrorDialog(issue.title, issue.message, event.currentTarget)
+    }
+  }
   const radar = result ? {
     backgroundColor: 'transparent',
     tooltip: { formatter: (params: any) => `单项得分：${(params.value as number[]).map(value => Number(value).toFixed(2)).join(' / ')}` },
@@ -410,10 +553,10 @@ function ScorePage() {
   return <Page title="多评估准则融合的风险学习分析">
     <div className="two-column score-layout">
       <section className="panel score-input-panel"><h3>数据与评分规则设定</h3>{config && <div className="metric-table"><div className="table-head">指标名称</div><div className="table-head">当前数值</div><div className="table-head">权重配置</div>
-        {Object.entries(config.metrics).map(([name, item]: [string, any]) => <div className="metric-row" key={name}><label>{name}</label><input type="number" min={item.minimum} max={item.maximum} step={item.step} value={values[name] ?? ''} onChange={e => setValues({ ...values, [name]: Number(e.target.value) })} /><input type="number" min="0" max="10" step="0.1" value={weights[name] ?? 0} onChange={e => setWeights({ ...weights, [name]: Number(e.target.value) })} /></div>)}
-      </div>}<div className="actions score-actions"><button className="secondary" onClick={() => void randomize()}>随机生成数据</button><button onClick={() => void evaluate()}>执行加权评分</button></div></section>
+        {Object.entries(config.metrics).map(([name, item]: [string, any]) => <div className="metric-row" key={name}><label>{name}</label><input type="number" min={item.minimum} max={item.maximum} step={item.step} value={values[name] ?? ''} onChange={e => setValues({ ...values, [name]: Number(e.target.value) })} onBlur={e => validateMetricBlur(e, 'value', name)} /><input type="number" min="0" max="10" step="0.1" value={weights[name] ?? 0} onChange={e => setWeights({ ...weights, [name]: Number(e.target.value) })} onBlur={e => validateMetricBlur(e, 'weight', name)} /></div>)}
+      </div>}<div className="actions score-actions"><button className="secondary" onClick={() => void randomize()}>随机生成数据</button><button ref={runButtonRef} onClick={() => void evaluate()}>执行加权评分</button></div></section>
       <section className="panel score-result-panel"><h3>评估报告与六维蛛网图</h3>{result ? <><div className="score-result-top"><div className="score-radar-wrap">{radar && <Chart option={radar} height={420} className="score-radar-chart" />}</div><div className="score-summary"><ScoreCard label="综合加权总分" value={Number(result.total_score).toFixed(2)} tone="blue" /><ScoreCard label="潜在危险分数" value={Number(result.danger_score).toFixed(2)} tone="red" /></div></div><div className="report-list score-report-list"><p><b>【各项指标得分明细】</b></p>{result.items.map((item: any) => <p key={item.metric}>{item.metric}（{item.value}）：{item.score.toFixed(2)} 分（权重：{(item.normalized_weight * 100).toFixed(2)}%）</p>)}<p><b>【综合评估】</b></p><p>加权总分：{Number(result.total_score).toFixed(2)} / 100.00</p><p>潜在危险分数：{Number(result.danger_score).toFixed(4)}</p></div></> : <Empty text="输入指标数值后执行评分。" />}</section>
-    </div><div className="module-status-bar">{statusText}</div>{error && <ErrorBox text={error} />}
+    </div><div className="module-status-bar">{statusText}</div>{error && <ErrorBox text={error} />}{dialog && <ErrorDialog title={dialog.title} message={dialog.message} onClose={closeErrorDialog} />}
   </Page>
 }
 
@@ -724,7 +867,19 @@ function CdqPageReplica() {
   const [result, setResult] = useState<Record<string, any> | null>(null)
   const [error, setError] = useState('')
   const [running, setRunning] = useState(false)
-
+  const [dialog, setDialog] = useState<ErrorDialogState | null>(null)
+  const runButtonRef = useRef<HTMLButtonElement>(null)
+  const dialogReturnFocusRef = useRef<HTMLElement | null>(null)
+  const showErrorDialog = useCallback((title: string, message: string, returnFocus: HTMLElement | null) => {
+    dialogReturnFocusRef.current = returnFocus
+    setDialog({ title, message })
+  }, [])
+  const closeErrorDialog = useCallback(() => {
+    const returnFocus = dialogReturnFocusRef.current
+    setDialog(null)
+    dialogReturnFocusRef.current = null
+    window.requestAnimationFrame(() => returnFocus?.focus())
+  }, [])
   useEffect(() => {
     void api<Record<string, any>>('/cdq/config').then(data => {
       setConfig(data)
@@ -734,10 +889,20 @@ function CdqPageReplica() {
       setCv(data.default_cv ?? [])
       setUNow((data.initial_u_now ?? []).map((value: number) => Number(Number(value).toFixed(2))))
       setUAfter((data.initial_u_after ?? []).map((value: number) => Number(Number(value).toFixed(2))))
-    }).catch(e => setError(e.message))
-  }, [])
+    }).catch(e => {
+      const message = e instanceof Error ? e.message : String(e)
+      setError(message)
+      showErrorDialog('配置加载失败', message, runButtonRef.current)
+    })
+  }, [showErrorDialog])
 
   const run = async () => {
+    const issue = validateCdqForm(step, horizon, sampleIndex, config?.samples ?? 0, cv, uNow, uAfter)
+    if (issue) {
+      setError(issue.message)
+      showErrorDialog(issue.title, issue.message, runButtonRef.current)
+      return
+    }
     try {
       setError('')
       setResult(null)
@@ -747,9 +912,27 @@ function CdqPageReplica() {
       if (next.inputs?.u_now) setUNow(next.inputs.u_now.map((value: number) => Number(Number(value).toFixed(2))))
       if (next.inputs?.u_after) setUAfter(next.inputs.u_after.map((value: number) => Number(Number(value).toFixed(2))))
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      const message = e instanceof Error ? e.message : String(e)
+      setError(message)
+      showErrorDialog('风险匹配执行失败', message, runButtonRef.current)
     } finally {
       setRunning(false)
+    }
+  }
+
+  const validateVectorBlur = (label: string, values: number[], index: number) => (event: FocusEvent<HTMLInputElement>) => {
+    if (!Number.isFinite(values[index])) {
+      const message = `${label}第 ${index + 1} 项必须是有效数值。`
+      setError(message)
+      showErrorDialog('参数错误', message, event.currentTarget)
+    }
+  }
+
+  const validateSettingBlur = (event: FocusEvent<HTMLInputElement>) => {
+    const issue = validateCdqForm(step, horizon, sampleIndex, config?.samples ?? 0, cv, uNow, uAfter)
+    if (issue && (issue.message.includes('时间步长') || issue.message.includes('预测域') || issue.message.includes('起始样本'))) {
+      setError(issue.message)
+      showErrorDialog(issue.title, issue.message, event.currentTarget)
     }
   }
 
@@ -821,12 +1004,12 @@ function CdqPageReplica() {
       <section className="panel cdq-input-panel">
         <h3>系统状态与动作空间设定</h3>
         <div className="cdq-input-scroll">
-          <section className="cdq-section"><h4>控制动作指令集 (U)</h4><div className="cdq-u-table"><div className="cdq-table-head">指令名称</div><div className="cdq-table-head">当前动作 (U_now)</div><div className="cdq-table-head">预选动作 (U_after)</div>{uLabels.map((label: string, index: number) => <div className="cdq-table-row" key={label}><span>{label}</span><input type="number" value={uNow[index] ?? ''} min={-999999} max={9999999} step={0.01} onChange={e => { const next = [...uNow]; next[index] = Number(e.target.value); setUNow(next) }} /><input type="number" value={uAfter[index] ?? ''} min={-999999} max={9999999} step={0.01} onChange={e => { const next = [...uAfter]; next[index] = Number(e.target.value); setUAfter(next) }} /></div>)}</div></section>
-          <section className="cdq-section"><h4>实时工况特征向量 (CV)</h4><div className="cdq-cv-table"><div className="cdq-table-head">特征名称</div><div className="cdq-table-head">实时感知数值</div>{cvLabels.map((label: string, index: number) => <div className="cdq-table-row" key={label}><span>{label}</span><input type="number" value={cv[index] ?? ''} min={-999999} max={9999999} step={0.001} onChange={e => { const next = [...cv]; next[index] = Number(e.target.value); setCv(next) }} /></div>)}</div></section>
-          <section className="cdq-section"><h4>算法推演视界设定</h4><div className="cdq-settings-grid"><FormNumber label="时间步长 (Step)" value={step} onChange={setStep} min={0.1} max={100} step={0.1}/><FormNumber label="预测域 (Horizon)" value={horizon} onChange={setHorizon} min={1} max={500} step={1}/><FormNumber label="真实数据起始样本" value={sampleIndex} onChange={setSampleIndex} min={0} max={Math.max(0, (config?.samples ?? 2) - 2)} step={1}/></div></section>
+          <section className="cdq-section"><h4>控制动作指令集 (U)</h4><div className="cdq-u-table"><div className="cdq-table-head">指令名称</div><div className="cdq-table-head">当前动作 (U_now)</div><div className="cdq-table-head">预选动作 (U_after)</div>{uLabels.map((label: string, index: number) => <div className="cdq-table-row" key={label}><span>{label}</span><input type="number" value={uNow[index] ?? ''} min={-999999} max={9999999} step={0.01} onChange={e => { const next = [...uNow]; next[index] = Number(e.target.value); setUNow(next) }} onBlur={validateVectorBlur('当前动作 (U_now)', uNow, index)} /><input type="number" value={uAfter[index] ?? ''} min={-999999} max={9999999} step={0.01} onChange={e => { const next = [...uAfter]; next[index] = Number(e.target.value); setUAfter(next) }} onBlur={validateVectorBlur('预选动作 (U_after)', uAfter, index)} /></div>)}</div></section>
+          <section className="cdq-section"><h4>实时工况特征向量 (CV)</h4><div className="cdq-cv-table"><div className="cdq-table-head">特征名称</div><div className="cdq-table-head">实时感知数值</div>{cvLabels.map((label: string, index: number) => <div className="cdq-table-row" key={label}><span>{label}</span><input type="number" value={cv[index] ?? ''} min={-999999} max={9999999} step={0.001} onChange={e => { const next = [...cv]; next[index] = Number(e.target.value); setCv(next) }} onBlur={validateVectorBlur('实时工况特征向量 (CV)', cv, index)} /></div>)}</div></section>
+          <section className="cdq-section"><h4>算法推演视界设定</h4><div className="cdq-settings-grid"><FormNumber label="时间步长 (Step)" value={step} onChange={setStep} min={0.1} max={100} step={0.1} onBlur={validateSettingBlur}/><FormNumber label="预测域 (Horizon)" value={horizon} onChange={setHorizon} min={1} max={500} step={1} onBlur={validateSettingBlur}/><FormNumber label="真实数据起始样本" value={sampleIndex} onChange={setSampleIndex} min={0} max={Math.max(0, (config?.samples ?? 2) - 2)} step={1} onBlur={validateSettingBlur}/></div></section>
           <p className="cdq-data-source">数据源：{config?.path ?? 'cdq_data.xlsx'} | 真实样本：{config?.samples ?? 0} 行 | 字段：{(config?.headers ?? uLabels).join('、')}</p>
         </div>
-        <button className="cdq-run-button" disabled={running || !config} onClick={() => void run()}>{running ? '算法运行中...' : '启动 风险场景匹配与方案生成'}</button>
+        <button ref={runButtonRef} className="cdq-run-button" disabled={running || !config} onClick={() => void run()}>{running ? '算法运行中...' : '启动 风险场景匹配与方案生成'}</button>
       </section>
       <section className="panel cdq-output-panel">
         <section className="cdq-subpanel cdq-chart-panel"><h3>系统状态多步预测演化轨迹</h3><div className="cdq-chart-area"><div className="cdq-chart-grid">{levelChart ? <div className="cdq-square-chart"><Chart option={levelChart} fill className="cdq-chart" /></div> : <div className="cdq-square-chart cdq-chart-placeholder" />}{gasChart ? <div className="cdq-square-chart"><Chart option={gasChart} fill className="cdq-chart" /></div> : <div className="cdq-square-chart cdq-chart-placeholder" />}{temperatureChart ? <div className="cdq-square-chart"><Chart option={temperatureChart} fill className="cdq-chart" /></div> : <div className="cdq-square-chart cdq-chart-placeholder" />}</div></div></section>
@@ -835,6 +1018,7 @@ function CdqPageReplica() {
     </div>
     {error && <ErrorBox text={error} />}
     <div className="module-status-bar">{statusText}</div>
+    {dialog && <ErrorDialog title={dialog.title} message={dialog.message} onClose={closeErrorDialog} />}
   </Page>
 }
 
@@ -1088,18 +1272,60 @@ function ClassificationPage() {
     { id: 'easy', name: '数据集2' },
     { id: 'hard', name: '数据集3' },
   ])
-  const [form, setForm] = useState({ dataset: 'original', epochs: 50, batch_size: 32, learning_rate: 0.001 })
+  const [form, setForm] = useState<ClassificationFormValues>({ dataset: 'original', epochs: 50, batch_size: 32, learning_rate: 0.001 })
   const [taskId, setTaskId] = useState<string | null>(null)
   const [error, setError] = useState('')
+  const [dialog, setDialog] = useState<ErrorDialogState | null>(null)
+  const runButtonRef = useRef<HTMLButtonElement>(null)
+  const dialogReturnFocusRef = useRef<HTMLElement | null>(null)
+  const notifiedTaskFailures = useRef(new Set<string>())
   const task = useTask(taskId)
   useEffect(() => { void api<Array<{ id: string; name: string }>>('/classification/datasets').then(setDatasets).catch(e => setError(e.message)) }, [])
+  const showErrorDialog = useCallback((title: string, message: string, returnFocus: HTMLElement | null) => {
+    dialogReturnFocusRef.current = returnFocus
+    setDialog({ title, message })
+  }, [])
+  const closeErrorDialog = useCallback(() => {
+    const returnFocus = dialogReturnFocusRef.current
+    setDialog(null)
+    dialogReturnFocusRef.current = null
+    window.requestAnimationFrame(() => returnFocus?.focus())
+  }, [])
+  useEffect(() => {
+    if (task?.status !== 'failed' || !task.error || notifiedTaskFailures.current.has(task.id)) return
+    notifiedTaskFailures.current.add(task.id)
+    setError(task.error)
+    showErrorDialog('训练执行失败', task.error, runButtonRef.current)
+  }, [task?.error, task?.id, task?.status, showErrorDialog])
   const submit = async () => {
+    const formError = validateClassificationForm(form)
+    if (formError) {
+      setError(formError.message)
+      showErrorDialog(formError.title, formError.message, runButtonRef.current)
+      return
+    }
     try {
       setError('')
       const nextTask = await post<{ task_id: string }>('/classification/tasks', form)
       setTaskId(nextTask.task_id)
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      const message = e instanceof Error ? e.message : String(e)
+      setError(message)
+      showErrorDialog('训练提交失败', message, runButtonRef.current)
+    }
+  }
+  const validateFieldOnBlur = (event: FocusEvent<HTMLInputElement>, field: 'epochs' | 'batch_size' | 'learning_rate') => {
+    let issue: FormValidationIssue | null = null
+    if (field === 'epochs' && (!Number.isFinite(form.epochs) || !Number.isInteger(form.epochs) || form.epochs < 1 || form.epochs > 500)) {
+      issue = { title: '参数错误', message: 'Epochs 必须是 1～500 之间的整数（含边界）。' }
+    } else if (field === 'batch_size' && (!Number.isFinite(form.batch_size) || !Number.isInteger(form.batch_size) || form.batch_size < 8 || form.batch_size > 256)) {
+      issue = { title: '参数错误', message: 'Batch Size 必须是 8～256 之间的整数（含边界）。' }
+    } else if (field === 'learning_rate' && (!Number.isFinite(form.learning_rate) || form.learning_rate < 0.0001 || form.learning_rate > 0.1)) {
+      issue = { title: '参数错误', message: 'Learning Rate 必须在 0.0001～0.1 之间（含边界）。' }
+    }
+    if (issue) {
+      setError(issue.message)
+      showErrorDialog(issue.title, issue.message, event.currentTarget)
     }
   }
   const result = task?.result as Record<string, any> | undefined
@@ -1147,9 +1373,9 @@ function ClassificationPage() {
         <h3>输入与训练日志</h3>
         <div className="classification-controls">
           <label>数据集<select value={form.dataset} disabled={trainingActive} onChange={e => setForm({ ...form, dataset: e.target.value })}>{datasets.map(dataset => <option key={dataset.id} value={dataset.id}>{dataset.name}</option>)}</select></label>
-          <FormNumber label="Epochs" value={form.epochs} onChange={v => setForm({ ...form, epochs: v })} min={1} max={500} step={1}/>
-          <FormNumber label="Batch Size" value={form.batch_size} onChange={v => setForm({ ...form, batch_size: v })} min={8} max={256} step={8}/>
-          <FormNumber label="Learning Rate" value={form.learning_rate} onChange={v => setForm({ ...form, learning_rate: v })} min={0.0001} max={0.1} step={0.001}/>
+          <FormNumber label="Epochs" value={form.epochs} onChange={v => setForm({ ...form, epochs: v })} min={1} max={500} step={1} onBlur={e => validateFieldOnBlur(e, 'epochs')}/>
+          <FormNumber label="Batch Size" value={form.batch_size} onChange={v => setForm({ ...form, batch_size: v })} min={8} max={256} step={8} onBlur={e => validateFieldOnBlur(e, 'batch_size')}/>
+          <FormNumber label="Learning Rate" value={form.learning_rate} onChange={v => setForm({ ...form, learning_rate: v })} min={0.0001} max={0.1} step={0.001} onBlur={e => validateFieldOnBlur(e, 'learning_rate')}/>
           <button className="classification-run-button" disabled={trainingActive} onClick={() => void submit()}>{trainingActive ? '训练任务执行中…' : '开始训练'}</button>
         </div>
         <TaskPanel task={task}/>
@@ -1165,6 +1391,7 @@ function ClassificationPage() {
     </div>
     <div className="module-status-bar">{statusText}</div>
     {error && <ErrorBox text={error} />}
+    {dialog && <ErrorDialog title={dialog.title} message={dialog.message} onClose={closeErrorDialog} />}
   </Page>
 }
 
@@ -1497,7 +1724,7 @@ function ClassificationMatrix({ matrix, names }: { matrix: number[][]; names: st
   return <div className="matrix classification-matrix"><table><thead><tr><th className="matrix-corner"></th>{names.map(name => <th key={name}>预测-{name}</th>)}<th>合计</th></tr></thead><tbody>{matrix.map((row, index) => <tr key={names[index]}><th>真实-{names[index]}</th>{row.map((value, column) => <td key={column}>{value}</td>)}<td>{rowTotals[index]}</td></tr>)}<tr><th>合计</th>{columnTotals.map((value, index) => <td key={index}>{value}</td>)}<td>{total}</td></tr></tbody></table></div>
 }
 function ScoreCard({ label, value, tone }: { label: string; value: string | number; tone: string }) { return <div className={`score-card ${tone}`}><small>{label}</small><strong>{value}</strong></div> }
-function FormNumber({ label, value, onChange, min, max, step }: { label: string; value: number; onChange: (value: number) => void; min: number; max: number; step: number }) { return <label>{label}<input type="number" value={value} min={min} max={max} step={step} onChange={e => onChange(Number(e.target.value))}/></label> }
+function FormNumber({ label, value, onChange, min, max, step, onBlur }: { label: string; value: number; onChange: (value: number) => void; min: number; max: number; step: number; onBlur?: (event: FocusEvent<HTMLInputElement>) => void }) { return <label>{label}<input type="number" value={value} min={min} max={max} step={step} onChange={e => onChange(Number(e.target.value))} onBlur={onBlur}/></label> }
 function Empty({ text }: { text: string }) { return <div className="empty">{text}</div> }
 function ErrorBox({ text }: { text: string }) { return <div className="error">{text}</div> }
 function Page({ title, subtitle, className, children }: { title: string; subtitle?: string; className?: string; children: ReactNode }) { const classificationPage = title.startsWith('风险动态分析'); const classes = [classificationPage ? 'classification-page' : '', className ?? ''].filter(Boolean).join(' '); return <main className={classes || undefined} aria-label={title}>{subtitle && <p className="page-subtitle">{subtitle}</p>}{children}</main> }
