@@ -20,14 +20,14 @@ def validate(config: dict[str, Any], log: Callable[[str], None]) -> dict[str, An
     mode = str(config.get("ccf_mode", "total"))
     if not (1 <= m <= n <= 10):
         raise ValueError("表决架构必须满足 1 ≤ M ≤ N ≤ 10")
-    if lam_fit <= 0 or ti <= 0 or mrt < 0 or not (1 <= nsim <= 2000) or years < 1001:
+    if not all(np.isfinite(value) for value in (lam_fit, ti, mrt)) or lam_fit < 0.01 or lam_fit > 100000 or ti < 1 or ti > 100000 or mrt < 0 or mrt > 10000 or not (1 <= nsim <= 2000) or years < 1001 or years > 100000:
         raise ValueError("请检查失效率、测试间隔、修复时间、仿真次数和仿真年数")
 
     lam = lam_fit * 1e-9
     if mode == "total":
         beta = float(config.get("total_beta", 0.1))
-        if not 0 <= beta < 1:
-            raise ValueError("全局β必须在0（含）到1（不含）之间")
+        if not np.isfinite(beta) or not 0 <= beta <= 1:
+            raise ValueError("全局β必须在 0 到 1 之间（含边界）")
         # CS 端的“全局共因”入口会把 β 均分到 β2...βN，然后统一
         # 通过 MGL 仿真器执行；BS 保持相同的模型和分布口径。
         beta_list = [beta / (n - 1)] * (n - 1) if n > 1 else []
@@ -37,8 +37,8 @@ def validate(config: dict[str, Any], log: Callable[[str], None]) -> dict[str, An
     else:
         raw_beta = config.get("partial_betas", {})
         beta_list = [float(raw_beta.get(str(k), raw_beta.get(k, 0.0))) for k in range(2, n + 1)]
-        if any(beta < 0 for beta in beta_list) or sum(beta_list) >= 1:
-            raise ValueError("部分β必须为非负数，且总和小于1")
+        if any(not np.isfinite(beta) or beta < 0 or beta > 1 for beta in beta_list) or sum(beta_list) >= 1:
+            raise ValueError("部分β必须在 0 到 1 之间，且总和小于 1")
         params = SimParams(N=n, M=m, TI=ti, MRT=mrt, LAMBDA_DU=lam, BETA1=1.0 - sum(beta_list), beta_list=beta_list, SIM_YEARS=years, WARMUP_YEARS=max(1000, years // 10), NUM_SIM=nsim)
         simulator_type = GSPN_MooN_MGL
         ccf_details = {"mode": "部分共因 (Partial β)", "partial_betas": {str(index + 2): value for index, value in enumerate(beta_list)}}

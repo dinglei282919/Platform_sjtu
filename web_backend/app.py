@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import sys
+import math
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -34,14 +36,30 @@ class SDGNodeRequest(BaseModel):
     id: str
     name: str
     type: Literal["R", "P", "C"]
-    probability: float = 0.0
+    probability: float = Field(default=0.0, ge=0, allow_inf_nan=False)
+
+    @field_validator("id", "name")
+    @classmethod
+    def validate_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("节点 ID 和名称不能为空。")
+        return value
 
 
 class SDGEdgeRequest(BaseModel):
     source: str
     target: str
     type: Literal["+", "-"] = "+"
-    probability: float
+    probability: float = Field(..., ge=0, le=1, allow_inf_nan=False)
+
+    @field_validator("source", "target")
+    @classmethod
+    def validate_endpoint(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("边的源节点和目标节点不能为空。")
+        return value
 
 
 class SDGRequest(BaseModel):
@@ -57,18 +75,46 @@ class CDQRequest(BaseModel):
     u_now: list[float] | None = None
     u_after: list[float] | None = None
 
+    @field_validator("cv")
+    @classmethod
+    def validate_cv_bounds(cls, value: list[float] | None) -> list[float] | None:
+        if value is None:
+            return None
+        for index, item in enumerate(value):
+            numeric = float(item)
+            if not math.isfinite(numeric):
+                raise ValueError(f"CV特征向量第{index + 1}项必须是有限数值")
+            if not cdq.CDQ_VECTOR_MIN <= numeric <= cdq.CDQ_VECTOR_MAX:
+                raise ValueError(
+                    f"CV特征向量第{index + 1}项当前值为{numeric:g}，超出参数边界。"
+                )
+        return value
+
 
 class SILTaskRequest(BaseModel):
-    m: int = 2
-    n: int = 4
-    lambda_fit: float = 111.11
-    ti: float = 8760
-    mrt: float = 8
-    nsim: int = 500
-    years: int = 10000
+    m: int = Field(default=2, ge=1, le=10)
+    n: int = Field(default=4, ge=1, le=10)
+    lambda_fit: float = Field(default=111.11, ge=0.01, le=100000, allow_inf_nan=False)
+    ti: float = Field(default=8760, ge=1, le=100000, allow_inf_nan=False)
+    mrt: float = Field(default=8, ge=0, le=10000, allow_inf_nan=False)
+    nsim: int = Field(default=500, ge=1, le=2000)
+    years: int = Field(default=10000, ge=1001, le=100000)
     ccf_mode: Literal["total", "partial"] = "total"
-    total_beta: float = 0.1
+    total_beta: float = Field(default=0.1, ge=0, le=1, allow_inf_nan=False)
     partial_betas: dict[str, float] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_architecture_and_probabilities(self) -> "SILTaskRequest":
+        if self.m > self.n:
+            raise ValueError("表决架构必须满足 M ≤ N。")
+        for order, beta in self.partial_betas.items():
+            if not math.isfinite(float(beta)):
+                raise ValueError(f"部分 β{order} 必须是有限数值。")
+            if not 0 <= float(beta) <= 1:
+                raise ValueError(f"部分 β{order} 必须在 0 到 1 之间（含边界）。")
+        if self.ccf_mode == "partial" and sum(float(value) for value in self.partial_betas.values()) >= 1:
+            raise ValueError("部分 β 的总和必须小于 1。")
+        return self
 
 
 class ClassificationTaskRequest(BaseModel):
@@ -237,6 +283,23 @@ app.add_middleware(
 )
 
 
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, float) and not math.isfinite(value):
+        return str(value)
+    if isinstance(value, BaseException):
+        return str(value)
+    if isinstance(value, dict):
+        return {key: _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    return value
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_exception_handler(_, exc: RequestValidationError) -> JSONResponse:
+    return JSONResponse(status_code=422, content={"detail": _json_safe(exc.errors())})
+
+
 def _bad_request(exc: Exception) -> HTTPException:
     return HTTPException(status_code=400, detail=str(exc))
 
@@ -266,8 +329,8 @@ def modules() -> list[dict[str, str]]:
         {"id": "sdg", "name": "SIS自主化检测 · SDG-HAZOP", "status": "available"},
         {"id": "sil", "name": "在线SIL验证", "status": "available"},
         {"id": "anomaly", "name": "异常行为检测", "status": "available"},
-        {"id": "training", "name": "控制模型训练评估", "status": "available"},
-        {"id": "dnn-mpc", "name": "DNN-MPC优化控制仿真", "status": "available"},
+        {"id": "training", "name": "风险场景下控制系统智能模型训练算法", "status": "available"},
+        {"id": "dnn-mpc", "name": "风险场景下智能模型优化控制算法", "status": "available"},
     ]
 
 
@@ -321,7 +384,10 @@ def cdq_config() -> dict[str, Any]:
 @app.post("/api/cdq/analyze")
 def cdq_analyze(request: CDQRequest) -> dict[str, Any]:
     try:
+        cdq.validate_request_vectors(request.cv, request.u_now, request.u_after)
         return cdq.analyze(request.step, request.horizon, request.sample_index, request.cv, request.u_now, request.u_after)
+    except cdq.CDQValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
         raise _bad_request(exc) from exc
 
@@ -355,7 +421,7 @@ def create_training_task(request: TrainingTaskRequest) -> dict[str, str]:
     config = request.model_dump()
     output_dir = Path(str(config.get("output_dir", "")).strip() or str(training.DEFAULT_OUTPUT_DIR))
     task = task_manager.submit(
-        "控制模型训练评估 · DNNTrain",
+        "风险场景下控制系统智能模型训练算法 · DNNTrain",
         lambda log: training.run(config, log),
         progress_path=output_dir / "progress.json",
         artifact_dir=output_dir,
@@ -394,7 +460,7 @@ def create_mpc_task(request: MpcTaskRequest) -> dict[str, str]:
     config = request.model_dump()
     output_dir = Path(str(config.get("output_dir", "")).strip() or str(mpc.DEFAULT_OUTPUT_DIR))
     task = task_manager.submit(
-        "优化控制仿真验证 · MPC simulation",
+        "风险场景下智能模型优化控制算法 · MPC simulation",
         lambda log: mpc.run(config, log),
         progress_path=output_dir / "progress.json",
         artifact_dir=output_dir,

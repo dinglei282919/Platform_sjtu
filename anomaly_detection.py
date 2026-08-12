@@ -141,7 +141,7 @@ class MultiScenarioAnomalyDetectionWidget(QWidget):
         self._topology_switch_btn.clicked.connect(
             lambda _checked=False: self._set_image_mode("topology")
         )
-        self._detection_switch_btn = QPushButton("检测概率图")
+        self._detection_switch_btn = QPushButton("异常检测概率图")
         self._detection_switch_btn.setCheckable(True)
         self._detection_switch_btn.setObjectName("imgSwitch")
         self._detection_switch_btn.clicked.connect(
@@ -333,9 +333,9 @@ class MultiScenarioAnomalyDetectionWidget(QWidget):
         """根据当前图片模式返回标题、文件路径和空状态提示。"""
         if self._current_image_mode == "detection":
             return (
-                "检测概率图 (detection_probability.png)",
+                "异常检测概率图 (detection_probability.png)",
                 self.figure_dir / "detection_probability.png",
-                "暂无检测概率图",
+                "暂无异常检测概率图",
             )
         return (
             "网络拓扑图 (topology.png)",
@@ -344,7 +344,7 @@ class MultiScenarioAnomalyDetectionWidget(QWidget):
         )
 
     def _set_image_mode(self, mode):
-        """切换拓扑图或检测概率图，并刷新图片显示。"""
+        """切换拓扑图或异常检测概率图，并刷新图片显示。"""
         self._current_image_mode = "detection" if mode == "detection" else "topology"
         if self._topology_switch_btn is not None:
             self._topology_switch_btn.setChecked(self._current_image_mode == "topology")

@@ -21,12 +21,35 @@ const fieldLabels: Record<string, string> = {
   dataset_path: '外部数据集',
   sim_time: '仿真时长',
   prediction_horizon: '预测步长',
+  m: 'M（表决阈值）',
+  n: 'N（通道总数）',
+  lambda_fit: '失效率 λ（FIT）',
+  ti: '测试间隔 TI（h）',
+  mrt: '平均修复时间 MRT（h）',
+  nsim: '仿真次数',
+  years: '仿真年数',
+  total_beta: 'Total β（共因因子）',
+  partial_betas: 'Partial β（共因因子）',
+  id: '节点 ID',
+  name: '节点名称',
+  source: '源节点',
+  target: '目标节点',
+  type: '类型',
+  nodes: '节点列表',
+  edges: '边列表',
+  probability: '概率/频率',
 }
 
 function formatValidationIssue(issue: ApiValidationIssue): string {
   const location = issue.loc ?? []
   const fieldName = String(location[location.length - 1] ?? '')
-  const label = fieldName === 'body' ? '' : fieldLabels[fieldName] ?? fieldName
+  const label = fieldName === 'body'
+    ? ''
+    : fieldName === 'probability' && location.includes('edges')
+      ? '边条件概率'
+      : fieldName === 'probability' && location.includes('nodes')
+        ? '节点概率/频率'
+        : fieldLabels[fieldName] ?? fieldName
   const unit = fieldName.endsWith('_pct') ? '%' : ''
   if (issue.type === 'greater_than_equal') return `${label}不能小于 ${String(issue.ctx?.ge)}${unit}。`
   if (issue.type === 'less_than_equal') return `${label}不能大于 ${String(issue.ctx?.le)}${unit}。`

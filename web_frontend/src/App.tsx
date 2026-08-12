@@ -9,17 +9,29 @@ type Recommendation = { node_id: string; node_name: string; frequency: number; s
 type LocalPathKind = 'directory' | 'open-mat' | 'save-mat'
 type SdgNode = { id: string; name: string; type: 'R' | 'P' | 'C'; probability: number }
 type SdgEdge = { source: string; target: string; type: '+' | '-'; probability: number }
+type SdgIssue = { title: string; message: string; fieldId?: string }
 type AnomalyNumericField = 'attack_min_pct' | 'attack_max_pct' | 'measurement_noise_pct' | 'process_disturbance_pct'
 type AnomalyField = 'mcr_root' | AnomalyNumericField
 type AnomalyForm = { mcr_root: string } & Record<AnomalyNumericField, string>
 type AnomalyValidationError = { field: AnomalyField; message: string }
 type ErrorDialogState = { title: string; message: string }
 type FormValidationIssue = ErrorDialogState
+type CdqVectorBound = { min: number; max: number }
+type CdqVectorBounds = { u_now?: CdqVectorBound[]; u_after?: CdqVectorBound[]; cv?: CdqVectorBound[] }
 type RuntimePathForm = { package_dir: string; package_name: string; mcr_root: string; output_dir: string; model_path: string }
 type TrainingFormValues = RuntimePathForm & { sample_count: number; epochs: number; hidden_layers: string; dataset_path: string }
 type MpcFormValues = RuntimePathForm & { sim_time: number; prediction_horizon: number }
 
 const pythonPackageNamePattern = /^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$/
+
+function defaultCdqVectorBounds(): CdqVectorBounds {
+  const fallback = Array.from({ length: 7 }, () => ({ min: 0, max: 999999 }))
+  return {
+    u_now: fallback.map(bound => ({ ...bound })),
+    u_after: fallback.map(bound => ({ ...bound })),
+    cv: fallback.map(bound => ({ ...bound })),
+  }
+}
 
 function isAbsoluteLocalPath(value: string): boolean {
   const path = value.trim()
@@ -69,6 +81,40 @@ function validateTrainingForm(form: TrainingFormValues): FormValidationIssue | n
   return null
 }
 
+function validateTrainingPathField(form: RuntimePathForm | TrainingFormValues | MpcFormValues, field: keyof RuntimePathForm | 'dataset_path'): FormValidationIssue | null {
+  if (field === 'package_name') {
+    const packageName = form.package_name.trim()
+    if (!packageName) return { title: '参数错误', message: 'Python 包名不能为空。' }
+    if (!pythonPackageNamePattern.test(packageName)) return { title: '参数错误', message: 'Python 包名格式不正确，只能使用合法的 Python 模块名。' }
+    return null
+  }
+  if (field === 'package_dir') {
+    if (form.package_dir.trim() && !isAbsoluteLocalPath(form.package_dir)) return { title: '路径错误', message: 'Python 包目录必须是本机绝对路径。' }
+    return null
+  }
+  if (field === 'mcr_root') {
+    if (!form.mcr_root.trim()) return { title: '路径错误', message: 'MATLAB Runtime 根目录不能为空。' }
+    if (!isAbsoluteLocalPath(form.mcr_root)) return { title: '路径错误', message: 'MATLAB Runtime 根目录必须是本机绝对路径。' }
+    return null
+  }
+  if (field === 'output_dir') {
+    if (!form.output_dir.trim()) return { title: '路径错误', message: '输出目录不能为空。' }
+    if (!isAbsoluteLocalPath(form.output_dir)) return { title: '路径错误', message: '输出目录必须是本机绝对路径。' }
+    return null
+  }
+  if (field === 'model_path') {
+    if (!form.model_path.trim()) return { title: '路径错误', message: '模型文件路径不能为空。' }
+    if (!isAbsoluteLocalPath(form.model_path)) return { title: '路径错误', message: '模型文件必须使用本机绝对路径。' }
+    if (!form.model_path.trim().toLowerCase().endsWith('.mat')) return { title: '路径错误', message: '模型文件必须使用 .mat 扩展名。' }
+    return null
+  }
+  const datasetPath = 'dataset_path' in form ? form.dataset_path : ''
+  if (datasetPath.trim() && (!isAbsoluteLocalPath(datasetPath) || !datasetPath.trim().toLowerCase().endsWith('.mat'))) {
+    return { title: '路径错误', message: '外部数据集必须使用本机绝对路径和 .mat 扩展名。' }
+  }
+  return null
+}
+
 function validateMpcForm(form: MpcFormValues): FormValidationIssue | null {
   const pathIssue = validateRuntimePaths(form)
   if (pathIssue) return pathIssue
@@ -99,6 +145,7 @@ type SilForm = {
   estimate_low: number
   estimate_high: number
 }
+type SilValidationIssue = { fieldId: string; message: string }
 
 const SIL_DEFAULT_FORM: SilForm = {
   m: 2,
@@ -237,6 +284,7 @@ function validateCdqForm(
   cv: number[],
   uNow: number[],
   uAfter: number[],
+  vectorBounds?: CdqVectorBounds,
 ): FormValidationIssue | null {
   if (!Number.isFinite(step) || step < 0.1 || step > 100) {
     return { title: '参数错误', message: '时间步长 (Step) 必须在 0.1～100 之间（含边界）。' }
@@ -248,16 +296,20 @@ function validateCdqForm(
   if (!Number.isFinite(sampleIndex) || !Number.isInteger(sampleIndex) || sampleIndex < 0 || sampleIndex > sampleMax) {
     return { title: '参数错误', message: `真实数据起始样本必须是 0～${sampleMax} 之间的整数（含边界）。` }
   }
-  const vectorChecks: Array<{ label: string; values: number[] }> = [
-    { label: '当前动作 (U_now)', values: uNow },
-    { label: '预选动作 (U_after)', values: uAfter },
-    { label: '实时工况特征向量 (CV)', values: cv },
+  const vectorChecks: Array<{ label: string; values: number[]; bounds?: CdqVectorBound[] }> = [
+    { label: '当前动作 (U_now)', values: uNow, bounds: vectorBounds?.u_now },
+    { label: '预选动作 (U_after)', values: uAfter, bounds: vectorBounds?.u_after },
+    { label: '实时工况特征向量 (CV)', values: cv, bounds: vectorBounds?.cv ?? defaultCdqVectorBounds().cv },
   ]
-  for (const { label, values } of vectorChecks) {
+  for (const { label, values, bounds } of vectorChecks) {
     if (values.length !== 7) return { title: '参数错误', message: `${label}必须包含 7 个数值。` }
     for (let index = 0; index < values.length; index += 1) {
       if (!Number.isFinite(values[index])) {
-        return { title: '参数错误', message: `${label}第 ${index + 1} 项必须是有效数值。` }
+        return { title: '参数边界错误', message: `${label}第 ${index + 1} 项当前值无效，必须是有限数值。` }
+      }
+      const bound = bounds?.[index]
+      if (bound && (values[index] < bound.min || values[index] > bound.max)) {
+        return { title: '参数边界错误', message: `${label}第 ${index + 1} 项当前值为 ${values[index]}，超出参数边界。` }
       }
     }
   }
@@ -276,8 +328,8 @@ const navigationGroups: NavigationGroup[] = [
   },
   {
     id: 'risk-control', icon: '🎛', name: '风险管控优化决策', items: [
-      { id: 'training', name: '控制模型训练评估' },
-      { id: 'dnn-mpc', name: '优化控制仿真验证' },
+      { id: 'training', name: '风险场景下控制系统智能模型训练算法' },
+      { id: 'dnn-mpc', name: '风险场景下智能模型优化控制算法' },
     ],
   },
   { id: 'sis', icon: '🛡', name: 'SIS自主化检测', items: [{ id: 'sdg', name: 'SDG-HAZOP' }] },
@@ -375,7 +427,7 @@ function AnomalyPage() {
   const statusText = pageError || task?.status === 'failed' ? '执行失败' : task?.status === 'succeeded' ? '执行完成' : running ? '运行中' : '待执行'
   const statusEnglish = pageError || task?.status === 'failed' ? 'Failed' : task?.status === 'succeeded' ? 'Completed' : running ? 'Running' : 'Idle'
   const imageName = imageMode === 'detection' ? 'detection_probability.png' : 'topology.png'
-  const imageTitle = imageMode === 'detection' ? '检测概率图 (detection_probability.png)' : '网络拓扑图 (topology.png)'
+  const imageTitle = imageMode === 'detection' ? '异常检测概率图 (detection_probability.png)' : '网络拓扑图 (topology.png)'
   const imageUrl = `/api/anomaly/images/${imageName}?v=${encodeURIComponent(String(result?.image_revision ?? imageRevision))}`
   const report = result ? JSON.stringify(result, null, 2) : task?.error ? `执行失败：${task.error}` : ''
 
@@ -472,8 +524,8 @@ function AnomalyPage() {
       <section className="anomaly-box anomaly-result-root">
         <h3>结果图示</h3>
         <div className="anomaly-box-body">
-          <div className="anomaly-image-switches"><button type="button" className={imageMode === 'topology' ? 'active' : ''} onClick={() => { setImageMode('topology'); setImageError(false) }} disabled={running}>网络拓扑图</button><button type="button" className={imageMode === 'detection' ? 'active' : ''} onClick={() => { setImageMode('detection'); setImageError(false) }} disabled={running}>检测概率图</button></div>
-          <div className="anomaly-image-panel"><h4>{imageTitle}</h4><div className="anomaly-image-frame" role="img" aria-label={imageTitle} style={imageError ? undefined : { backgroundImage: `url("${imageUrl}")`, backgroundSize: 'contain', backgroundPosition: 'center', backgroundRepeat: 'no-repeat' }}>{imageError ? <div className="anomaly-image-placeholder">暂无{imageMode === 'detection' ? '检测概率图' : '拓扑图'}</div> : <img className="anomaly-result-image" src={imageUrl} alt="" aria-hidden="true" style={{ display: 'none' }} onError={() => setImageError(true)}/>}</div></div>
+          <div className="anomaly-image-switches"><button type="button" className={imageMode === 'topology' ? 'active' : ''} onClick={() => { setImageMode('topology'); setImageError(false) }} disabled={running}>网络拓扑图</button><button type="button" className={imageMode === 'detection' ? 'active' : ''} onClick={() => { setImageMode('detection'); setImageError(false) }} disabled={running}>异常检测概率图</button></div>
+          <div className="anomaly-image-panel"><h4>{imageTitle}</h4><div className="anomaly-image-frame" role="img" aria-label={imageTitle} style={imageError ? undefined : { backgroundImage: `url("${imageUrl}")`, backgroundSize: 'contain', backgroundPosition: 'center', backgroundRepeat: 'no-repeat' }}>{imageError ? <div className="anomaly-image-placeholder">暂无{imageMode === 'detection' ? '异常检测概率图' : '拓扑图'}</div> : <img className="anomaly-result-image" src={imageUrl} alt="" aria-hidden="true" style={{ display: 'none' }} onError={() => setImageError(true)}/>}</div></div>
         </div>
       </section>
     </div>
@@ -579,6 +631,28 @@ function SdgPage({ onRecommend }: { onRecommend: (recommendation: Recommendation
   const [target, setTarget] = useState('')
   const [edgeType, setEdgeType] = useState<'+' | '-'>('+')
   const [edgeProbability, setEdgeProbability] = useState('0.85')
+  const [dialog, setDialog] = useState<ErrorDialogState | null>(null)
+  const nodeProbabilityRef = useRef<HTMLInputElement>(null)
+  const edgeProbabilityRef = useRef<HTMLInputElement>(null)
+  const runButtonRef = useRef<HTMLButtonElement>(null)
+  const dialogReturnFocusRef = useRef<HTMLElement | null>(null)
+
+  const showErrorDialog = useCallback((title: string, message: string, returnFocus: HTMLElement | null) => {
+    dialogReturnFocusRef.current = returnFocus
+    setDialog({ title, message })
+  }, [])
+
+  const closeErrorDialog = useCallback(() => {
+    const returnFocus = dialogReturnFocusRef.current
+    setDialog(null)
+    dialogReturnFocusRef.current = null
+    window.requestAnimationFrame(() => returnFocus?.focus())
+  }, [])
+
+  const showSdgIssue = useCallback((title: string, message: string, returnFocus: HTMLElement | null) => {
+    setError('')
+    showErrorDialog(title, message, returnFocus)
+  }, [showErrorDialog])
 
   const applyExample = (data: Record<string, any>) => {
     setNodes(data.nodes ?? [])
@@ -629,11 +703,83 @@ function SdgPage({ onRecommend }: { onRecommend: (recommendation: Recommendation
     { value: '-', label: '减量 (-)' },
   ]
 
+  const numericIssue = (raw: string, label: string, minimum: number, maximum?: number): string | null => {
+    if (!raw.trim()) return `${label}不能为空。`
+    const value = Number(raw)
+    if (!Number.isFinite(value)) return `${label}必须是有限数值。`
+    if (value < minimum) return `${label}当前值为 ${value}，不能小于 ${minimum}。`
+    if (maximum !== undefined && value > maximum) return `${label}当前值为 ${value}，必须不大于 ${maximum}。`
+    return null
+  }
+
+  const nodeInputIssue = (): SdgIssue | null => {
+    const id = nodeId.trim()
+    const name = nodeName.trim()
+    if (!id) return { title: '参数错误', message: '节点 ID 不能为空。', fieldId: 'sdg-node-id' }
+    if (!name) return { title: '参数错误', message: '节点名称不能为空。', fieldId: 'sdg-node-name' }
+    const probabilityError = numericIssue(nodeProbability, '节点概率/频率', 0)
+    if (probabilityError) return { title: '参数边界错误', message: probabilityError, fieldId: 'sdg-node-probability' }
+    if (nodes.some(node => node.id === id)) return { title: '参数错误', message: `节点 ID “${id}”已经存在。`, fieldId: 'sdg-node-id' }
+    return null
+  }
+
+  const edgeInputIssue = (): SdgIssue | null => {
+    if (!source) return { title: '参数错误', message: '请选择源节点。', fieldId: 'sdg-edge-source' }
+    if (!target) return { title: '参数错误', message: '请选择目标节点。', fieldId: 'sdg-edge-target' }
+    if (source === target) return { title: '参数错误', message: '边的源节点和目标节点不能相同。', fieldId: 'sdg-edge-target' }
+    const probabilityError = numericIssue(edgeProbability, '边条件概率', 0, 1)
+    if (probabilityError) return { title: '参数边界错误', message: probabilityError, fieldId: 'sdg-edge-probability' }
+    if (edges.some(edge => edge.source === source && edge.target === target)) return { title: '参数错误', message: '该边已经存在。', fieldId: 'sdg-edge-target' }
+    return null
+  }
+
+  const graphIssue = (): SdgIssue | null => {
+    if (nodes.length < 2) return { title: '参数错误', message: '至少需要两个节点后才能运行分析。', fieldId: 'sdg-run-analysis' }
+    const seen = new Set<string>()
+    for (const node of nodes) {
+      if (!node.id.trim() || !node.name.trim()) return { title: '参数错误', message: '节点 ID 和名称不能为空。', fieldId: 'sdg-run-analysis' }
+      if (seen.has(node.id)) return { title: '参数错误', message: `节点 ID “${node.id}”重复。`, fieldId: 'sdg-run-analysis' }
+      seen.add(node.id)
+      const probabilityError = numericIssue(String(node.probability), `节点 ${node.id} 的概率/频率`, 0)
+      if (probabilityError) return { title: '参数边界错误', message: probabilityError, fieldId: 'sdg-run-analysis' }
+      if (!['R', 'P', 'C'].includes(node.type)) return { title: '参数错误', message: `节点 ${node.id} 的类型无效。`, fieldId: 'sdg-run-analysis' }
+    }
+    const seenEdges = new Set<string>()
+    for (const edge of edges) {
+      if (!seen.has(edge.source) || !seen.has(edge.target)) return { title: '参数错误', message: `边 ${edge.source}→${edge.target} 引用了不存在的节点。`, fieldId: 'sdg-run-analysis' }
+      if (edge.source === edge.target) return { title: '参数错误', message: '边的源节点和目标节点不能相同。', fieldId: 'sdg-run-analysis' }
+      const edgeKey = `${edge.source}→${edge.target}`
+      if (seenEdges.has(edgeKey)) return { title: '参数错误', message: `边 ${edgeKey} 重复。`, fieldId: 'sdg-run-analysis' }
+      seenEdges.add(edgeKey)
+      const probabilityError = numericIssue(String(edge.probability), `边 ${edgeKey} 的条件概率`, 0, 1)
+      if (probabilityError) return { title: '参数边界错误', message: probabilityError, fieldId: 'sdg-run-analysis' }
+      if (!['+', '-'].includes(edge.type)) return { title: '参数错误', message: `边 ${edgeKey} 的影响类型无效。`, fieldId: 'sdg-run-analysis' }
+    }
+    if (!nodes.some(node => node.type === 'R')) return { title: '参数错误', message: '模型至少需要一个原因（R）节点。', fieldId: 'sdg-run-analysis' }
+    if (!nodes.some(node => node.type === 'C')) return { title: '参数错误', message: '模型至少需要一个后果（C）节点。', fieldId: 'sdg-run-analysis' }
+    return null
+  }
+
+  const validateNodeProbabilityOnBlur = () => {
+    const message = numericIssue(nodeProbability, '节点概率/频率', 0)
+    if (message) showSdgIssue('参数边界错误', message, nodeProbabilityRef.current)
+  }
+
+  const validateEdgeProbabilityOnBlur = () => {
+    const message = numericIssue(edgeProbability, '边条件概率', 0, 1)
+    if (message) showSdgIssue('参数边界错误', message, edgeProbabilityRef.current)
+  }
+
   const handleGraphResize = useCallback((width: number, height: number) => {
     setGraphSize(previous => previous.width === width && previous.height === height ? previous : { width, height })
   }, [])
 
   const addNode = () => {
+    const issue = nodeInputIssue()
+    if (issue) {
+      showSdgIssue(issue.title, issue.message, issue.fieldId ? document.getElementById(issue.fieldId) : null)
+      return
+    }
     const id = nodeId.trim()
     const name = nodeName.trim()
     const probability = Number(nodeProbability)
@@ -660,6 +806,11 @@ function SdgPage({ onRecommend }: { onRecommend: (recommendation: Recommendation
   }
 
   const addEdge = () => {
+    const issue = edgeInputIssue()
+    if (issue) {
+      showSdgIssue(issue.title, issue.message, issue.fieldId ? document.getElementById(issue.fieldId) : null)
+      return
+    }
     const probability = Number(edgeProbability)
     if (!source || !target) { setError('请选择源节点和目标节点'); return }
     if (source === target) { setError('不能连接节点自身'); return }
@@ -691,6 +842,11 @@ function SdgPage({ onRecommend }: { onRecommend: (recommendation: Recommendation
   }
 
   const runAnalysis = async () => {
+    const issue = graphIssue()
+    if (issue) {
+      showSdgIssue(issue.title, issue.message, issue.fieldId ? document.getElementById(issue.fieldId) : runButtonRef.current)
+      return
+    }
     try {
       setError('')
       setResult(null)
@@ -741,6 +897,7 @@ function SdgPage({ onRecommend }: { onRecommend: (recommendation: Recommendation
       const message = e instanceof Error ? e.message : String(e)
       setError(message)
       setLogLines([`错误: ${message}`])
+      showErrorDialog('SDG-HAZOP 分析失败', message, runButtonRef.current)
     }
   }
 
@@ -841,10 +998,10 @@ function SdgPage({ onRecommend }: { onRecommend: (recommendation: Recommendation
     <div className="two-column wide-right sdg-layout">
       <section className="panel sdg-input-panel">
         <div className="sdg-input-scroll">
-          <section className="sdg-group"><h3>添加节点</h3><div className="sdg-form-grid"><label>ID<input value={nodeId} onChange={e => setNodeId(e.target.value)} /></label><label>名称<input value={nodeName} onChange={e => setNodeName(e.target.value)} /></label><label>类型<select value={nodeType} onChange={e => setNodeType(e.target.value as 'R' | 'P' | 'C')}>{nodeTypes.map((item: any) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label><label>概率/频率<input type="number" min="0" step="0.000001" value={nodeProbability} onChange={e => setNodeProbability(e.target.value)} /></label></div><label>模糊术语<select value={fuzzyTerm} onChange={e => setFuzzyTerm(e.target.value)}>{fuzzyTerms.map((item: any) => <option key={item.label} value={item.label}>{item.label}</option>)}</select></label><div className="sdg-inline-actions"><button className="small" onClick={applyFuzzy}>应用模糊→概率</button><button className="small" onClick={addNode}>➕ 添加节点</button></div></section>
-          <section className="sdg-group"><h3>添加因果关系边</h3><label>源节点<select value={source} onChange={e => setSource(e.target.value)}>{nodes.map(node => <option key={node.id} value={node.id}>{node.id} - {node.name}</option>)}</select></label><label>目标节点<select value={target} onChange={e => setTarget(e.target.value)}>{nodes.map(node => <option key={node.id} value={node.id}>{node.id} - {node.name}</option>)}</select></label><div className="sdg-form-grid"><label>影响类型<select value={edgeType} onChange={e => setEdgeType(e.target.value as '+' | '-')}>{edgeTypes.map((item: any) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label><label>条件概率<input type="number" min="0" max="1" step="0.01" value={edgeProbability} onChange={e => setEdgeProbability(e.target.value)} /></label></div><button className="small" onClick={addEdge}>🔗 添加边</button></section>
+          <section className="sdg-group"><h3>添加节点</h3><div className="sdg-form-grid"><label htmlFor="sdg-node-id">ID<input id="sdg-node-id" value={nodeId} onChange={e => setNodeId(e.target.value)} /></label><label htmlFor="sdg-node-name">名称<input id="sdg-node-name" value={nodeName} onChange={e => setNodeName(e.target.value)} /></label><label>类型<select value={nodeType} onChange={e => setNodeType(e.target.value as 'R' | 'P' | 'C')}>{nodeTypes.map((item: any) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label><label htmlFor="sdg-node-probability">概率/频率<input ref={nodeProbabilityRef} id="sdg-node-probability" type="number" min="0" step="0.000001" value={nodeProbability} onChange={e => setNodeProbability(e.target.value)} onBlur={validateNodeProbabilityOnBlur} /></label></div><label>模糊术语<select value={fuzzyTerm} onChange={e => setFuzzyTerm(e.target.value)}>{fuzzyTerms.map((item: any) => <option key={item.label} value={item.label}>{item.label}</option>)}</select></label><div className="sdg-inline-actions"><button className="small" onClick={applyFuzzy}>应用模糊→概率</button><button className="small" onClick={addNode}>➕ 添加节点</button></div></section>
+          <section className="sdg-group"><h3>添加因果关系边</h3><label htmlFor="sdg-edge-source">源节点<select id="sdg-edge-source" value={source} onChange={e => setSource(e.target.value)}>{nodes.map(node => <option key={node.id} value={node.id}>{node.id} - {node.name}</option>)}</select></label><label htmlFor="sdg-edge-target">目标节点<select id="sdg-edge-target" value={target} onChange={e => setTarget(e.target.value)}>{nodes.map(node => <option key={node.id} value={node.id}>{node.id} - {node.name}</option>)}</select></label><div className="sdg-form-grid"><label>影响类型<select value={edgeType} onChange={e => setEdgeType(e.target.value as '+' | '-')}>{edgeTypes.map((item: any) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label><label htmlFor="sdg-edge-probability">条件概率<input ref={edgeProbabilityRef} id="sdg-edge-probability" type="number" min="0" max="1" step="0.01" value={edgeProbability} onChange={e => setEdgeProbability(e.target.value)} onBlur={validateEdgeProbabilityOnBlur} /></label></div><button className="small" onClick={addEdge}>🔗 添加边</button></section>
         </div>
-        <div className="sdg-actions"><button className="secondary" onClick={() => void loadExample()}>📋 加载TE示例</button><button className="secondary" onClick={clearAll}>🗑️ 清空所有</button><button className="secondary" onClick={() => { setGraphRevision(previous => previous + 1); setLogLines(previous => [...previous, '已刷新视图。']) }}>🔄 刷新视图</button><button onClick={() => void runAnalysis()}>🚀 运行完整定量分析</button></div>
+        <div className="sdg-actions"><button className="secondary" onClick={() => void loadExample()}>📋 加载TE示例</button><button className="secondary" onClick={clearAll}>🗑️ 清空所有</button><button className="secondary" onClick={() => { setGraphRevision(previous => previous + 1); setLogLines(previous => [...previous, '已刷新视图。']) }}>🔄 刷新视图</button><button ref={runButtonRef} id="sdg-run-analysis" onClick={() => void runAnalysis()}>🚀 运行完整定量分析</button></div>
         <div className="sdg-node-status">节点: {nodes.length} | 边: {edges.length} | SIS需求: {sisRequiredNodes.length}</div>
       </section>
       <section className="panel sdg-output-panel">
@@ -853,11 +1010,13 @@ function SdgPage({ onRecommend }: { onRecommend: (recommendation: Recommendation
       </section>
     </div>
     {error && <ErrorBox text={error} />}
+    {dialog && <ErrorDialog title={dialog.title} message={dialog.message} onClose={closeErrorDialog} />}
   </Page>
 }
 
 function CdqPageReplica() {
   const [config, setConfig] = useState<Record<string, any> | null>(null)
+  const [vectorBounds, setVectorBounds] = useState<CdqVectorBounds>(defaultCdqVectorBounds)
   const [step, setStep] = useState(1)
   const [horizon, setHorizon] = useState(10)
   const [sampleIndex, setSampleIndex] = useState(0)
@@ -883,6 +1042,7 @@ function CdqPageReplica() {
   useEffect(() => {
     void api<Record<string, any>>('/cdq/config').then(data => {
       setConfig(data)
+      setVectorBounds(data.vector_bounds ?? defaultCdqVectorBounds())
       setStep(Number(data.default_step ?? 1))
       setHorizon(Number(data.default_horizon ?? 10))
       setSampleIndex(Number(data.default_sample_index ?? 0))
@@ -897,7 +1057,7 @@ function CdqPageReplica() {
   }, [showErrorDialog])
 
   const run = async () => {
-    const issue = validateCdqForm(step, horizon, sampleIndex, config?.samples ?? 0, cv, uNow, uAfter)
+    const issue = validateCdqForm(step, horizon, sampleIndex, config?.samples ?? 0, cv, uNow, uAfter, vectorBounds)
     if (issue) {
       setError(issue.message)
       showErrorDialog(issue.title, issue.message, runButtonRef.current)
@@ -920,16 +1080,22 @@ function CdqPageReplica() {
     }
   }
 
-  const validateVectorBlur = (label: string, values: number[], index: number) => (event: FocusEvent<HTMLInputElement>) => {
-    if (!Number.isFinite(values[index])) {
-      const message = `${label}第 ${index + 1} 项必须是有效数值。`
+  const validateVectorBlur = (label: string, values: number[], index: number, bounds?: CdqVectorBound[]) => (event: FocusEvent<HTMLInputElement>) => {
+    const value = values[index]
+    const bound = bounds?.[index]
+    const message = !Number.isFinite(value)
+      ? `${label}第 ${index + 1} 项当前值无效，必须是有限数值。`
+      : bound && (value < bound.min || value > bound.max)
+        ? `${label}第 ${index + 1} 项当前值为 ${value}，超出参数边界。`
+        : ''
+    if (message) {
       setError(message)
-      showErrorDialog('参数错误', message, event.currentTarget)
+      showErrorDialog('参数边界错误', message, event.currentTarget)
     }
   }
 
   const validateSettingBlur = (event: FocusEvent<HTMLInputElement>) => {
-    const issue = validateCdqForm(step, horizon, sampleIndex, config?.samples ?? 0, cv, uNow, uAfter)
+    const issue = validateCdqForm(step, horizon, sampleIndex, config?.samples ?? 0, cv, uNow, uAfter, vectorBounds)
     if (issue && (issue.message.includes('时间步长') || issue.message.includes('预测域') || issue.message.includes('起始样本'))) {
       setError(issue.message)
       showErrorDialog(issue.title, issue.message, event.currentTarget)
@@ -1004,8 +1170,8 @@ function CdqPageReplica() {
       <section className="panel cdq-input-panel">
         <h3>系统状态与动作空间设定</h3>
         <div className="cdq-input-scroll">
-          <section className="cdq-section"><h4>控制动作指令集 (U)</h4><div className="cdq-u-table"><div className="cdq-table-head">指令名称</div><div className="cdq-table-head">当前动作 (U_now)</div><div className="cdq-table-head">预选动作 (U_after)</div>{uLabels.map((label: string, index: number) => <div className="cdq-table-row" key={label}><span>{label}</span><input type="number" value={uNow[index] ?? ''} min={-999999} max={9999999} step={0.01} onChange={e => { const next = [...uNow]; next[index] = Number(e.target.value); setUNow(next) }} onBlur={validateVectorBlur('当前动作 (U_now)', uNow, index)} /><input type="number" value={uAfter[index] ?? ''} min={-999999} max={9999999} step={0.01} onChange={e => { const next = [...uAfter]; next[index] = Number(e.target.value); setUAfter(next) }} onBlur={validateVectorBlur('预选动作 (U_after)', uAfter, index)} /></div>)}</div></section>
-          <section className="cdq-section"><h4>实时工况特征向量 (CV)</h4><div className="cdq-cv-table"><div className="cdq-table-head">特征名称</div><div className="cdq-table-head">实时感知数值</div>{cvLabels.map((label: string, index: number) => <div className="cdq-table-row" key={label}><span>{label}</span><input type="number" value={cv[index] ?? ''} min={-999999} max={9999999} step={0.001} onChange={e => { const next = [...cv]; next[index] = Number(e.target.value); setCv(next) }} onBlur={validateVectorBlur('实时工况特征向量 (CV)', cv, index)} /></div>)}</div></section>
+          <section className="cdq-section"><h4>控制动作指令集 (U)</h4><div className="cdq-u-table"><div className="cdq-table-head">指令名称</div><div className="cdq-table-head">当前动作 (U_now)</div><div className="cdq-table-head">预选动作 (U_after)</div>{uLabels.map((label: string, index: number) => <div className="cdq-table-row" key={label}><span>{label}</span><input id={`cdq-u-now-${index}`} type="number" value={uNow[index] ?? ''} step={0.01} onChange={e => { const next = [...uNow]; next[index] = Number(e.target.value); setUNow(next) }} onBlur={validateVectorBlur('当前动作 (U_now)', uNow, index, vectorBounds.u_now)} /><input id={`cdq-u-after-${index}`} type="number" value={uAfter[index] ?? ''} step={0.01} onChange={e => { const next = [...uAfter]; next[index] = Number(e.target.value); setUAfter(next) }} onBlur={validateVectorBlur('预选动作 (U_after)', uAfter, index, vectorBounds.u_after)} /></div>)}</div></section>
+          <section className="cdq-section"><h4>实时工况特征向量 (CV)</h4><div className="cdq-cv-table"><div className="cdq-table-head">特征名称</div><div className="cdq-table-head">实时感知数值</div>{cvLabels.map((label: string, index: number) => <div className="cdq-table-row" key={label}><span>{label}</span><input id={`cdq-cv-${index}`} type="number" value={cv[index] ?? ''} step={0.001} onChange={e => { const next = [...cv]; next[index] = Number(e.target.value); setCv(next) }} onBlur={validateVectorBlur('实时工况特征向量 (CV)', cv, index, vectorBounds.cv)} /></div>)}</div></section>
           <section className="cdq-section"><h4>算法推演视界设定</h4><div className="cdq-settings-grid"><FormNumber label="时间步长 (Step)" value={step} onChange={setStep} min={0.1} max={100} step={0.1} onBlur={validateSettingBlur}/><FormNumber label="预测域 (Horizon)" value={horizon} onChange={setHorizon} min={1} max={500} step={1} onBlur={validateSettingBlur}/><FormNumber label="真实数据起始样本" value={sampleIndex} onChange={setSampleIndex} min={0} max={Math.max(0, (config?.samples ?? 2) - 2)} step={1} onBlur={validateSettingBlur}/></div></section>
           <p className="cdq-data-source">数据源：{config?.path ?? 'cdq_data.xlsx'} | 真实样本：{config?.samples ?? 0} 行 | 字段：{(config?.headers ?? uLabels).join('、')}</p>
         </div>
@@ -1097,7 +1263,24 @@ function SilPage({ recommendation }: { recommendation: Recommendation | null }) 
   const [lambdaEstimate, setLambdaEstimate] = useState('')
   const [taskId, setTaskId] = useState<string | null>(null)
   const [error, setError] = useState('')
+  const [dialog, setDialog] = useState<ErrorDialogState | null>(null)
+  const runButtonRef = useRef<HTMLButtonElement>(null)
+  const dialogReturnFocusRef = useRef<HTMLElement | null>(null)
   const task = useTask(taskId)
+  const showErrorDialog = useCallback((title: string, message: string, returnFocus: HTMLElement | null) => {
+    dialogReturnFocusRef.current = returnFocus
+    setDialog({ title, message })
+  }, [])
+  const closeErrorDialog = useCallback(() => {
+    const returnFocus = dialogReturnFocusRef.current
+    setDialog(null)
+    dialogReturnFocusRef.current = null
+    window.requestAnimationFrame(() => returnFocus?.focus())
+  }, [])
+  const showSilIssue = useCallback((issue: SilValidationIssue) => {
+    setError(issue.message)
+    showErrorDialog('参数边界错误', issue.message, document.getElementById(issue.fieldId))
+  }, [showErrorDialog])
   useEffect(() => {
     void api<Record<string, any>>('/sil/defaults').then(data => setForm(previous => ({
       ...previous,
@@ -1125,8 +1308,81 @@ function SilPage({ recommendation }: { recommendation: Recommendation | null }) 
     partial_betas: { ...previous.partial_betas, [String(order)]: value },
   }))
 
+  const makeNumericIssue = (fieldId: string, label: string, value: number, minimum: number, maximum: number, integer = false): SilValidationIssue | null => {
+    if (!Number.isFinite(value)) return { fieldId, message: `${label}当前值为 ${String(value)}，必须是有效的有限数值。` }
+    if (integer && !Number.isInteger(value)) return { fieldId, message: `${label}当前值为 ${value}，必须是整数。` }
+    if (value < minimum || value > maximum) return { fieldId, message: `${label}当前值为 ${value}，允许范围为 ${minimum} 至 ${maximum}（含边界）。` }
+    return null
+  }
+
+  const validateSilField = (fieldId: string): SilValidationIssue | null => {
+    const value = (key: keyof SilForm) => Number(form[key])
+    switch (fieldId) {
+      case 'sil-m': {
+        const issue = makeNumericIssue(fieldId, 'M（表决阈值）', value('m'), 1, 10, true)
+        if (issue) return issue
+        return form.m > form.n ? { fieldId, message: `表决架构不合法：M 当前值为 ${form.m}，必须满足 M ≤ N（N 当前值为 ${form.n}）。` } : null
+      }
+      case 'sil-n': {
+        const issue = makeNumericIssue(fieldId, 'N（通道总数）', value('n'), 1, 10, true)
+        if (issue) return issue
+        return form.m > form.n ? { fieldId, message: `表决架构不合法：M 当前值为 ${form.m}，必须满足 M ≤ N（N 当前值为 ${form.n}）。` } : null
+      }
+      case 'sil-lambda': return makeNumericIssue(fieldId, '失效率 λ（FIT）', value('lambda_fit'), 0.01, 100000)
+      case 'sil-estimate-t': {
+        const current = value('estimate_T')
+        return !Number.isFinite(current) || current <= 0 ? { fieldId, message: `总运行时间当前值为 ${current}，必须是大于 0 的有限数值。` } : null
+      }
+      case 'sil-estimate-k': return makeNumericIssue(fieldId, '失效次数', value('estimate_k'), 0, Number.MAX_VALUE)
+      case 'sil-estimate-low': {
+        const issue = makeNumericIssue(fieldId, '低限阈值', value('estimate_low'), 0, Number.MAX_VALUE)
+        if (issue) return issue
+        return form.estimate_low >= form.estimate_high ? { fieldId, message: `低限阈值当前值为 ${form.estimate_low}，必须小于高限阈值 ${form.estimate_high}。` } : null
+      }
+      case 'sil-estimate-high': {
+        const issue = makeNumericIssue(fieldId, '高限阈值', value('estimate_high'), 0, Number.MAX_VALUE)
+        if (issue) return issue
+        return form.estimate_low >= form.estimate_high ? { fieldId, message: `高限阈值当前值为 ${form.estimate_high}，必须大于低限阈值 ${form.estimate_low}。` } : null
+      }
+      case 'sil-total-beta': return makeNumericIssue(fieldId, 'Total β（共因因子）', value('total_beta'), 0, 1)
+      case 'sil-ti': return makeNumericIssue(fieldId, '测试间隔 TI（h）', value('ti'), 1, 100000)
+      case 'sil-mrt': return makeNumericIssue(fieldId, '平均修复时间 MRT（h）', value('mrt'), 0, 10000)
+      case 'sil-nsim': return makeNumericIssue(fieldId, '仿真次数', value('nsim'), 1, 2000, true)
+      case 'sil-years': return makeNumericIssue(fieldId, '仿真年数', value('years'), 1001, 100000, true)
+      default: {
+        const match = fieldId.match(/^sil-beta-(\d+)$/)
+        if (!match) return null
+        return makeNumericIssue(fieldId, `Partial β${match[1]}`, Number(form.partial_betas?.[match[1]] ?? NaN), 0, 1)
+      }
+    }
+  }
+
+  const validateSilForm = (): SilValidationIssue | null => {
+    const fields = ['sil-m', 'sil-n']
+    if (lambdaSource === 'direct') fields.push('sil-lambda')
+    else fields.push('sil-estimate-t', 'sil-estimate-k', 'sil-estimate-low', 'sil-estimate-high')
+    if (form.ccf_mode === 'total') fields.push('sil-total-beta')
+    else partialBetaOrders.forEach(order => fields.push(`sil-beta-${order}`))
+    fields.push('sil-ti', 'sil-mrt', 'sil-nsim', 'sil-years')
+    for (const fieldId of fields) {
+      const issue = validateSilField(fieldId)
+      if (issue) return issue
+    }
+    if (form.ccf_mode === 'partial') {
+      const total = partialBetaOrders.reduce((sum, order) => sum + Number(form.partial_betas?.[String(order)] ?? defaultPartialBeta), 0)
+      if (total >= 1) return { fieldId: `sil-beta-${partialBetaOrders[0] ?? 2}`, message: `Partial β 的总和当前为 ${total}，必须小于 1。` }
+    }
+    return null
+  }
+
+  const handleSilBlur = (fieldId: string) => {
+    const issue = validateSilField(fieldId)
+    if (issue) showSilIssue(issue)
+  }
+
   const estimateLambda = (T = Number(form.estimate_T), k = Number(form.estimate_k)) => {
     if (!Number.isFinite(T) || !Number.isFinite(k) || T <= 0 || k < 0) {
+      showSilIssue({ fieldId: 'sil-estimate-t', message: `总运行时间当前值为 ${T}，必须 > 0；失效次数当前值为 ${k}，必须 ≥ 0。` })
       setError('运行时间和失效次数必须为有效数字，且运行时间>0、失效次数>=0。')
       return
     }
@@ -1140,6 +1396,7 @@ function SilPage({ recommendation }: { recommendation: Recommendation | null }) 
     const low = Number(form.estimate_low)
     const high = Number(form.estimate_high)
     if (!Number.isFinite(low) || !Number.isFinite(high) || low >= high) {
+      showSilIssue({ fieldId: 'sil-estimate-low', message: `低限阈值当前值为 ${low}，必须小于高限阈值 ${high}，且二者均不得为负数。` })
       setError('低限阈值必须小于高限阈值。')
       return
     }
@@ -1152,12 +1409,17 @@ function SilPage({ recommendation }: { recommendation: Recommendation | null }) 
 
   const toggleLambdaSource = () => setLambdaSource(previous => previous === 'direct' ? 'estimate' : 'direct')
   const submit = async () => {
+    const issue = validateSilForm()
+    if (issue) {
+      showSilIssue(issue)
+      return
+    }
     try {
       setError('')
       const partialBetas = Object.fromEntries(partialBetaOrders.map(order => [String(order), Number(form.partial_betas?.[String(order)] ?? defaultPartialBeta)]))
       const nextTask = await post<{ task_id: string }>('/sil/tasks', {
         m: Number(form.m),
-        n: nForInputs,
+        n: Number(form.n),
         lambda_fit: Number(form.lambda_fit),
         ti: Number(form.ti),
         mrt: Number(form.mrt),
@@ -1169,7 +1431,9 @@ function SilPage({ recommendation }: { recommendation: Recommendation | null }) 
       })
       setTaskId(nextTask.task_id)
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      const message = e instanceof Error ? e.message : String(e)
+      setError(message)
+      showErrorDialog('参数边界错误', message, runButtonRef.current)
     }
   }
 
@@ -1227,16 +1491,16 @@ function SilPage({ recommendation }: { recommendation: Recommendation | null }) 
         <div className="sil-input-scroll">
           {recommendation && <div className="notice">来自SIS检测：{recommendation.node_name}；频率 {recommendation.frequency.toExponential(3)} 次/年；RRF {recommendation.rrf.toFixed(2)}；目标SIL {recommendation.target_sil}。该信息仅作设计参考，不会自动篡改可靠性参数。</div>}
           <section className="sil-group"><h3>1. 表决架构 (MooN)</h3>
-            <div className="sil-form-row"><label htmlFor="sil-m">M (表决阈值):</label><input id="sil-m" type="number" value={form.m} min={1} max={10} step={1} onChange={e => updateForm('m', Number(e.target.value))}/></div>
-            <div className="sil-form-row"><label htmlFor="sil-n">N (通道总数):</label><input id="sil-n" type="number" value={form.n} min={1} max={10} step={1} onChange={e => setVotingChannels(Number(e.target.value))}/></div>
+            <div className="sil-form-row"><label htmlFor="sil-m">M (表决阈值):</label><input id="sil-m" type="number" value={form.m} min={1} max={10} step={1} onChange={e => updateForm('m', Number(e.target.value))} onBlur={() => handleSilBlur('sil-m')}/></div>
+            <div className="sil-form-row"><label htmlFor="sil-n">N (通道总数):</label><input id="sil-n" type="number" value={form.n} min={1} max={10} step={1} onChange={e => setVotingChannels(Number(e.target.value))} onBlur={() => handleSilBlur('sil-n')}/></div>
           </section>
 
           <section className="sil-group"><h3>2. 失效率配置</h3>
-            {lambdaSource === 'direct' ? <div className="sil-form-row"><label htmlFor="sil-lambda">λ (FIT):</label><input id="sil-lambda" type="number" value={form.lambda_fit} min={0.01} max={100000} step={0.01} onChange={e => updateForm('lambda_fit', Number(e.target.value))}/></div> : <div className="sil-estimator">
-              <div className="sil-form-row"><label htmlFor="sil-estimate-t">总运行时间 (h):</label><input id="sil-estimate-t" type="number" value={form.estimate_T} min={0.01} step={1} onChange={e => updateForm('estimate_T', Number(e.target.value))}/></div>
-              <div className="sil-form-row"><label htmlFor="sil-estimate-k">失效次数 (等效):</label><input id="sil-estimate-k" type="number" value={form.estimate_k} min={0} step={0.0001} onChange={e => updateForm('estimate_k', Number(e.target.value))}/></div>
-              <div className="sil-form-row"><label htmlFor="sil-estimate-low">低限阈值:</label><input id="sil-estimate-low" type="number" value={form.estimate_low} step={1} onChange={e => updateForm('estimate_low', Number(e.target.value))}/></div>
-              <div className="sil-form-row"><label htmlFor="sil-estimate-high">高限阈值:</label><input id="sil-estimate-high" type="number" value={form.estimate_high} step={1} onChange={e => updateForm('estimate_high', Number(e.target.value))}/></div>
+            {lambdaSource === 'direct' ? <div className="sil-form-row"><label htmlFor="sil-lambda">λ (FIT):</label><input id="sil-lambda" type="number" value={form.lambda_fit} min={0.01} max={100000} step={0.01} onChange={e => updateForm('lambda_fit', Number(e.target.value))} onBlur={() => handleSilBlur('sil-lambda')}/></div> : <div className="sil-estimator">
+              <div className="sil-form-row"><label htmlFor="sil-estimate-t">总运行时间 (h):</label><input id="sil-estimate-t" type="number" value={form.estimate_T} min={0.01} step={1} onChange={e => updateForm('estimate_T', Number(e.target.value))} onBlur={() => handleSilBlur('sil-estimate-t')}/></div>
+              <div className="sil-form-row"><label htmlFor="sil-estimate-k">失效次数 (等效):</label><input id="sil-estimate-k" type="number" value={form.estimate_k} min={0} step={0.0001} onChange={e => updateForm('estimate_k', Number(e.target.value))} onBlur={() => handleSilBlur('sil-estimate-k')}/></div>
+              <div className="sil-form-row"><label htmlFor="sil-estimate-low">低限阈值:</label><input id="sil-estimate-low" type="number" value={form.estimate_low} step={1} onChange={e => updateForm('estimate_low', Number(e.target.value))} onBlur={() => handleSilBlur('sil-estimate-low')}/></div>
+              <div className="sil-form-row"><label htmlFor="sil-estimate-high">高限阈值:</label><input id="sil-estimate-high" type="number" value={form.estimate_high} step={1} onChange={e => updateForm('estimate_high', Number(e.target.value))} onBlur={() => handleSilBlur('sil-estimate-high')}/></div>
               <div className="sil-estimator-actions"><button type="button" onClick={importSampleData}>📥 导入示例数据</button><button type="button" onClick={() => estimateLambda()}>📊 估计 λ (手动T/k)</button></div>
               {lambdaEstimate && <p className="sil-lambda-estimate">{lambdaEstimate}</p>}
             </div>}
@@ -1245,17 +1509,17 @@ function SilPage({ recommendation }: { recommendation: Recommendation | null }) 
 
           <section className="sil-group"><h3>3. 共因失效模式</h3>
             <div className="sil-form-row"><label htmlFor="sil-ccf-mode">共因模式:</label><select id="sil-ccf-mode" value={form.ccf_mode} onChange={e => updateForm('ccf_mode', e.target.value as SilForm['ccf_mode'])}><option value="total">全局共因 (Total β)</option><option value="partial">部分共因 (Partial β)</option></select></div>
-            {form.ccf_mode === 'total' ? <div className="sil-form-row"><label htmlFor="sil-total-beta">β (共因因子):</label><input id="sil-total-beta" type="number" value={form.total_beta} min={0} max={0.99} step={0.01} onChange={e => updateForm('total_beta', Number(e.target.value))}/></div> : <div className="sil-beta-list">{partialBetaOrders.map(order => <div className="sil-form-row" key={order}><label htmlFor={`sil-beta-${order}`}>β{order} (影响{order}个通道):</label><input id={`sil-beta-${order}`} type="number" value={form.partial_betas?.[String(order)] ?? defaultPartialBeta} min={0} max={0.99} step={0.0001} onChange={e => setPartialBeta(order, Number(e.target.value))}/></div>)}</div>}
+            {form.ccf_mode === 'total' ? <div className="sil-form-row"><label htmlFor="sil-total-beta">β (共因因子):</label><input id="sil-total-beta" type="number" value={form.total_beta} min={0} max={1} step={0.01} onChange={e => updateForm('total_beta', Number(e.target.value))} onBlur={() => handleSilBlur('sil-total-beta')}/></div> : <div className="sil-beta-list">{partialBetaOrders.map(order => <div className="sil-form-row" key={order}><label htmlFor={`sil-beta-${order}`}>β{order} (影响{order}个通道):</label><input id={`sil-beta-${order}`} type="number" value={form.partial_betas?.[String(order)] ?? defaultPartialBeta} min={0} max={1} step={0.0001} onChange={e => setPartialBeta(order, Number(e.target.value))} onBlur={() => handleSilBlur(`sil-beta-${order}`)}/></div>)}</div>}
           </section>
 
           <section className="sil-group"><h3>4. 仿真控制参数</h3>
-            <div className="sil-form-row"><label htmlFor="sil-ti">测试间隔 TI (h):</label><input id="sil-ti" type="number" value={form.ti} min={1} max={100000} step={1} onChange={e => updateForm('ti', Number(e.target.value))}/></div>
-            <div className="sil-form-row"><label htmlFor="sil-mrt">平均修复 MRT (h):</label><input id="sil-mrt" type="number" value={form.mrt} min={0} max={10000} step={1} onChange={e => updateForm('mrt', Number(e.target.value))}/></div>
-            <div className="sil-form-row"><label htmlFor="sil-nsim">仿真次数:</label><input id="sil-nsim" type="number" value={form.nsim} min={1} max={2000} step={1} onChange={e => updateForm('nsim', Number(e.target.value))}/></div>
-            <div className="sil-form-row"><label htmlFor="sil-years">仿真年数:</label><input id="sil-years" type="number" value={form.years} min={1001} max={100000} step={1} onChange={e => updateForm('years', Number(e.target.value))}/></div>
+            <div className="sil-form-row"><label htmlFor="sil-ti">测试间隔 TI (h):</label><input id="sil-ti" type="number" value={form.ti} min={1} max={100000} step={1} onChange={e => updateForm('ti', Number(e.target.value))} onBlur={() => handleSilBlur('sil-ti')}/></div>
+            <div className="sil-form-row"><label htmlFor="sil-mrt">平均修复 MRT (h):</label><input id="sil-mrt" type="number" value={form.mrt} min={0} max={10000} step={1} onChange={e => updateForm('mrt', Number(e.target.value))} onBlur={() => handleSilBlur('sil-mrt')}/></div>
+            <div className="sil-form-row"><label htmlFor="sil-nsim">仿真次数:</label><input id="sil-nsim" type="number" value={form.nsim} min={1} max={2000} step={1} onChange={e => updateForm('nsim', Number(e.target.value))} onBlur={() => handleSilBlur('sil-nsim')}/></div>
+            <div className="sil-form-row"><label htmlFor="sil-years">仿真年数:</label><input id="sil-years" type="number" value={form.years} min={1001} max={100000} step={1} onChange={e => updateForm('years', Number(e.target.value))} onBlur={() => handleSilBlur('sil-years')}/></div>
           </section>
         </div>
-        <div className="sil-run-row"><button type="button" onClick={() => void submit()} disabled={running}>▶ 开始验证</button><progress value={progress} max={100} aria-label="SIL 仿真进度"/><span>{statusText}</span></div>
+        <div className="sil-run-row"><button ref={runButtonRef} type="button" onClick={() => void submit()} disabled={running}>▶ 开始验证</button><progress value={progress} max={100} aria-label="SIL 仿真进度"/><span>{statusText}</span></div>
       </section>
       <section className="sil-output-panel">
         <pre className="sil-result-text" aria-label="SIL 验证文本结果">{report}</pre>
@@ -1263,6 +1527,7 @@ function SilPage({ recommendation }: { recommendation: Recommendation | null }) 
       </section>
     </div>
     {(error || task?.error) && <ErrorBox text={error || task?.error || '验证失败'} />}
+    {dialog && <ErrorDialog title={dialog.title} message={dialog.message} onClose={closeErrorDialog} />}
   </Page>
 }
 
@@ -1464,6 +1729,33 @@ function TrainingPage() {
   }, [task?.error, task?.id, task?.status, showErrorDialog])
 
   const update = (key: string, value: string | number) => setForm(previous => ({ ...previous, [key]: value }))
+  const validateTrainingFieldOnBlur = (field: 'sample_count' | 'epochs' | 'hidden_layers', event: FocusEvent<HTMLInputElement>) => {
+    const issue = field === 'sample_count'
+      ? (!Number.isFinite(form.sample_count) || !Number.isInteger(form.sample_count) || form.sample_count < 100 || form.sample_count > 100000
+        ? { title: '参数错误', message: '训练样本数必须是 100～100000 之间的整数（含边界）。' } : null)
+      : field === 'epochs'
+        ? (!Number.isFinite(form.epochs) || !Number.isInteger(form.epochs) || form.epochs < 1 || form.epochs > 5000
+          ? { title: '参数错误', message: '训练轮数必须是 1～5000 之间的整数（含边界）。' } : null)
+        : (() => {
+          const hiddenLayerText = form.hidden_layers.trim()
+          if (!/^\d+(?:\s*,\s*\d+)*$/.test(hiddenLayerText)) return { title: '参数错误', message: '隐藏层规模必须是用逗号分隔的正整数，例如 64,64。' }
+          const hiddenLayers = hiddenLayerText.split(',').map(value => Number(value.trim()))
+          return hiddenLayers.length > 10 || hiddenLayers.some(value => !Number.isInteger(value) || value < 1 || value > 4096)
+            ? { title: '参数错误', message: '隐藏层最多设置 10 层，每层神经元数量必须是 1～4096 之间的整数。' }
+            : null
+        })()
+    if (issue) {
+      setError(issue.message)
+      showErrorDialog(issue.title, issue.message, event.currentTarget)
+    }
+  }
+  const validateTrainingPathOnBlur = (field: keyof TrainingFormValues, element: HTMLElement) => {
+    const issue = validateTrainingPathField(form, field as keyof RuntimePathForm | 'dataset_path')
+    if (issue) {
+      setError(issue.message)
+      showErrorDialog(issue.title, issue.message, element)
+    }
+  }
   const submit = async () => {
     setError('')
     const validationIssue = validateTrainingForm(form)
@@ -1494,23 +1786,23 @@ function TrainingPage() {
     : statusText
   const jsonPath = taskResult?.json_path ? String(taskResult.json_path) : '运行后显示 JSON 结果文件路径。'
 
-  return <Page title="控制模型训练评估" className="training-page">
+  return <Page title="风险场景下控制系统智能模型训练算法" className="training-page">
     <div className="training-layout">
       <section className="training-panel training-config-panel">
         <h3>DNNTrain</h3>
         <div className="training-config-scroll">
           <section className="training-subpanel"><h4>路径设置</h4>
-            <TrainingPathField label="Python包目录:" value={form.package_dir} onChange={value => update('package_dir', value)} placeholder="可留空；使用当前环境已安装的包" disabled={running} onError={handlePathSelectionError}/>
-            <TrainingPathField label="Python包名:" value={form.package_name} onChange={value => update('package_name', value)} disabled={running} browse={false}/>
-            <TrainingPathField label="MCR_ROOT:" value={form.mcr_root} onChange={value => update('mcr_root', value)} disabled={running} onError={handlePathSelectionError}/>
-            <TrainingPathField label="输出目录:" value={form.output_dir} onChange={value => update('output_dir', value)} disabled={running} onError={handlePathSelectionError}/>
-            <TrainingPathField label="模型文件:" value={form.model_path} onChange={value => update('model_path', value)} disabled={running} pathKind="save-mat" onError={handlePathSelectionError}/>
+            <TrainingPathField label="Python包目录:" value={form.package_dir} onChange={value => update('package_dir', value)} placeholder="可留空；使用当前环境已安装的包" disabled={running} onError={handlePathSelectionError} onBlur={() => validateTrainingPathOnBlur('package_dir', document.activeElement as HTMLElement)}/>
+            <TrainingPathField label="Python包名:" value={form.package_name} onChange={value => update('package_name', value)} disabled={running} browse={false} onBlur={() => validateTrainingPathOnBlur('package_name', document.activeElement as HTMLElement)}/>
+            <TrainingPathField label="MCR_ROOT:" value={form.mcr_root} onChange={value => update('mcr_root', value)} disabled={running} onError={handlePathSelectionError} onBlur={() => validateTrainingPathOnBlur('mcr_root', document.activeElement as HTMLElement)}/>
+            <TrainingPathField label="输出目录:" value={form.output_dir} onChange={value => update('output_dir', value)} disabled={running} onError={handlePathSelectionError} onBlur={() => validateTrainingPathOnBlur('output_dir', document.activeElement as HTMLElement)}/>
+            <TrainingPathField label="模型文件:" value={form.model_path} onChange={value => update('model_path', value)} disabled={running} pathKind="save-mat" onError={handlePathSelectionError} onBlur={() => validateTrainingPathOnBlur('model_path', document.activeElement as HTMLElement)}/>
           </section>
           <section className="training-subpanel training-model-subpanel"><h4>DNNTrain</h4>
-            <label className="training-number-field">训练样本数:<input type="number" min={100} max={100000} step={100} value={form.sample_count} onChange={e => update('sample_count', Number(e.target.value))} disabled={running}/></label>
-            <label className="training-number-field">训练轮数:<input type="number" min={1} max={5000} step={1} value={form.epochs} onChange={e => update('epochs', Number(e.target.value))} disabled={running}/></label>
-            <label>隐藏层规模:<input type="text" value={form.hidden_layers} onChange={e => update('hidden_layers', e.target.value)} placeholder="例如 64,64" disabled={running}/></label>
-            <TrainingPathField label="外部数据集:" value={form.dataset_path} onChange={value => update('dataset_path', value)} placeholder="留空则自动生成数据集；选择 .mat 则使用外部 X_data/Y_data" disabled={running} allowClear pathKind="open-mat" onError={handlePathSelectionError}/>
+            <label className="training-number-field">训练样本数:<input id="training-sample-count" type="number" min={100} max={100000} step={100} value={form.sample_count} onChange={e => update('sample_count', Number(e.target.value))} onBlur={e => validateTrainingFieldOnBlur('sample_count', e)} disabled={running}/></label>
+            <label className="training-number-field">训练轮数:<input id="training-epochs" type="number" min={1} max={5000} step={1} value={form.epochs} onChange={e => update('epochs', Number(e.target.value))} onBlur={e => validateTrainingFieldOnBlur('epochs', e)} disabled={running}/></label>
+            <label htmlFor="training-hidden-layers">隐藏层规模:<input id="training-hidden-layers" type="text" value={form.hidden_layers} onChange={e => update('hidden_layers', e.target.value)} onBlur={e => validateTrainingFieldOnBlur('hidden_layers', e)} placeholder="例如 64,64" disabled={running}/></label>
+            <TrainingPathField label="外部数据集:" value={form.dataset_path} onChange={value => update('dataset_path', value)} placeholder="留空则自动生成数据集；选择 .mat 则使用外部 X_data/Y_data" disabled={running} allowClear pathKind="open-mat" onError={handlePathSelectionError} onBlur={() => validateTrainingPathOnBlur('dataset_path', document.activeElement as HTMLElement)}/>
             <div className="training-run-action"><button ref={runButtonRef} type="button" onClick={() => void submit()} disabled={running}>{running ? '训练执行中...' : '运行训练模块'}</button></div>
           </section>
           <section className="training-subpanel"><h4>结果文件</h4><div className="training-result-path">{jsonPath}</div></section>
@@ -1604,6 +1896,24 @@ function MpcPage() {
   }, [task?.error, task?.id, task?.status, showErrorDialog])
 
   const update = (key: string, value: string | number) => setForm(previous => ({ ...previous, [key]: value }))
+  const validateMpcFieldOnBlur = (field: 'sim_time' | 'prediction_horizon', event: FocusEvent<HTMLInputElement>) => {
+    const issue = field === 'sim_time'
+      ? (!Number.isFinite(form.sim_time) || form.sim_time < 0.2 || form.sim_time > 20
+        ? { title: '参数错误', message: '仿真时长必须在 0.2～20 秒之间（含边界）。' } : null)
+      : (!Number.isFinite(form.prediction_horizon) || !Number.isInteger(form.prediction_horizon) || form.prediction_horizon < 1 || form.prediction_horizon > 60
+        ? { title: '参数错误', message: '预测步长必须是 1～60 之间的整数（含边界）。' } : null)
+    if (issue) {
+      setError(issue.message)
+      showErrorDialog(issue.title, issue.message, event.currentTarget)
+    }
+  }
+  const validateMpcPathOnBlur = (field: keyof MpcFormValues, element: HTMLElement) => {
+    const issue = validateTrainingPathField(form, field as keyof RuntimePathForm | 'dataset_path')
+    if (issue) {
+      setError(issue.message)
+      showErrorDialog(issue.title, issue.message, element)
+    }
+  }
   const submit = async () => {
     setError('')
     const validationIssue = validateMpcForm(form)
@@ -1634,21 +1944,21 @@ function MpcPage() {
     : statusText
   const jsonPath = taskResult?.json_path ? String(taskResult.json_path) : '运行后显示 JSON 结果文件路径。'
 
-  return <Page title="优化控制仿真验证" className="training-page mpc-page">
+  return <Page title="风险场景下智能模型优化控制算法" className="training-page mpc-page">
     <div className="training-layout">
       <section className="training-panel training-config-panel">
         <h3>MPC simulation</h3>
         <div className="training-config-scroll">
           <section className="training-subpanel"><h4>路径设置</h4>
-            <TrainingPathField label="Python包目录:" value={form.package_dir} onChange={value => update('package_dir', value)} placeholder="可留空；使用当前环境已安装的包" disabled={running} onError={handlePathSelectionError}/>
-            <TrainingPathField label="Python包名:" value={form.package_name} onChange={value => update('package_name', value)} disabled={running} browse={false}/>
-            <TrainingPathField label="MCR_ROOT:" value={form.mcr_root} onChange={value => update('mcr_root', value)} disabled={running} onError={handlePathSelectionError}/>
-            <TrainingPathField label="输出目录:" value={form.output_dir} onChange={value => update('output_dir', value)} disabled={running} onError={handlePathSelectionError}/>
-            <TrainingPathField label="模型文件:" value={form.model_path} onChange={value => update('model_path', value)} disabled={running} pathKind="open-mat" onError={handlePathSelectionError}/>
+            <TrainingPathField label="Python包目录:" value={form.package_dir} onChange={value => update('package_dir', value)} placeholder="可留空；使用当前环境已安装的包" disabled={running} onError={handlePathSelectionError} onBlur={() => validateMpcPathOnBlur('package_dir', document.activeElement as HTMLElement)}/>
+            <TrainingPathField label="Python包名:" value={form.package_name} onChange={value => update('package_name', value)} disabled={running} browse={false} onBlur={() => validateMpcPathOnBlur('package_name', document.activeElement as HTMLElement)}/>
+            <TrainingPathField label="MCR_ROOT:" value={form.mcr_root} onChange={value => update('mcr_root', value)} disabled={running} onError={handlePathSelectionError} onBlur={() => validateMpcPathOnBlur('mcr_root', document.activeElement as HTMLElement)}/>
+            <TrainingPathField label="输出目录:" value={form.output_dir} onChange={value => update('output_dir', value)} disabled={running} onError={handlePathSelectionError} onBlur={() => validateMpcPathOnBlur('output_dir', document.activeElement as HTMLElement)}/>
+            <TrainingPathField label="模型文件:" value={form.model_path} onChange={value => update('model_path', value)} disabled={running} pathKind="open-mat" onError={handlePathSelectionError} onBlur={() => validateMpcPathOnBlur('model_path', document.activeElement as HTMLElement)}/>
           </section>
           <section className="training-subpanel training-model-subpanel"><h4>MPC simulation</h4>
-            <label className="training-number-field">仿真时长(s):<input type="number" min={0.2} max={20} step={0.2} value={form.sim_time} onChange={e => update('sim_time', Number(e.target.value))} disabled={running}/></label>
-            <label className="training-number-field">预测步长:<input type="number" min={1} max={60} step={1} value={form.prediction_horizon} onChange={e => update('prediction_horizon', Number(e.target.value))} disabled={running}/></label>
+            <label className="training-number-field">仿真时长(s):<input id="mpc-sim-time" type="number" min={0.2} max={20} step={0.2} value={form.sim_time} onChange={e => update('sim_time', Number(e.target.value))} onBlur={e => validateMpcFieldOnBlur('sim_time', e)} disabled={running}/></label>
+            <label className="training-number-field">预测步长:<input id="mpc-prediction-horizon" type="number" min={1} max={60} step={1} value={form.prediction_horizon} onChange={e => update('prediction_horizon', Number(e.target.value))} onBlur={e => validateMpcFieldOnBlur('prediction_horizon', e)} disabled={running}/></label>
             <div className="training-run-action"><button ref={runButtonRef} type="button" onClick={() => void submit()} disabled={running}>{running ? '仿真执行中...' : '运行 MPC 仿真'}</button></div>
           </section>
           <section className="training-subpanel"><h4>结果文件</h4><div className="training-result-path">{jsonPath}</div></section>
@@ -1678,6 +1988,7 @@ function TrainingPathField({
   browse = true,
   allowClear = false,
   pathKind = 'directory',
+  onBlur,
 }: {
   label: string
   value: string
@@ -1688,6 +1999,7 @@ function TrainingPathField({
   browse?: boolean
   allowClear?: boolean
   pathKind?: LocalPathKind
+  onBlur?: () => void
 }) {
   const [selecting, setSelecting] = useState(false)
   const [selectionError, setSelectionError] = useState('')
@@ -1710,7 +2022,7 @@ function TrainingPathField({
   return <div className="training-path-field">
     <span>{label}</span>
     <div className="training-path-control">
-      <input type="text" value={value} placeholder={placeholder} onChange={event => { setSelectionError(''); onChange(event.target.value) }} disabled={disabled}/>
+      <input type="text" value={value} placeholder={placeholder} onChange={event => { setSelectionError(''); onChange(event.target.value) }} onBlur={onBlur} disabled={disabled}/>
       {browse && <button type="button" onClick={() => void selectPath()} disabled={disabled || selecting}>{selecting ? '\u9009\u62e9\u4e2d...' : '\u9009\u62e9'}</button>}
       {allowClear && <button type="button" onClick={() => { setSelectionError(''); onChange('') }} disabled={disabled || selecting}>{'\u6e05\u7a7a'}</button>}
       {selectionError && <small className="training-path-error" role="alert">{selectionError}</small>}

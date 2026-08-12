@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 
@@ -49,29 +50,35 @@ def analyze(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> dict[st
     seen: set[str] = set()
     for node in nodes:
         node_id = node["id"].strip()
+        node_name = str(node.get("name", "")).strip()
         node_type = node["type"]
-        if not node_id or node_id in seen or node_type not in {"R", "P", "C"}:
-            raise ValueError("节点ID必须唯一，节点类型必须为R、P或C")
+        if not node_id or not node_name or node_id in seen or node_type not in {"R", "P", "C"}:
+            raise ValueError("节点 ID 和名称不能为空，节点 ID 必须唯一，节点类型必须为 R、P 或 C")
         seen.add(node_id)
         probability = float(node.get("probability", 0.0))
-        if probability < 0:
-            raise ValueError(f"节点 {node_id} 的频率不能为负数")
+        if not math.isfinite(probability) or probability < 0:
+            raise ValueError(f"节点 {node_id} 的概率/频率必须是有限且非负数")
         model.add_node(
             SDGNode(
                 node_id,
-                str(node["name"]).strip() or node_id,
+                node_name,
                 NodeType.CAUSE if node_type == "R" else NodeType.PARAMETER if node_type == "P" else NodeType.CONSEQUENCE,
                 probability if node_type == "R" else None,
             )
         )
     for edge in edges:
-        source, target = edge["source"], edge["target"]
+        source, target = str(edge["source"]).strip(), str(edge["target"]).strip()
         if source not in seen or target not in seen:
             raise ValueError(f"边 {source}→{target} 引用了不存在的节点")
+        if source == target:
+            raise ValueError("边的源节点和目标节点不能相同")
+        edge_type = edge.get("type", "+")
+        if edge_type not in {"+", "-"}:
+            raise ValueError("边的影响类型必须为 + 或 -")
         probability = float(edge["probability"])
-        if not 0 <= probability <= 1:
-            raise ValueError(f"边 {source}→{target} 的条件概率必须在0～1")
-        model.add_edge(SDGEdge(source, target, EdgeType.INCREMENT if edge.get("type", "+") == "+" else EdgeType.DECREMENT, probability))
+        if not math.isfinite(probability) or not 0 <= probability <= 1:
+            raise ValueError(f"边 {source}→{target} 的条件概率必须在 0～1 之间")
+        model.add_edge(SDGEdge(source, target, EdgeType.INCREMENT if edge_type == "+" else EdgeType.DECREMENT, probability))
 
     causes = [node["id"] for node in nodes if node["type"] == "R"]
     consequences = [node["id"] for node in nodes if node["type"] == "C"]
