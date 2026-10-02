@@ -147,124 +147,44 @@ class AnomalyTaskRequest(BaseModel):
 
 
 class TrainingTaskRequest(BaseModel):
-    package_dir: str = str(training.DEFAULT_PACKAGE_DIR)
-    package_name: str = training.DEFAULT_PACKAGE_NAME
-    mcr_root: str = r"E:\MATLAB2024"
+    model_config = {"extra": "forbid"}
     output_dir: str = str(training.DEFAULT_OUTPUT_DIR)
-    model_path: str = str(training.DEFAULT_OUTPUT_DIR / "process_control_nn_model.mat")
-    sample_count: int = Field(default=1000, ge=100, le=100000)
-    epochs: int = Field(default=50, ge=1, le=5000)
+    model_path: str = str(training.DEFAULT_OUTPUT_DIR / "trained_model.npz")
+    dataset_path: str = Field(default_factory=lambda: training.default_config()["dataset_path"])
+    sample_count: int = Field(default=1000, ge=100, le=100000, strict=True)
+    epochs: int = Field(default=200, ge=1, le=5000, strict=True)
+    lr: float = Field(default=0.001, ge=0.000001, le=0.1, allow_inf_nan=False)
     hidden_layers: str = "64,64"
-    dataset_path: str = ""
 
-    @field_validator("package_name")
-    @classmethod
-    def validate_package_name(cls, value: str) -> str:
-        normalized = value.strip()
-        if not normalized or not all(part.isidentifier() for part in normalized.split(".")):
-            raise ValueError("Python 包名格式不正确，只能使用合法的 Python 模块名。")
-        return normalized
-
-    @field_validator("package_dir")
-    @classmethod
-    def validate_package_dir(cls, value: str) -> str:
-        normalized = value.strip()
-        if normalized and not Path(normalized).is_absolute():
-            raise ValueError("Python 包目录必须是本机绝对路径；也可以留空以使用当前环境中已安装的包。")
-        return normalized
-
-    @field_validator("mcr_root", "output_dir")
-    @classmethod
-    def validate_required_directory(cls, value: str) -> str:
-        normalized = value.strip()
-        if not normalized:
-            raise ValueError("路径不能为空。")
-        if not Path(normalized).is_absolute():
-            raise ValueError("路径必须是本机绝对路径。")
-        return normalized
-
-    @field_validator("model_path")
-    @classmethod
-    def validate_model_path(cls, value: str) -> str:
-        normalized = value.strip()
-        if not normalized or not Path(normalized).is_absolute():
-            raise ValueError("模型文件必须使用本机绝对路径。")
-        if Path(normalized).suffix.lower() != ".mat":
-            raise ValueError("模型文件必须使用 .mat 扩展名。")
-        return normalized
-
-    @field_validator("dataset_path")
-    @classmethod
-    def validate_dataset_path(cls, value: str) -> str:
-        normalized = value.strip()
-        if not normalized:
-            return ""
-        if not Path(normalized).is_absolute():
-            raise ValueError("外部数据集必须使用本机绝对路径。")
-        if Path(normalized).suffix.lower() != ".mat":
-            raise ValueError("外部数据集必须是 .mat 文件。")
-        return normalized
-
-    @field_validator("hidden_layers")
-    @classmethod
-    def validate_hidden_layers(cls, value: str) -> str:
-        try:
-            layers = [int(part.strip()) for part in value.split(",")]
-        except (AttributeError, ValueError) as exc:
-            raise ValueError("隐藏层规模必须是用逗号分隔的正整数，例如 64,64。") from exc
-        if not layers or len(layers) > 10 or any(layer < 1 or layer > 4096 for layer in layers):
-            raise ValueError("隐藏层最多设置 10 层，每层神经元数量必须是 1～4096 之间的整数。")
-        return ",".join(str(layer) for layer in layers)
+    @model_validator(mode="after")
+    def validate_python_config(self):
+        from platform_core.dnn_mpc.config import validate_config
+        normalized = validate_config("training", self.model_dump())
+        for key, value in normalized.items():
+            setattr(self, key, value)
+        return self
 
 
 class MpcTaskRequest(BaseModel):
-    package_dir: str = str(mpc.DEFAULT_PACKAGE_DIR)
-    package_name: str = mpc.DEFAULT_PACKAGE_NAME
-    mcr_root: str = r"E:\MATLAB2024"
+    model_config = {"extra": "forbid"}
     output_dir: str = str(mpc.DEFAULT_OUTPUT_DIR)
-    model_path: str = str(mpc.DEFAULT_OUTPUT_DIR / "process_control_nn_model.mat")
-    sim_time: float = Field(default=1.0, ge=0.2, le=20.0, allow_inf_nan=False)
-    prediction_horizon: int = Field(default=5, ge=1, le=60)
+    model_path: str = str(mpc.DEFAULT_OUTPUT_DIR / "trained_model.npz")
+    sim_time: float = Field(default=5.0, ge=0.2, le=20.0, allow_inf_nan=False)
+    prediction_horizon: int = Field(default=10, ge=1, le=60, strict=True)
 
-    @field_validator("package_name")
-    @classmethod
-    def validate_package_name(cls, value: str) -> str:
-        normalized = value.strip()
-        if not normalized or not all(part.isidentifier() for part in normalized.split(".")):
-            raise ValueError("Python 包名格式不正确，只能使用合法的 Python 模块名。")
-        return normalized
-
-    @field_validator("package_dir")
-    @classmethod
-    def validate_package_dir(cls, value: str) -> str:
-        normalized = value.strip()
-        if normalized and not Path(normalized).is_absolute():
-            raise ValueError("Python 包目录必须是本机绝对路径；也可以留空以使用当前环境中已安装的包。")
-        return normalized
-
-    @field_validator("mcr_root", "output_dir")
-    @classmethod
-    def validate_required_directory(cls, value: str) -> str:
-        normalized = value.strip()
-        if not normalized:
-            raise ValueError("路径不能为空。")
-        if not Path(normalized).is_absolute():
-            raise ValueError("路径必须是本机绝对路径。")
-        return normalized
-
-    @field_validator("model_path")
-    @classmethod
-    def validate_model_path(cls, value: str) -> str:
-        normalized = value.strip()
-        if not normalized or not Path(normalized).is_absolute():
-            raise ValueError("模型文件必须使用本机绝对路径。")
-        if Path(normalized).suffix.lower() != ".mat":
-            raise ValueError("模型文件必须使用 .mat 扩展名。")
-        return normalized
+    @model_validator(mode="after")
+    def validate_python_config(self):
+        from platform_core.dnn_mpc.config import validate_config
+        validate_config("mpc", self.model_dump())
+        return self
 
 class LocalPathSelectRequest(BaseModel):
-    kind: Literal["directory", "open-mat", "save-mat"]
+    kind: Literal["directory", "open-mat", "save-mat", "open-npz", "save-npz"]
     initial_path: str = ""
+
+
+class DnnModelInfoRequest(BaseModel):
+    model_path: str
 
 
 @asynccontextmanager
@@ -419,10 +339,11 @@ def training_defaults() -> dict[str, Any]:
 @app.post("/api/training/tasks")
 def create_training_task(request: TrainingTaskRequest) -> dict[str, str]:
     config = request.model_dump()
-    output_dir = Path(str(config.get("output_dir", "")).strip() or str(training.DEFAULT_OUTPUT_DIR))
+    from platform_core.dnn_mpc.runner import new_run_dir
+    output_dir = new_run_dir(config)
     task = task_manager.submit(
         "风险场景下控制系统智能模型训练算法 · DNNTrain",
-        lambda log: training.run(config, log),
+        lambda log: training.run(config, log, run_dir=output_dir),
         progress_path=output_dir / "progress.json",
         artifact_dir=output_dir,
     )
@@ -435,7 +356,7 @@ def training_image(image_name: str) -> FileResponse:
         image = training.image_path(image_name)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return FileResponse(image, media_type="image/png")
+    return FileResponse(image, media_type="image/svg+xml")
 
 
 @app.get("/api/training/tasks/{task_id}/images/{image_name}")
@@ -447,7 +368,7 @@ def training_task_image(task_id: str, image_name: str) -> FileResponse:
         image = training.image_path(image_name, output_dir)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return FileResponse(image, media_type="image/png")
+    return FileResponse(image, media_type="image/svg+xml")
 
 
 @app.get("/api/mpc/defaults")
@@ -455,13 +376,23 @@ def mpc_defaults() -> dict[str, Any]:
     return mpc.default_config()
 
 
+@app.post("/api/mpc/model-info")
+def mpc_model_info(request: DnnModelInfoRequest) -> dict[str, Any]:
+    from platform_core.dnn_mpc.config import model_info
+    try:
+        return model_info(request.model_path)
+    except (ValueError, OSError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.post("/api/mpc/tasks")
 def create_mpc_task(request: MpcTaskRequest) -> dict[str, str]:
     config = request.model_dump()
-    output_dir = Path(str(config.get("output_dir", "")).strip() or str(mpc.DEFAULT_OUTPUT_DIR))
+    from platform_core.dnn_mpc.runner import new_run_dir
+    output_dir = new_run_dir(config)
     task = task_manager.submit(
         "风险场景下智能模型优化控制算法 · MPC simulation",
-        lambda log: mpc.run(config, log),
+        lambda log: mpc.run(config, log, run_dir=output_dir),
         progress_path=output_dir / "progress.json",
         artifact_dir=output_dir,
     )
@@ -474,7 +405,7 @@ def mpc_image(image_name: str) -> FileResponse:
         image = mpc.image_path(image_name)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return FileResponse(image, media_type="image/png")
+    return FileResponse(image, media_type="image/svg+xml")
 
 
 @app.get("/api/mpc/tasks/{task_id}/images/{image_name}")
@@ -486,7 +417,22 @@ def mpc_task_image(task_id: str, image_name: str) -> FileResponse:
         image = mpc.image_path(image_name, output_dir)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return FileResponse(image, media_type="image/png")
+    return FileResponse(image, media_type="image/svg+xml")
+
+
+@app.get("/api/dnn/{mode}/tasks/{task_id}/files/{file_name}")
+def dnn_artifact(mode: Literal["training", "mpc"], task_id: str, file_name: str) -> FileResponse:
+    from platform_core.dnn_mpc.runner import artifact_path
+    directory = task_manager.artifact_dir(task_id)
+    if directory is None:
+        raise HTTPException(status_code=404, detail="任务不存在或本机服务已重启")
+    try:
+        path = artifact_path(mode, file_name, directory)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    media_type = {".svg": "image/svg+xml", ".pdf": "application/pdf", ".csv": "text/csv",
+                  ".json": "application/json", ".zip": "application/zip"}.get(path.suffix, "application/octet-stream")
+    return FileResponse(path, media_type=media_type, filename=path.name)
 
 
 @app.get("/api/anomaly/images/{image_name}")

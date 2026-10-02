@@ -17,6 +17,7 @@ const fieldLabels: Record<string, string> = {
   model_path: '模型文件',
   sample_count: '训练样本数',
   epochs: '训练轮数',
+  lr: '学习率',
   hidden_layers: '隐藏层规模',
   dataset_path: '外部数据集',
   sim_time: '仿真时长',

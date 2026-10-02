@@ -33,7 +33,7 @@ class LocalApiTests(unittest.TestCase):
 
     @patch("web_backend.app.path_picker.choose_local_path")
     def test_local_path_dialog_returns_absolute_path(self, choose_mock) -> None:
-        selected_path = r"H:\repository\Platform_sjtu\dnn_mpc\output"
+        selected_path = r"H:\repository\Platform_sjtu\dnn_mpc\python_output"
         choose_mock.return_value = selected_path
         response = self.client.post(
             "/api/local-paths/select",
@@ -133,37 +133,21 @@ class LocalApiTests(unittest.TestCase):
         response = self.client.post("/api/sdg/analyze", json=missing_cause)
         self.assertEqual(response.status_code, 400, response.text)
 
-    def test_training_defaults_and_existing_result_images(self) -> None:
-        modules = self.client.get("/api/modules")
-        self.assertEqual(modules.status_code, 200)
-        training_module = next(item for item in modules.json() if item["id"] == "training")
-        self.assertEqual(training_module["status"], "available")
-
-        defaults = self.client.get("/api/training/defaults")
-        self.assertEqual(defaults.status_code, 200)
-        self.assertEqual(defaults.json()["package_name"], "dnnmpcpkg")
-        self.assertEqual(defaults.json()["hidden_layers"], "64,64")
-
-        for image_name in ("training_performance.png", "prediction_error.png"):
-            image = self.client.get(f"/api/training/images/{image_name}")
-            self.assertEqual(image.status_code, 200)
-            self.assertEqual(image.headers["content-type"], "image/png")
-
-    def test_mpc_defaults_and_existing_result_images(self) -> None:
-        modules = self.client.get("/api/modules")
-        self.assertEqual(modules.status_code, 200)
-        mpc_module = next(item for item in modules.json() if item["id"] == "dnn-mpc")
-        self.assertEqual(mpc_module["status"], "available")
-
-        defaults = self.client.get("/api/mpc/defaults")
-        self.assertEqual(defaults.status_code, 200)
-        self.assertEqual(defaults.json()["prediction_horizon"], 5)
-        self.assertIn("process_control_nn_model.mat", defaults.json()["model_path"])
-
-        for image_name in ("process_control_trajectory.png", "control_input.png", "tracking_error.png", "cost_curve.png"):
-            image = self.client.get(f"/api/mpc/images/{image_name}")
-            self.assertEqual(image.status_code, 200)
-            self.assertEqual(image.headers["content-type"], "image/png")
+    def test_python_dnn_defaults_and_image_whitelist(self) -> None:
+        modules = self.client.get("/api/modules").json()
+        self.assertEqual(next(x for x in modules if x["id"] == "training")["status"], "available")
+        defaults = self.client.get("/api/training/defaults").json()
+        self.assertEqual(defaults["hidden_layers"], "64,64")
+        self.assertEqual(defaults["epochs"], 200)
+        self.assertEqual(defaults["lr"], .001)
+        self.assertNotIn("mcr_root", defaults)
+        self.assertTrue(defaults["model_path"].endswith(".npz"))
+        defaults = self.client.get("/api/mpc/defaults").json()
+        self.assertEqual(defaults["prediction_horizon"], 10)
+        self.assertEqual(defaults["sim_time"], 5.)
+        for url in ("/api/training/images/prediction_error.png", "/api/mpc/images/cost_curve.png",
+                    "/api/mpc/tasks/missing/images/dnn_mpc.svg", "/api/dnn/training/tasks/missing/files/trained_model.npz"):
+            self.assertEqual(self.client.get(url).status_code, 404)
 
     def test_anomaly_request_accepts_inclusive_boundaries(self) -> None:
         request = AnomalyTaskRequest(
@@ -198,41 +182,25 @@ class LocalApiTests(unittest.TestCase):
             AnomalyTaskRequest(attack_min_pct=float("nan"))
 
     def test_dnn_training_request_accepts_inclusive_boundaries(self) -> None:
-        minimum = TrainingTaskRequest(
-            package_dir="",
-            mcr_root=r"H:\software\matlab software\R2024b Runtime\R2024b",
-            output_dir=r"H:\repository\Platform_sjtu\dnn_mpc\output",
-            model_path=r"H:\repository\Platform_sjtu\dnn_mpc\output\model.mat",
-            sample_count=100,
-            epochs=1,
-            hidden_layers="1",
-        )
-        maximum = TrainingTaskRequest(
-            package_dir=r"H:\repository\Platform_sjtu\dnn_mpc\build_python",
-            mcr_root=r"H:\software\matlab software\R2024b Runtime\R2024b",
-            output_dir=r"H:\repository\Platform_sjtu\dnn_mpc\output",
-            model_path=r"H:\repository\Platform_sjtu\dnn_mpc\output\model.mat",
-            sample_count=100000,
-            epochs=5000,
-            hidden_layers=",".join(["4096"] * 10),
-        )
-        self.assertEqual(minimum.sample_count, 100)
+        minimum = TrainingTaskRequest(epochs=1, lr=.000001, hidden_layers="1,1")
+        maximum = TrainingTaskRequest(epochs=5000, lr=.1, hidden_layers="512,512")
+        self.assertEqual(minimum.epochs, 1)
         self.assertEqual(maximum.epochs, 5000)
-        self.assertEqual(len(maximum.hidden_layers.split(",")), 10)
+        self.assertEqual(maximum.hidden_layers, "512,512")
 
     def test_dnn_training_request_rejects_parameters_and_paths_before_task_creation(self) -> None:
         invalid_payloads = [
-            {"sample_count": 99},
-            {"sample_count": 100001},
+            {"lr": 0.0000009},
+            {"lr": .10001},
             {"epochs": 0},
             {"epochs": 5001},
             {"hidden_layers": "64,0"},
             {"hidden_layers": ",".join(["64"] * 11)},
             {"package_name": "dnn-mpc"},
-            {"package_dir": r"dnn_mpc\build_python"},
+            {"package_dir": r"unused\package"},
             {"mcr_root": r"relative\runtime"},
             {"output_dir": r"relative\output"},
-            {"model_path": r"H:\repository\Platform_sjtu\dnn_mpc\output\model.txt"},
+            {"model_path": r"H:\repository\Platform_sjtu\dnn_mpc\python_output\model.txt"},
             {"dataset_path": r"relative\dataset.mat"},
         ]
         for payload in invalid_payloads:
@@ -241,7 +209,7 @@ class LocalApiTests(unittest.TestCase):
                 self.assertEqual(response.status_code, 422, response.text)
                 self.assertNotIn("task_id", response.json())
 
-        for field, value in (("sample_count", float("nan")), ("epochs", float("inf"))):
+        for field, value in (("lr", float("nan")), ("epochs", float("inf"))):
             with self.subTest(field=field):
                 payload = {field: value}
                 response = self.client.post(
@@ -268,7 +236,7 @@ class LocalApiTests(unittest.TestCase):
             {"package_name": "dnn-mpc"},
             {"mcr_root": r"relative\runtime"},
             {"output_dir": r"relative\output"},
-            {"model_path": r"H:\repository\Platform_sjtu\dnn_mpc\output\model.txt"},
+            {"model_path": r"H:\repository\Platform_sjtu\dnn_mpc\python_output\model.txt"},
         ]
         for payload in invalid_payloads:
             with self.subTest(payload=payload):
@@ -418,7 +386,9 @@ class LocalApiTests(unittest.TestCase):
         )
         self.assertEqual(created.status_code, 200)
         task_id = created.json()["task_id"]
-        for _ in range(40):
+        # The first SIL request lazily imports Qt/matplotlib; allow a cold start.
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
             task = self.client.get(f"/api/tasks/{task_id}").json()
             if task["status"] in {"succeeded", "failed"}:
                 break

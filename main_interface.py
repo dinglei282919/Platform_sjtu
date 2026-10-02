@@ -414,6 +414,12 @@ class MainWindow(QMainWindow):
         self._position_dropdown()
 
     def closeEvent(self, event):
+        if ProcessControlDnnMpcWidget is not None:
+            for widget in self.findChildren(ProcessControlDnnMpcWidget):
+                if widget.has_running_worker():
+                    QMessageBox.warning(self, "后台任务运行中", "请等待 DNN-MPC 任务完成后再关闭。")
+                    event.ignore()
+                    return
         for widget in (self._sis_widget, self._sil_widget):
             if widget is not None:
                 checker = getattr(widget, "has_running_worker", None)
