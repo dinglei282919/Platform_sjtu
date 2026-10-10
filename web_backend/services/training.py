@@ -1,5 +1,5 @@
 """Web adapter for the shared Python training implementation."""
-from platform_core.dnn_mpc.config import DEFAULT_OUTPUT_DIR, training_defaults
+from platform_core.dnn_mpc.config import training_defaults
 
 FIGURE_NAMES = ("training_rmse.svg",)
 

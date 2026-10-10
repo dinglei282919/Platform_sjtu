@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import CancelledError, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import json
 from pathlib import Path
 import shutil
-from threading import RLock
+from threading import Event, RLock
 from typing import Any, Callable
 from uuid import uuid4
 
@@ -26,11 +26,12 @@ class TaskRecord:
     work_dir: Path | None = field(default=None, repr=False)
     progress_path: Path | None = field(default=None, repr=False)
     artifact_dir: Path | None = field(default=None, repr=False)
+    cancel_event: Event | None = field(default=None, repr=False)
     progress: dict[str, Any] = field(default_factory=lambda: {"percent": 0, "message": "等待启动"})
 
     def snapshot(self) -> dict[str, Any]:
         current_progress = dict(self.progress)
-        if self.progress_path is not None and self.status in {"running", "succeeded", "failed"}:
+        if self.progress_path is not None and self.status in {"running", "succeeded", "failed", "cancelled"}:
             try:
                 payload = json.loads(self.progress_path.read_text(encoding="utf-8"))
                 if isinstance(payload, dict):
@@ -45,6 +46,8 @@ class TaskRecord:
             "logs": list(self.logs),
             "result": self.result,
             "error": self.error,
+            "cancellable": self.cancel_event is not None,
+            "cancel_requested": self.cancel_event is not None and self.cancel_event.is_set(),
             "progress": current_progress,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
@@ -70,6 +73,7 @@ class TaskManager:
         *,
         progress_path: Path | None = None,
         artifact_dir: Path | None = None,
+        cancel_event: Event | None = None,
     ) -> TaskRecord:
         task_id = uuid4().hex
         task = TaskRecord(
@@ -78,6 +82,7 @@ class TaskManager:
             work_dir=self._runtime_root / task_id,
             progress_path=progress_path,
             artifact_dir=artifact_dir,
+            cancel_event=cancel_event,
         )
         task.work_dir.mkdir(parents=True, exist_ok=False)
         task.logs.append("任务已创建，等待本机工作线程执行。")
@@ -89,6 +94,8 @@ class TaskManager:
     def _run(self, task_id: str, operation: Callable[[Callable[[str], None]], dict[str, Any]]) -> None:
         with self._lock:
             task = self._tasks[task_id]
+            if task.status == "cancelled":
+                return
             task.status = "running"
             task.updated_at = datetime.now(timezone.utc).isoformat()
             task.logs.append("任务开始执行。")
@@ -101,6 +108,12 @@ class TaskManager:
 
         try:
             result = operation(log)
+        except CancelledError:
+            with self._lock:
+                task.status = "cancelled"
+                task.logs.append("仿真已取消。")
+                task.updated_at = datetime.now(timezone.utc).isoformat()
+            return
         except Exception as exc:  # pragma: no cover - exercised through API integration
             with self._lock:
                 task = self._tasks[task_id]
@@ -121,6 +134,23 @@ class TaskManager:
         with self._lock:
             task = self._tasks.get(task_id)
             return task.snapshot() if task else None
+
+    def cancel(self, task_id: str) -> dict[str, Any] | None:
+        """Only explicitly cancellable operations receive an interruption request."""
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if task is None:
+                return None
+            if task.cancel_event is None:
+                raise ValueError("该任务不支持取消。")
+            if task.status in {"queued", "running"} and not task.cancel_event.is_set():
+                task.cancel_event.set()
+                task.logs.append("已请求取消仿真，等待安全停止。")
+                if task.status == "queued":
+                    task.status = "cancelled"
+                    task.progress["message"] = "仿真已取消。"
+                task.updated_at = datetime.now(timezone.utc).isoformat()
+            return task.snapshot()
 
     def artifact_dir(self, task_id: str) -> Path | None:
         with self._lock:

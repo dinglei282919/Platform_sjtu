@@ -4,18 +4,26 @@ import shutil
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QObject, QThread, QTimer, Qt, Signal
-from PySide6.QtWidgets import (QWidget, QGroupBox, QVBoxLayout, QHBoxLayout, QFormLayout,
-    QLineEdit, QSpinBox, QDoubleSpinBox, QPushButton, QLabel, QProgressBar,
-    QScrollArea, QSplitter, QFileDialog, QMessageBox, QSizePolicy)
+from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGridLayout, QFrame, QLayout,
+    QLineEdit, QSpinBox, QDoubleSpinBox, QPushButton, QLabel,
+    QSplitter, QFileDialog, QMessageBox, QSizePolicy, QTabWidget)
 
-from platform_core.dnn_mpc.config import training_defaults, mpc_defaults, validate_config, model_info
+from platform_core.dnn_mpc.config import training_defaults, mpc_defaults, validate_config, model_info, MPC_PLOT_GROUPS
 from platform_core.dnn_mpc.runner import new_run_dir, run
-from dnn_mpc_plot_view import DnnMpcPlotView
+from dnn_mpc_plot_view import DnnMpcPlotView, ControlPanel, ControlRunLog, ControlScrollArea, ControlTaskStatus, control_page_style
+
+
+MPC_PLOT_DESCRIPTIONS = {
+    "dnn_mpc": "四个状态偏差与控制输入的整体响应",
+    "mpc_states": "位置、速度、角度与角速度相对参考值的偏差",
+    "mpc_control": "控制力随仿真时间的变化",
+}
 
 
 class ProcessControlDnnMpcWorker(QObject):
     finished = Signal(dict)
     failed = Signal(str)
+    logged = Signal(str)
 
     def __init__(self, mode, config, run_dir):
         super().__init__()
@@ -23,7 +31,7 @@ class ProcessControlDnnMpcWorker(QObject):
 
     def run(self):
         try:
-            self.finished.emit(run(self.mode, self.config, run_dir=self.run_dir))
+            self.finished.emit(run(self.mode, self.config, self.logged.emit, run_dir=self.run_dir))
         except Exception as exc:
             self.failed.emit(str(exc))
 
@@ -38,7 +46,7 @@ class ProcessControlDnnMpcWidget(QWidget):
         self._run_dir = None
         self._model_path_user_selected = False
         self._model_signature = None
-        self._last_image_revision = None
+        self._last_image_revision = {}
         self._progress_timer = QTimer(self)
         self._progress_timer.setInterval(500)
         self._progress_timer.timeout.connect(self._poll_progress)
@@ -46,69 +54,29 @@ class ProcessControlDnnMpcWidget(QWidget):
 
     def _build_ui(self):
         self.setObjectName("processControlRoot")
-        self.setStyleSheet("""
-            QWidget#processControlRoot { background: #1a2635; }
-            QWidget#processControlRoot QGroupBox {
-                background: rgba(31, 49, 70, .88); border: 1px solid rgba(123, 167, 210, .35);
-                border-radius: 8px; margin-top: 10px; padding-top: 12px;
-                color: #d4e8ff; font-size: 15px; font-weight: 600;
-            }
-            QWidget#processControlRoot QGroupBox::title {
-                subcontrol-origin: margin; subcontrol-position: top left; padding: 0 6px; color: #d9ecff;
-            }
-            QWidget#processControlRoot QScrollArea { border: none; background: transparent; }
-            QWidget#processControlRoot QLabel { color: #d2e5fb; font-size: 14px; }
-            QWidget#processControlRoot QLabel#parameterRangeHint { color: #acc6df; font-size: 13px; }
-            QWidget#processControlRoot QLabel#processControlStatus { color: #9bd0ff; font-size: 15px; font-weight: 650; }
-            QWidget#processControlRoot QLabel#resultPathLabel {
-                border: 1px solid rgba(143, 182, 220, .35); border-radius: 5px;
-                background: rgba(21, 35, 52, .72); color: #d6eaff; min-height: 32px;
-                padding: 7px 9px; font-size: 13px; font-weight: 500;
-            }
-            QWidget#processControlRoot QLineEdit,
-            QWidget#processControlRoot QSpinBox, QWidget#processControlRoot QDoubleSpinBox {
-                background: rgba(21, 35, 52, .95); color: #e7f2ff;
-                border: 1px solid rgba(143, 182, 220, .35); border-radius: 5px;
-                min-height: 28px; padding: 2px 8px;
-            }
-            QWidget#processControlRoot QSpinBox:disabled { color: #87a2bd; }
-            QWidget#processControlRoot QPushButton {
-                border: 1px solid rgba(101, 175, 235, .52); border-radius: 8px;
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                    stop:0 rgba(35,90,132,.95), stop:1 rgba(31,71,112,.95));
-                color: #dff2ff; padding: 7px 14px; font-weight: 700;
-            }
-            QWidget#processControlRoot QPushButton:hover { background: rgba(62,122,174,.95); color: white; }
-            QWidget#processControlRoot QPushButton:disabled {
-                color: #87a2bd; border-color: rgba(110,140,170,.35); background: rgba(33,55,77,.75);
-            }
-            QWidget#processControlRoot QSplitter::handle {
-                background: rgba(126,176,236,.28); border-left: 1px solid rgba(126,176,236,.42);
-                border-right: 1px solid rgba(18,32,48,.65);
-            }
-            QWidget#processControlRoot QSplitter::handle:hover { background: rgba(126,176,236,.55); }
-        """)
+        self.setStyleSheet(control_page_style("processControlRoot"))
         defaults = training_defaults() if self.page_mode == "training" else mpc_defaults()
         root = QVBoxLayout(self)
-        root.setContentsMargins(10, 10, 10, 10)
-        root.setSpacing(10)
+        root.setContentsMargins(16, 16, 16, 16)
+        root.setSpacing(18)
         splitter = QSplitter(Qt.Horizontal)
         splitter.setHandleWidth(12)
         splitter.setChildrenCollapsible(False)
         root.addWidget(splitter)
-        self._config_group = QGroupBox("DNNTrain" if self.page_mode == "training" else "MPC simulation")
-        layout = QVBoxLayout(self._config_group)
-        paths = QGroupBox("路径设置")
-        paths_form = QFormLayout(paths)
-        parameters = QGroupBox("训练参数" if self.page_mode == "training" else "仿真参数")
-        parameter_layout = QVBoxLayout(parameters)
+        self._config_group = ControlPanel("训练设置" if self.page_mode == "training" else "仿真设置")
+        layout = self._config_group.body
+        paths = ControlPanel("路径设置", secondary=True)
+        paths_form = QFormLayout()
+        paths.body.addLayout(paths_form)
+        parameters = ControlPanel("训练参数" if self.page_mode == "training" else "仿真参数", secondary=True)
+        parameter_layout = parameters.body
         form = QFormLayout()
         for fields in (paths_form, form):
             fields.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
-            fields.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            fields.setRowWrapPolicy(QFormLayout.WrapAllRows)
+            fields.setLabelAlignment(Qt.AlignLeft | Qt.AlignTop)
             fields.setVerticalSpacing(8)
         parameter_layout.addLayout(form)
-        form.setLabelAlignment(Qt.AlignRight | Qt.AlignTop)
         self._output_dir_input = QLineEdit(defaults["output_dir"])
         self._model_path_input = QLineEdit(defaults["model_path"])
         paths_form.addRow("输出目录", self._path_row(self._output_dir_input, "directory"))
@@ -161,23 +129,19 @@ class ProcessControlDnnMpcWidget(QWidget):
             description = "Δt=0.02 s；Q=diag(300,1,300,1)，R=0.01；P 由模型计算；控制输入 ±10 N。状态由同一预测网络更新，属于模型内闭环验证。"
         for field in [*parameters.findChildren(QSpinBox), *parameters.findChildren(QDoubleSpinBox)]:
             field.setMinimumWidth(0)
-            field.setMaximumWidth(180)
             field.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        if self.page_mode == "training":
-            self._hidden_layers_input.setMaximumWidth(180)
         note = QLabel(description)
         note.setWordWrap(True)
+        note.setProperty("controlHint", True)
         parameter_layout.addWidget(note)
         self._run_btn = QPushButton("运行训练模块" if self.page_mode == "training" else "运行 MPC 仿真")
+        self._run_btn.setProperty("controlPrimary", True)
         self._run_btn.clicked.connect(lambda: self._run_mode(self.page_mode))
-        action = QHBoxLayout()
-        action.addStretch()
-        action.addWidget(self._run_btn)
-        parameter_layout.addLayout(action)
+        parameter_layout.addWidget(self._run_btn)
         layout.addWidget(paths)
         layout.addWidget(parameters)
-        result_paths = QGroupBox("结果文件")
-        result_paths_layout = QVBoxLayout(result_paths)
+        result_paths = ControlPanel("结果文件", secondary=True)
+        result_paths_layout = result_paths.body
         self._result_path_label = QLabel("运行后显示本次结果路径。")
         self._result_path_label.setObjectName("resultPathLabel")
         self._result_path_label.setWordWrap(True)
@@ -186,52 +150,106 @@ class ProcessControlDnnMpcWidget(QWidget):
         result_paths_layout.addWidget(self._result_path_label)
         layout.addWidget(result_paths)
         layout.addStretch()
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setWidget(self._config_group)
-        scroll.setMinimumWidth(380)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll = ControlScrollArea(self._config_group)
+        scroll.setMinimumWidth(320)
+        scroll.setMaximumWidth(380)
         scroll.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Expanding)
         self._config_scroll = scroll
         for child in [self._config_group, *self._config_group.findChildren(QWidget)]:
             child.installEventFilter(self)
         splitter.addWidget(scroll)
-        result_group = QGroupBox("训练 / 验证 RMSE" if self.page_mode == "training" else "状态偏差与控制输入")
-        result_layout = QVBoxLayout(result_group)
-        self._status_label = QLabel("状态：待执行")
-        self._status_label.setObjectName("processControlStatus")
-        self._status_label.setWordWrap(True)
-        result_layout.addWidget(self._status_label)
-        self._progress_bar = QProgressBar()
-        result_layout.addWidget(self._progress_bar)
-        self._empty_label = QLabel("运行后显示本次计算结果")
-        self._empty_label.setAlignment(Qt.AlignCenter)
-        result_layout.addWidget(self._empty_label)
-        self._image = DnnMpcPlotView()
-        self._image.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self._image.hide()
-        result_layout.addWidget(self._image, 1)
+        self._result_content = QWidget()
+        self._result_content.setAttribute(Qt.WA_StyledBackground, True)
+        self._result_content.setProperty("controlSurface", True)
+        result_column = QVBoxLayout(self._result_content)
+        result_column.setContentsMargins(0, 0, 0, 0)
+        result_column.setSpacing(12)
+        result_column.setSizeConstraint(QLayout.SetMinimumSize)
+        self._result_group = ControlPanel("结果图示")
+        result_layout = self._result_group.body
+        self._task_status = ControlTaskStatus("训练" if self.page_mode == "training" else "MPC 仿真")
+        self._status_label = self._task_status.message
+        self._progress_bar = self._task_status.progress
+        result_layout.addWidget(self._task_status)
+        self._images = {}
+        if self.page_mode == "mpc":
+            self._plot_tabs = QTabWidget()
+            self._plot_tabs.setObjectName("mpcPlotTabs")
+            self._plot_tabs.setAccessibleName("MPC 输出图像")
+            self._plot_tabs.tabBar().setExpanding(True)
+            for name, title, key in MPC_PLOT_GROUPS:
+                panel = QWidget()
+                panel_layout = QVBoxLayout(panel)
+                panel_layout.setContentsMargins(0, 12, 0, 0)
+                self._add_plot_heading(panel_layout, title, MPC_PLOT_DESCRIPTIONS[name])
+                view = DnnMpcPlotView(aspect_ratio=8.6 / 6.5)
+                view.setAccessibleName(title + "曲线")
+                panel_layout.addWidget(view, 1)
+                self._images[key] = view
+                self._plot_tabs.addTab(panel, title)
+            self._image = self._images["simulation_figure"]
+            result_layout.addWidget(self._plot_tabs, 1)
+        else:
+            self._add_plot_heading(result_layout, "训练 / 验证 RMSE", "训练集与验证集的标准化误差随轮次变化")
+            self._image = DnnMpcPlotView(aspect_ratio=2.35)
+            self._image.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+            self._images["training_figure"] = self._image
+            result_layout.addWidget(self._image, 1)
+        divider = QFrame()
+        divider.setProperty("controlDivider", True)
+        divider.setFixedHeight(1)
+        result_layout.addSpacing(6)
+        result_layout.addWidget(divider)
         self._metrics_label = QLabel()
         self._metrics_label.setWordWrap(True)
         result_layout.addWidget(self._metrics_label)
-        if self.page_mode == "mpc":
-            caption = QLabel("x₁：位置偏差(m)，x₂：速度偏差(m/s)，x₃=θ−π(rad)，x₄：角速度偏差(rad/s)，u：控制力(N)。综合 RMSE 混合不同量纲，累计代价不代表实际能耗。")
-            caption.setWordWrap(True)
-            result_layout.addWidget(caption)
-        downloads = QHBoxLayout()
+        caption = QLabel("曲线为标准化 RMSE；参数修改后需重新训练。" if self.page_mode == "training" else
+                         "x₁：位置(m)，x₂：速度(m/s)，x₃=θ−π(rad)，x₄：角速度(rad/s)，u：控制力(N)。图示相对参考值的偏差；综合 RMSE 混合量纲，累计代价不代表实际能耗。")
+        caption.setWordWrap(True)
+        caption.setProperty("controlHint", True)
+        self._caption = caption
+        result_layout.addWidget(caption)
+        self._warning_label = QLabel()
+        self._warning_label.setWordWrap(True)
+        self._warning_label.hide()
+        result_layout.addWidget(self._warning_label)
+        self._downloads_layout = QGridLayout()
+        self._download_columns = 0
         files = [("SVG", "training_rmse.svg"), ("PDF", "training_rmse.pdf"), ("模型", "trained_model.npz"), ("训练记录", "training_history.csv"), ("数据集", "training_dataset.mat")] if self.page_mode == "training" else [("SVG", "dnn_mpc.svg"), ("PDF", "dnn_mpc.pdf"), ("结果 ZIP", "dnn_mpc_results.zip")]
         self._download_buttons = []
         for label, name in files:
-            button = QPushButton("导出 " + label)
-            button.clicked.connect(lambda checked=False, filename=name: self._export(filename))
+            button = QPushButton(("导出当前图 " if self.page_mode == "mpc" and label in ("SVG", "PDF") else "导出 ") + label)
+            button.clicked.connect(lambda checked=False, filename=name: self._export(self._selected_plot_file(filename)))
             button.setEnabled(False)
-            downloads.addWidget(button)
             self._download_buttons.append(button)
-        result_layout.addLayout(downloads)
-        splitter.addWidget(result_group)
-        splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 2)
-        splitter.setSizes([620, 1120])
+        result_layout.addLayout(self._downloads_layout)
+        result_column.addWidget(self._result_group)
+        self._logs = ControlRunLog()
+        result_column.addWidget(self._logs)
+        result_column.addStretch()
+        self._result_scroll = ControlScrollArea(self._result_content)
+        self._result_content.installEventFilter(self)
+        self._layout_downloads()
+        splitter.addWidget(self._result_scroll)
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+        splitter.setSizes([350, 1050])
+
+    def _add_plot_heading(self, layout, title, description):
+        heading = QLabel(title)
+        heading.setProperty("controlPlotHeading", True)
+        layout.addWidget(heading)
+        hint = QLabel(description)
+        hint.setProperty("controlHint", True)
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+    def _layout_downloads(self):
+        columns = max(1, min(len(self._download_buttons), (self._result_content.width() - 40) // 150))
+        if columns != self._download_columns:
+            self._download_columns = columns
+            for index, button in enumerate(self._download_buttons):
+                self._downloads_layout.addWidget(button, index // columns, index % columns)
 
     def _parameter_field(self, field, text):
         widget = QWidget()
@@ -273,6 +291,10 @@ class ProcessControlDnnMpcWidget(QWidget):
                                    "按原状态方程生成仿真数据后训练；dt=0.02 s，随机种子 42。")
 
     def eventFilter(self, watched, event):
+        if watched is getattr(self, "_result_content", None):
+            if event.type() == QEvent.Resize:
+                self._layout_downloads()
+            return super().eventFilter(watched, event)
         if event.type() == QEvent.Wheel:
             delta = event.angleDelta().y()
             if delta:
@@ -339,12 +361,16 @@ class ProcessControlDnnMpcWidget(QWidget):
         return validate_config(self.page_mode, values)
 
     def _clear_result(self):
+        self._task_status.set_status("idle", "设置参数后开始运行", 0)
         self._outputs, self._payload = {}, None
-        self._last_image_revision = None
-        self._image.clear()
-        self._image.hide()
-        self._empty_label.show()
+        self._last_image_revision = {}
+        for view in self._images.values():
+            view.clear()
+            view.set_placeholder("运行后显示本次计算结果")
         self._metrics_label.clear()
+        self._warning_label.clear()
+        self._warning_label.hide()
+        self._logs.clear()
         self._result_path_label.setText("运行后显示本次结果路径。")
         for button in self._download_buttons:
             button.setEnabled(False)
@@ -361,11 +387,14 @@ class ProcessControlDnnMpcWidget(QWidget):
         self._clear_result()
         self._run_dir = new_run_dir(config)
         self._config_group.setEnabled(False)
-        self._status_label.setText("状态：启动中")
-        self._progress_bar.setValue(0)
+        self._task_status.set_status("running", "正在启动任务", 0)
+        for view in self._images.values():
+            view.set_placeholder("计算中，等待图像更新…")
         self._thread = QThread(self)
         self._worker = ProcessControlDnnMpcWorker(mode, config, self._run_dir)
         self._worker.moveToThread(self._thread)
+        self._logs.append("任务开始执行。")
+        self._worker.logged.connect(self._logs.append)
         self._thread.started.connect(self._worker.run)
         self._worker.finished.connect(self._handle_success)
         self._worker.failed.connect(self._handle_failure)
@@ -383,36 +412,41 @@ class ProcessControlDnnMpcWidget(QWidget):
             return
         try:
             value = json.loads((self._run_dir / "progress.json").read_text(encoding="utf-8"))
-            self._progress_bar.setValue(round(value["percent"]))
-            self._status_label.setText(value["message"])
+            self._task_status.set_status("running", value["message"], value["percent"])
             self._outputs.update(value.get("outputs", {}))
             self._refresh_image()
         except (OSError, ValueError, KeyError):
             pass
 
     def _refresh_image(self):
-        key = "training_figure" if self.page_mode == "training" else "simulation_figure"
-        filename = self._outputs.get(key)
-        if not filename or not Path(filename).is_file():
-            return
-        revision = (filename, Path(filename).stat().st_mtime_ns)
-        if revision != self._last_image_revision:
-            self._image.load(str(filename))
-            self._image.show()
-            self._empty_label.hide()
-            self._last_image_revision = revision
+        for key, view in self._images.items():
+            filename = self._outputs.get(key)
+            if not filename or not Path(filename).is_file():
+                continue
+            revision = (filename, Path(filename).stat().st_mtime_ns)
+            if revision != self._last_image_revision.get(key):
+                view.load(str(filename))
+                view.show()
+                self._last_image_revision[key] = revision
+
+    def _selected_plot_file(self, filename):
+        if self.page_mode == "mpc" and filename in ("dnn_mpc.svg", "dnn_mpc.pdf"):
+            return MPC_PLOT_GROUPS[self._plot_tabs.currentIndex()][0] + Path(filename).suffix
+        return filename
 
     def _handle_success(self, payload):
         self._progress_timer.stop()
         self._payload, self._outputs = payload, payload["outputs"]
-        self._progress_bar.setValue(100)
         result = payload["result"]
-        self._status_label.setText(f"执行完成，用时 {result['elapsed_seconds']:.2f} 秒")
+        self._task_status.set_status("succeeded", f"执行完成 · 用时 {result['elapsed_seconds']:.2f} 秒")
         metrics = result["metrics"]
         if self.page_mode == "training":
             self._metrics_label.setText(f"测试 RMSE（原始量纲综合）：{metrics['test_rmse']:.6f}；最佳轮次：{metrics['best_epoch']}")
         else:
-            self._metrics_label.setText(f"跟踪 RMSE：{metrics['tracking_rmse']:.4f}；最大 |u|：{metrics['max_abs_control']:.2f} N；输入越界：{metrics['input_violations']}；累计代价：{metrics['total_cost']:.2f}。" + result.get("warning", ""))
+            self._metrics_label.setText(f"跟踪 RMSE：{metrics['tracking_rmse']:.4f}；最大 |u|：{metrics['max_abs_control']:.2f} N；输入越界：{metrics['input_violations']}；累计代价：{metrics['total_cost']:.2f}")
+        self._warning_label.setText(result.get("warning", ""))
+        self._warning_label.setVisible(bool(result.get("warning")))
+        self._logs.append("任务完成。")
         self._result_path_label.setText(payload["json_path"])
         self._refresh_image()
         for button in self._download_buttons:
@@ -420,8 +454,10 @@ class ProcessControlDnnMpcWidget(QWidget):
 
     def _handle_failure(self, error):
         self._progress_timer.stop()
-        self._status_label.setText("执行失败：" + error)
-        self._progress_bar.setValue(0)
+        self._logs.append("任务失败：" + error)
+        self._task_status.set_status("failed", "执行失败：" + error)
+        for view in self._images.values():
+            view.set_placeholder("运行后显示本次计算结果")
         QMessageBox.warning(self, "执行失败", error)
 
     def _clear_worker(self):

@@ -21,20 +21,31 @@ def training_figure(history):
     return fig
 
 
-def simulation_figure(result):
+def simulation_figure(result, view="dnn_mpc"):
     fig = Figure(figsize=(8.6, 6.5))
-    # Each plot spans two columns; center u without stretching its time axis.
-    grid = fig.add_gridspec(3, 4)
-    axes = [fig.add_subplot(grid[row, 2*col:2*col+2]) for row in range(2) for col in range(2)]
-    axes.append(fig.add_subplot(grid[2, 1:3]))
-    fig.subplots_adjust(left=.11, right=.97, bottom=.10, top=.96, hspace=.65, wspace=1.05)
+    if view == "dnn_mpc":
+        # Preserve the overview's original five-panel layout.
+        grid = fig.add_gridspec(3, 4)
+        axes = [fig.add_subplot(grid[row, 2*col:2*col+2]) for row in range(2) for col in range(2)]
+        axes.append(fig.add_subplot(grid[2, 1:3]))
+        indices = range(5)
+        fig.subplots_adjust(left=.11, right=.97, bottom=.10, top=.96, hspace=.65, wspace=1.05)
+    elif view == "mpc_states":
+        axes = fig.subplots(2, 2).flatten()
+        indices = range(4)
+        fig.subplots_adjust(left=.11, right=.97, bottom=.10, top=.96, hspace=.4, wspace=.4)
+    elif view == "mpc_control":
+        axes, indices = [fig.subplots()], [4]
+        fig.subplots_adjust(left=.12, right=.97, bottom=.12, top=.95)
+    else:
+        raise ValueError(f"Unknown MPC plot view: {view}")
     labels = [r"$x_1$ (m)", r"$x_2$ (m/s)", r"$x_3$ (rad)", r"$x_4$ (rad/s)", r"$u$ (N)"]
     def values(run):
         x = run["states"].copy()
         x[:, 2] -= np.pi
         return np.column_stack((x, run["controls"]))
     curves = values(result)
-    for i, ax in enumerate(axes):
+    for i, ax in zip(indices, axes):
         ax.plot(result["control_time"] if i == 4 else result["time"], curves[:, i], color="#0072BD", lw=1.6,
                 marker="o" if len(curves) == 1 else None, markersize=3, label="Result")
         ax.set_ylabel(labels[i], fontsize=13)

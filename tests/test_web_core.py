@@ -397,5 +397,240 @@ class LocalApiTests(unittest.TestCase):
         self.assertIn("pfdavg", task["result"])
 
 
+def check_running_control_images(test, mode, *, cancel=False):
+    """Pause a real run after its first preview and exercise live image routes."""
+    from importlib import import_module
+    from pathlib import Path
+    from threading import Event
+    from xml.etree import ElementTree
+    ready, release = Event(), Event()
+    runner = import_module(f"platform_core.{mode}.runner")
+
+    original_run = runner.run
+
+    def gated_run(config, log, *, run_dir, cancelled=None):
+        def progress(percent, message):
+            state = json.loads((Path(run_dir) / "progress.json").read_text(encoding="utf-8"))
+            if state["image_revision"] and percent < 85 and not release.is_set():
+                ready.set()
+                if not release.wait(20):
+                    raise RuntimeError("preview API test gate timed out")
+        return original_run(config, log, run_dir=run_dir, progress=progress, cancelled=cancelled)
+
+    try:
+        with patch.object(runner, "run", side_effect=gated_run):
+            task_id = test.client.post(f"/api/{mode}/tasks", json={"sim_time": 1.}).json()["task_id"]
+            test.assertTrue(ready.wait(20))
+            task = test.manager.get(task_id)
+            test.assertEqual(task["status"], "running")
+            test.assertIsNone(task["result"])
+            for name in task["progress"]["outputs"]:
+                response = test.client.get(f"/api/{mode}/tasks/{task_id}/images/{name}.svg?v=1")
+                test.assertEqual(response.status_code, 200)
+                test.assertEqual(response.headers["cache-control"], "no-store")
+                ElementTree.fromstring(response.content)
+                test.assertEqual(test.client.get(f"/api/{mode}/tasks/{task_id}/files/{name}.svg").status_code, 409)
+            test.assertEqual(test.client.get(f"/api/{mode}/tasks/{task_id}/files/result.json").status_code, 409)
+            test.assertEqual(test.client.get(f"/api/{mode}/tasks/{task_id}/images/tracking.png").status_code, 409)
+            other = "replay" if mode == "fdi" else "fdi"
+            test.assertNotEqual(test.client.get(f"/api/{other}/tasks/{task_id}/images/tracking.svg").status_code, 200)
+            if cancel:
+                response = test.client.post(f"/api/tasks/{task_id}/cancel")
+                test.assertEqual(response.status_code, 200)
+                test.assertTrue(response.json()["cancel_requested"])
+                test.assertEqual(response.json()["status"], "running")
+            release.set()
+            final = test.wait_task(task_id)
+            if cancel:
+                test.assertEqual(final["status"], "cancelled", final)
+                test.assertIsNone(final["result"])
+                test.assertIsNone(final["error"])
+                test.assertEqual(test.client.get(f"/api/{mode}/tasks/{task_id}/files/result.json").status_code, 409)
+                test.assertEqual(test.client.get(f"/api/{mode}/tasks/{task_id}/images/tracking.svg").status_code, 200)
+                test.assertEqual(test.client.post(f"/api/tasks/{task_id}/cancel").json(), final)
+            else:
+                test.assertEqual(final["status"], "succeeded", final)
+                test.assertGreater(final["progress"]["image_revision"], task["progress"]["image_revision"])
+                test.assertEqual(test.client.post(f"/api/tasks/{task_id}/cancel").json(), final)
+    finally:
+        release.set()
+
+
+class FdiApiTests(unittest.TestCase):
+    def test_queued_cancellation_and_unsupported_tasks(self):
+        from threading import Event
+        started, release, cancelled = Event(), Event(), Event()
+        invoked = []
+
+        def occupy(log):
+            started.set()
+            if not release.wait(10):
+                raise RuntimeError("queue test gate timed out")
+            return {"finished": True}
+
+        first = self.manager.submit("uncancellable", occupy)
+        try:
+            self.assertTrue(started.wait(5))
+            second = self.manager.submit("queued", lambda log: invoked.append(True), cancel_event=cancelled)
+            self.assertEqual(self.client.post("/api/tasks/missing/cancel").status_code, 404)
+            self.assertEqual(self.client.post(f"/api/tasks/{first.id}/cancel").status_code, 409)
+            response = self.client.post(f"/api/tasks/{second.id}/cancel")
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["status"], "cancelled")
+            self.assertTrue(cancelled.is_set())
+            self.assertEqual(self.client.post(f"/api/tasks/{second.id}/cancel").json(), response.json())
+        finally:
+            release.set()
+            self.manager._executor.shutdown(wait=True)
+        self.assertEqual(invoked, [])
+        self.assertEqual(self.manager.get(first.id)["status"], "succeeded")
+
+    def test_running_cancellation_preserves_preview_but_not_final_results(self):
+        check_running_control_images(self, "fdi", cancel=True)
+
+    def test_running_images_are_published_before_final_exports(self):
+        check_running_control_images(self, "fdi")
+
+    def setUp(self):
+        from tempfile import TemporaryDirectory
+        from pathlib import Path
+        from web_backend.task_manager import TaskManager
+        from web_backend.app import app
+        self.folder = TemporaryDirectory()
+        self.manager = TaskManager(Path(self.folder.name) / "tasks")
+        self.output_patch = patch("platform_core.fdi.runner.DEFAULT_OUTPUT_DIR", Path(self.folder.name) / "outputs")
+        self.output_patch.start()
+        manager_patch = patch("web_backend.app.task_manager", self.manager)
+        manager_patch.start()
+        self.addCleanup(manager_patch.stop)
+        self.client = TestClient(app)
+
+    def tearDown(self):
+        self.client.close()
+        self.manager._executor.shutdown(wait=True, cancel_futures=True)
+        self.manager.shutdown()
+        self.output_patch.stop()
+        self.folder.cleanup()
+
+    def wait_task(self, task_id):
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            task = self.manager.get(task_id)
+            if task["status"] in ("succeeded", "failed", "cancelled"):
+                return task
+            time.sleep(.05)
+        self.fail("FDI task did not complete")
+
+    def test_fdi_validation_and_missing_artifacts(self):
+        self.assertEqual(self.client.get("/api/fdi/defaults").json(), {"sim_time": 10.})
+        for payload in ({"sim_time": 0}, {"sim_time": 11}, {"sim_time": True},
+                        {"sim_time": "10"}, {"unexpected": 1}):
+            self.assertEqual(self.client.post("/api/fdi/tasks", json=payload).status_code, 422)
+        self.assertEqual(self.client.get("/api/fdi/tasks/missing/images/tracking.svg").status_code, 404)
+        from web_backend.app import FdiTaskRequest
+        with self.assertRaises(ValidationError):
+            FdiTaskRequest(sim_time=float("nan"))
+        with self.assertRaises(ValidationError):
+            FdiTaskRequest(sim_time=float("inf"))
+
+    def test_fdi_task_images_downloads_and_failure(self):
+        created = self.client.post("/api/fdi/tasks", json={"sim_time": .2})
+        self.assertEqual(created.status_code, 200)
+        task_id = created.json()["task_id"]
+        task = self.wait_task(task_id)
+        self.assertEqual(task["status"], "succeeded", task)
+        self.assertEqual(task["progress"]["percent"], 100)
+        for name in ("tracking", "disturbance", "state_control", "gain_switching"):
+            response = self.client.get(f"/api/fdi/tasks/{task_id}/images/{name}.svg")
+            self.assertEqual(response.status_code, 200)
+            self.assertTrue(response.headers["content-type"].startswith("image/svg+xml"))
+            self.assertIn("<svg", response.text)
+        for name in ("signals.csv", "signals.npz", "result.json"):
+            response = self.client.get(f"/api/fdi/tasks/{task_id}/files/{name}")
+            self.assertEqual(response.status_code, 200)
+            self.assertIn("attachment", response.headers["content-disposition"])
+        self.assertEqual(self.client.get(f"/api/fdi/tasks/{task_id}/files/fdi_config.json").status_code, 404)
+        with patch("platform_core.fdi.runner.run", side_effect=RuntimeError("expected FDI failure")):
+            failed_id = self.client.post("/api/fdi/tasks", json={}).json()["task_id"]
+            failed = self.wait_task(failed_id)
+        self.assertEqual(failed["status"], "failed")
+        self.assertIn("expected FDI failure", failed["error"])
+        self.assertEqual(self.client.get(f"/api/fdi/tasks/{failed_id}/images/tracking.svg").status_code, 409)
+
+
+class ReplayApiTests(unittest.TestCase):
+    def test_running_cancellation_preserves_preview_but_not_final_results(self):
+        check_running_control_images(self, "replay", cancel=True)
+
+    def test_running_images_are_published_before_final_exports(self):
+        check_running_control_images(self, "replay")
+
+    def setUp(self):
+        from tempfile import TemporaryDirectory
+        from pathlib import Path
+        from web_backend.task_manager import TaskManager
+        from web_backend.app import app
+        self.folder = TemporaryDirectory()
+        self.manager = TaskManager(Path(self.folder.name) / "tasks")
+        self.output_patch = patch("platform_core.replay.runner.DEFAULT_OUTPUT_DIR", Path(self.folder.name) / "outputs")
+        self.output_patch.start()
+        manager_patch = patch("web_backend.app.task_manager", self.manager)
+        manager_patch.start()
+        self.addCleanup(manager_patch.stop)
+        self.client = TestClient(app)
+
+    def tearDown(self):
+        self.client.close()
+        self.manager._executor.shutdown(wait=True, cancel_futures=True)
+        self.manager.shutdown()
+        self.output_patch.stop()
+        self.folder.cleanup()
+
+    def wait_task(self, task_id):
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            task = self.manager.get(task_id)
+            if task["status"] in ("succeeded", "failed", "cancelled"):
+                return task
+            time.sleep(.05)
+        self.fail("replay task did not complete")
+
+    def test_replay_validation_and_missing_artifacts(self):
+        self.assertEqual(self.client.get("/api/replay/defaults").json(), {"sim_time": 50.})
+        for payload in ({"sim_time": 0}, {"sim_time": 51}, {"sim_time": True},
+                        {"sim_time": "10"}, {"unexpected": 1}):
+            self.assertEqual(self.client.post("/api/replay/tasks", json=payload).status_code, 422)
+        self.assertEqual(self.client.get("/api/replay/tasks/missing/images/tracking.svg").status_code, 404)
+        from web_backend.app import ReplayTaskRequest
+        with self.assertRaises(ValidationError):
+            ReplayTaskRequest(sim_time=float("nan"))
+        with self.assertRaises(ValidationError):
+            ReplayTaskRequest(sim_time=float("inf"))
+
+    def test_replay_task_images_downloads_and_failure(self):
+        created = self.client.post("/api/replay/tasks", json={"sim_time": .2})
+        self.assertEqual(created.status_code, 200)
+        task_id = created.json()["task_id"]
+        task = self.wait_task(task_id)
+        self.assertEqual(task["status"], "succeeded", task)
+        self.assertEqual(task["progress"]["percent"], 100)
+        for name in ("tracking", "disturbance", "state_control", "switching_replay"):
+            response = self.client.get(f"/api/replay/tasks/{task_id}/images/{name}.svg")
+            self.assertEqual(response.status_code, 200)
+            self.assertTrue(response.headers["content-type"].startswith("image/svg+xml"))
+            self.assertIn("<svg", response.text)
+        for name in ("signals.csv", "signals.npz", "result.json"):
+            response = self.client.get(f"/api/replay/tasks/{task_id}/files/{name}")
+            self.assertEqual(response.status_code, 200)
+            self.assertIn("attachment", response.headers["content-disposition"])
+        self.assertEqual(self.client.get(f"/api/replay/tasks/{task_id}/files/replay_config.json").status_code, 404)
+        with patch("platform_core.replay.runner.run", side_effect=RuntimeError("expected replay failure")):
+            failed_id = self.client.post("/api/replay/tasks", json={}).json()["task_id"]
+            failed = self.wait_task(failed_id)
+        self.assertEqual(failed["status"], "failed")
+        self.assertIn("expected replay failure", failed["error"])
+        self.assertEqual(self.client.get(f"/api/replay/tasks/{failed_id}/images/tracking.svg").status_code, 409)
+
+
 if __name__ == "__main__":
     unittest.main()

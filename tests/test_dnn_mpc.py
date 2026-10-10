@@ -24,7 +24,7 @@ from PySide6.QtCore import QPoint, QPointF, Qt
 from PySide6.QtGui import QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
-from dnn_mpc_plot_view import DnnMpcPlotView
+from dnn_mpc_plot_view import DnnMpcPlotView, format_rmse
 
 from platform_core.dnn_mpc import config, runner
 from platform_core.dnn_mpc.data import load_dataset
@@ -55,6 +55,39 @@ class DnnMpcTests(unittest.TestCase):
         path = self.root / "data.mat"
         savemat(path, {"X_data": x[:80], "Y_data": y[:80]})
         return config.training_defaults() | dict(dataset_path=str(path), epochs=2, hidden_layers="8,8")
+
+    def test_module_output_defaults_and_dynamic_api_model_handoff(self):
+        training = config.training_defaults()
+        self.assertEqual(Path(training["output_dir"]), self.root / "output" / "training")
+        self.assertEqual(Path(training["model_path"]), self.root / "output" / "trained_model.npz")
+        external_model = self.root / "user_model.npz"
+        external_model.write_bytes(b"model location fixture")
+        config.LATEST_TRAINING_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        config.LATEST_TRAINING_STATE_PATH.write_text(json.dumps({
+            "format_version": 1, "model_path": str(external_model),
+            "output_dir": str(self.root / "custom_training"),
+        }))
+        mpc = config.mpc_defaults()
+        self.assertEqual(mpc["model_path"], str(external_model))
+        self.assertEqual(Path(mpc["output_dir"]), self.root / "output" / "mpc")
+        self.assertEqual(web.TrainingTaskRequest().output_dir, training["output_dir"])
+        self.assertEqual(web.MpcTaskRequest().output_dir, mpc["output_dir"])
+        self.assertEqual(web.MpcTaskRequest().model_path, str(external_model))
+        custom = str(self.root / "explicit_mpc_destination")
+        self.assertEqual(config.validate_config("mpc", {"output_dir": custom})["output_dir"], custom)
+
+    def test_adaptive_modules_share_the_output_namespace(self):
+        from platform_core.control_paths import CONTROL_OUTPUT_ROOT, module_output_dir
+        from platform_core.fdi import runner as fdi_runner
+        from platform_core.replay import runner as replay_runner
+        for module, adapter in (("fdi", fdi_runner), ("replay", replay_runner)):
+            self.assertEqual(adapter.DEFAULT_OUTPUT_DIR, CONTROL_OUTPUT_ROOT / module)
+            directory = module_output_dir(module, root=self.root)
+            with patch.object(adapter, "DEFAULT_OUTPUT_DIR", directory):
+                first, second = adapter.new_run_dir(), adapter.new_run_dir()
+            self.assertEqual(first.parent, directory / "runs")
+            self.assertNotEqual(first, second)
+            self.assertTrue(first.is_dir() and second.is_dir())
 
     def test_data_formats_and_rejection(self):
         x, y = load_dataset(config.DEFAULT_DATASET)
@@ -192,6 +225,13 @@ class DnnMpcTests(unittest.TestCase):
         self.assertEqual(preview_figure.axes[0].get_xlim(), (0., .24))
         self.assertEqual(len(preview_figure.axes[0].lines[0].get_xdata()), 1)
         self.assertNotIn(b"<image", vector_bytes(figure))
+        for view, indices in (("mpc_states", range(4)), ("mpc_control", [4])):
+            split = simulation_figure(result, view=view)
+            self.assertEqual(len(split.axes), len(indices))
+            for axis, i in zip(split.axes, indices):
+                np.testing.assert_array_equal(axis.lines[0].get_ydata(), figure.axes[i].lines[0].get_ydata())
+                np.testing.assert_array_equal(axis.lines[0].get_xdata(), figure.axes[i].lines[0].get_xdata())
+                self.assertEqual(axis.get_xlim(), (0., .24))
         self.assertEqual(config.mpc_defaults()["model_path"], cfg["model_path"])
         self.assertEqual(payload["result"]["model_sha256"], hashlib.sha256(raw).hexdigest())
 
@@ -283,6 +323,10 @@ class DnnMpcTests(unittest.TestCase):
                         self.assertEqual(preview.status_code, 200)
                         self.assertEqual(preview.headers["content-type"], "image/svg+xml")
                         self.assertIn(b"<svg", preview.content)
+                        for name in ("mpc_states.svg", "mpc_control.svg"):
+                            split_preview = client.get(f"/api/mpc/tasks/{mpc_id}/images/{name}")
+                            self.assertEqual(split_preview.status_code, 200)
+                            self.assertIn(b"<svg", split_preview.content)
                     finally:
                         resume.set()
                     simulated = self.wait_task(client, mpc_id)
@@ -296,6 +340,9 @@ class DnnMpcTests(unittest.TestCase):
                 zipped = client.get(f"/api/dnn/mpc/tasks/{mpc_id}/files/dnn_mpc_results.zip")
                 self.assertEqual(zipped.status_code, 200)
                 with ZipFile(BytesIO(zipped.content)) as bundle:
+                    for name in ("mpc_states.svg", "mpc_states.pdf", "mpc_control.svg", "mpc_control.pdf"):
+                        self.assertIn(name, bundle.namelist())
+                        self.assertEqual(client.get(f"/api/dnn/mpc/tasks/{mpc_id}/files/{name}").status_code, 200)
                     meta = json.loads(bundle.read("run.json"))
                     self.assertEqual(meta["horizon"], 3)
                     self.assertEqual(meta["model_sha256"], trained["result"]["result"]["model_sha256"])
@@ -444,6 +491,17 @@ class DnnMpcFileIOTests(unittest.TestCase):
 
 
 class DnnPlotViewTests(unittest.TestCase):
+    def test_rmse_precision_matches_web_including_zeros_and_rounding_boundaries(self):
+        # Number.toPrecision(4) results: trailing zeros, ties, carry and notation limits.
+        examples = [(0., "0.000"), (-0., "0.000"), (.02, "0.02000"),
+                    (.06784, "0.06784"), (.02994, "0.02994"), (1., "1.000"),
+                    (1.0625, "1.063"), (9.9995, "9.999"), (9999.5, "1.000e+4"),
+                    (1e-6, "0.000001000"), (1e-7, "1.000e-7"),
+                    (9.9999e-7, "0.000001000")]
+        for value, expected in examples:
+            with self.subTest(value=value):
+                self.assertEqual(format_rmse(value), expected)
+
     @classmethod
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
@@ -462,6 +520,51 @@ class DnnPlotViewTests(unittest.TestCase):
     def tearDown(self):
         self.view.close()
         self.temp.cleanup()
+
+    def test_empty_space_glyphs_render_without_qt_warnings_or_file_changes(self):
+        from PySide6.QtCore import QByteArray, qInstallMessageHandler
+        from PySide6.QtGui import QImage, QPainter
+        from PySide6.QtSvg import QSvgRenderer
+
+        def render(renderer):
+            image = QImage(160, 100, QImage.Format_ARGB32)
+            image.fill(0xffffffff)
+            painter = QPainter(image)
+            renderer.render(painter)
+            painter.end()
+            return image
+
+        messages = []
+        previous = qInstallMessageHandler(lambda kind, context, message: messages.append(message))
+        try:
+            for family in ("SimHei", "DejaVuSans"):
+                for geometry in ("", ' d=""', " d=' '"):
+                    with self.subTest(family=family, geometry=geometry):
+                        raw = (f'<svg xmlns="http://www.w3.org/2000/svg" '
+                               f'xmlns:xlink="http://www.w3.org/1999/xlink" width="160" height="100">'
+                               f'<defs><path id="{family}-20"{geometry} transform="scale(.015625)"/>'
+                               f'<path id="visible" d="M 5 5 L 35 5 L 20 30 Z"/></defs>'
+                               f'<use xlink:href="#visible" fill="blue"/>'
+                               f'<use xlink:href="#{family}-20" x="50"/>'
+                               f'<use xlink:href="#visible" x="80" fill="red"/></svg>').encode()
+                        original = QSvgRenderer(QByteArray(raw))
+                        expected = render(original)
+                        self.path.write_bytes(raw)
+                        messages.clear()
+                        self.view.load(self.path)
+                        actual = render(self.view.renderer())
+                        self.assertEqual(messages, [])
+                        self.assertEqual(actual, expected)
+                        self.assertEqual(self.path.read_bytes(), raw)
+        finally:
+            qInstallMessageHandler(previous)
+
+    def test_svg_compatibility_preserves_real_outlines_and_unrelated_invalid_paths(self):
+        from dnn_mpc_plot_view import _svg_for_qt
+        raw = (b'<svg xmlns="http://www.w3.org/2000/svg"><defs>'
+               b'<path id="Custom-20" d="M 0 0 L 10 10"/>'
+               b'<path id="invalid-outline" d=""/></defs></svg>')
+        self.assertEqual(_svg_for_qt(raw), raw)
 
     def test_wheel_anchor_and_drag(self):
         point = QPoint(600, 150)
@@ -497,8 +600,47 @@ class DnnPlotViewTests(unittest.TestCase):
         self.canvas.zoom_by(.0001)
         self.assertEqual(self.canvas._zoom, .5)
         self.view.clear()
+        self.assertFalse(self.canvas._item.isVisible(), "The previous result must disappear before a new run")
+        self.assertFalse(any(button.isEnabled() for button in self.view._tool_buttons))
+        self.assertEqual(self.view._zoom_label.text(), "100%")
         self.view.load(self.path)
         self.assertEqual(self.canvas._zoom, 1.)
+        self.assertTrue(self.canvas._item.isVisible())
+        self.assertTrue(all(button.isEnabled() for button in self.view._tool_buttons))
+
+    def test_mpc_tabs_preserve_zoom_and_select_export(self):
+        from process_control_dnn_mpc import ProcessControlDnnMpcWidget
+        defaults = dict(output_dir=self.temp.name, model_path=str(self.path.with_suffix('.npz')),
+                        sim_time=.2, prediction_horizon=3)
+        with patch('process_control_dnn_mpc.mpc_defaults', return_value=defaults):
+            widget = ProcessControlDnnMpcWidget(page_mode='mpc')
+            try:
+                widget.resize(1400, 850)
+                widget.show()
+                self.app.processEvents()
+                widget._outputs = {key: str(self.path) for _, _, key in config.MPC_PLOT_GROUPS}
+                widget._refresh_image()
+                widget._image.canvas.zoom_by(1.2)
+                for index, (stem, _, key) in enumerate(config.MPC_PLOT_GROUPS):
+                    widget._plot_tabs.setCurrentIndex(index)
+                    self.app.processEvents()
+                    self.assertTrue(widget._images[key].isVisible())
+                    self.assertEqual(widget._selected_plot_file('dnn_mpc.svg'), stem+'.svg')
+                    self.assertEqual(widget._selected_plot_file('dnn_mpc.pdf'), stem+'.pdf')
+                    self.assertEqual(widget._selected_plot_file('dnn_mpc_results.zip'), 'dnn_mpc_results.zip')
+                widget._plot_tabs.setCurrentIndex(0)
+                self.app.processEvents()
+                self.assertAlmostEqual(widget._image.canvas._zoom, 1.2)
+                widget._task_status.set_status('succeeded', '执行完成', 100)
+                widget._clear_result()
+                self.assertEqual(widget._task_status.property('state'), 'idle')
+                self.assertEqual(widget._progress_bar.value(), 0)
+                self.assertTrue(widget._image.isVisible())
+                self.assertTrue(all(not image.canvas._item.isVisible() for image in widget._images.values()))
+                self.assertTrue(all(not button.isEnabled() for image in widget._images.values()
+                                    for button in image._tool_buttons))
+            finally:
+                widget.close()
 
 if __name__ == "__main__":
     unittest.main()

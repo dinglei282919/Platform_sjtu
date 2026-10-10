@@ -19,6 +19,7 @@ ARTIFACTS = {
     "training": {"training_rmse.svg", "training_rmse.pdf", "trained_model.npz",
                  "training_history.csv", "training_metrics.json", "training_summary.json", "training_dataset.mat"},
     "mpc": {"dnn_mpc.svg", "dnn_mpc.pdf", "simulation.npz", "trajectory.csv",
+            "mpc_states.svg", "mpc_states.pdf", "mpc_control.svg", "mpc_control.pdf",
             "control_sequences.csv", "simulation_metrics.json", "mpc_validation_summary.json",
             "dnn_mpc_results.zip", "run.json"},
 }
@@ -237,6 +238,17 @@ def _simulation(config, directory, outputs, progress, log):
     preview_states, preview_controls = [], []
     last_preview = None
 
+    def publish_plots(data, *, final=False):
+        for name, _, key in settings.MPC_PLOT_GROUPS:
+            figure = simulation_figure(data, view=name)
+            try:
+                atomic_write(directory / f"{name}.svg", vector_bytes(figure))
+                if final:
+                    atomic_write(directory / f"{name}.pdf", vector_bytes(figure, "pdf"))
+                outputs[key] = str(directory / f"{name}.svg")
+            finally:
+                figure.clear()
+
     def on_step(completed, total, state, control):
         nonlocal last_preview
         preview_states.append(state)
@@ -245,8 +257,7 @@ def _simulation(config, directory, outputs, progress, log):
             preview = dict(time=(np.arange(completed)+1)*.02, control_time=np.arange(completed)*.02,
                            states=np.asarray(preview_states), controls=np.asarray(preview_controls),
                            actual_duration=total*.02)
-            atomic_write(directory / "dnn_mpc.svg", vector_bytes(simulation_figure(preview)))
-            outputs["simulation_figure"] = str(directory / "dnn_mpc.svg")
+            publish_plots(preview)
             last_preview = time.monotonic()
         progress(round(95*completed/total, 1),
                  f"仿真 {completed}/{total} 步；已计算 {completed*.02:.2f}/{total*.02:.2f} s")
@@ -264,9 +275,7 @@ def _simulation(config, directory, outputs, progress, log):
                    total_cost=float(np.sum(stage_errors**2*q) + controller["R"]*np.sum(result["controls"]**2)
                                     + errors[-1] @ terminal @ errors[-1]),
                    solver_failures=failures, completed_steps=len(result["controls"]), actual_duration=result["actual_duration"])
-    figure = simulation_figure(result)
-    atomic_write(directory / "dnn_mpc.svg", vector_bytes(figure))
-    atomic_write(directory / "dnn_mpc.pdf", vector_bytes(figure, "pdf"))
+    publish_plots(result, final=True)
     arrays = BytesIO()
     np.savez_compressed(arrays, **{name: result[name] for name in ("time", "control_time", "states", "controls", "sequences")})
     atomic_write(directory / "simulation.npz", arrays.getvalue())
@@ -291,7 +300,8 @@ def _simulation(config, directory, outputs, progress, log):
     write_json(directory / "simulation_metrics.json", metrics)
     archive = BytesIO()
     with ZipFile(archive, "w", ZIP_DEFLATED) as bundle:
-        for name in ("trajectory.csv", "control_sequences.csv", "run.json", "simulation_metrics.json", "dnn_mpc.svg", "dnn_mpc.pdf"):
+        plot_files = tuple(f"{name}.{ext}" for name, _, _ in settings.MPC_PLOT_GROUPS for ext in ("svg", "pdf"))
+        for name in ("trajectory.csv", "control_sequences.csv", "run.json", "simulation_metrics.json", *plot_files):
             bundle.writestr(name, (directory / name).read_bytes())
     atomic_write(directory / "dnn_mpc_results.zip", archive.getvalue())
     outputs.update(simulation_figure=str(directory / "dnn_mpc.svg"), results_zip=str(directory / "dnn_mpc_results.zip"), model_path=str(model_path))

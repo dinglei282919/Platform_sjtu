@@ -72,13 +72,19 @@ function formatApiError(detail: unknown, status: number): string {
   return `请求失败（${status}）`
 }
 
+export class ApiError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message)
+  }
+}
+
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`/api${path}`, {
     headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
     ...init,
   })
   const body = await response.json().catch(() => ({}))
-  if (!response.ok) throw new Error(formatApiError(body.detail, response.status))
+  if (!response.ok) throw new ApiError(formatApiError(body.detail, response.status), response.status)
   return body as T
 }
 

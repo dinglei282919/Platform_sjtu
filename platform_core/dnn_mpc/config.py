@@ -3,28 +3,33 @@ from pathlib import Path
 import json
 import math
 import hashlib
+from platform_core.control_paths import CONTROL_OUTPUT_ROOT, module_output_dir
 
 ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_OUTPUT_DIR = ROOT / "dnn_mpc" / "python_output"
+# Stable shared location for the published model, task lock and latest-result pointers.
+DEFAULT_OUTPUT_DIR = CONTROL_OUTPUT_ROOT
 DEFAULT_DATASET = ROOT / "input_data" / "dnn_mpc" / "cartpole_dataset.mat"
 LATEST_TRAINING_STATE_PATH = DEFAULT_OUTPUT_DIR / "latest_training_state.json"
+MPC_PLOT_GROUPS = (("dnn_mpc", "总览", "simulation_figure"),
+                   ("mpc_states", "状态响应", "state_figure"),
+                   ("mpc_control", "控制输入", "control_figure"))
 
 
 def training_defaults():
-    return dict(output_dir=str(DEFAULT_OUTPUT_DIR),
+    return dict(output_dir=str(module_output_dir("training", root=DEFAULT_OUTPUT_DIR)),
                 model_path=str(DEFAULT_OUTPUT_DIR / "trained_model.npz"),
                 dataset_path=str(DEFAULT_DATASET), epochs=200, lr=0.001,
                 hidden_layers="64,64", sample_count=1000)
 
 
 def mpc_defaults():
-    result = dict(output_dir=str(DEFAULT_OUTPUT_DIR),
+    result = dict(output_dir=str(module_output_dir("mpc", root=DEFAULT_OUTPUT_DIR)),
                   model_path=str(DEFAULT_OUTPUT_DIR / "trained_model.npz"),
                   sim_time=5.0, prediction_horizon=10)
     try:
         state = json.loads(LATEST_TRAINING_STATE_PATH.read_text(encoding="utf-8"))
         if state.get("format_version") == 1 and Path(state["model_path"]).is_file():
-            result.update(model_path=state["model_path"], output_dir=state["output_dir"])
+            result.update(model_path=state["model_path"])
     except (OSError, ValueError, KeyError, TypeError):
         pass
     return result

@@ -1,7 +1,9 @@
 """Web adapter for the shared Python mpc implementation."""
-from platform_core.dnn_mpc.config import DEFAULT_OUTPUT_DIR, mpc_defaults
+from platform_core.dnn_mpc.config import mpc_defaults
 
-FIGURE_NAMES = ("dnn_mpc.svg",)
+from platform_core.dnn_mpc.config import MPC_PLOT_GROUPS
+
+FIGURE_NAMES = tuple(f"{name}.svg" for name, _, _ in MPC_PLOT_GROUPS)
 
 
 def default_config():

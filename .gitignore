@@ -27,5 +27,5 @@ web_runtime/
 .vscode/
 .serena/
 
-# Python DNN-MPC runs and model hand-off state
+# Risk-control outputs: training, MPC, FDI, replay, model and hand-off state
 dnn_mpc/python_output/

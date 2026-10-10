@@ -1,6 +1,7 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { api, post } from './api'
 import { DnnPlotViewer } from './DnnPlotViewer'
+import { ControlTaskStatus } from './ControlTaskStatus'
 
 type Mode = 'training' | 'mpc'
 type Form = { output_dir: string; model_path: string; dataset_path?: string; sample_count?: number; epochs?: number; lr?: number; hidden_layers?: string; sim_time?: number; prediction_horizon?: number }
@@ -8,6 +9,12 @@ type Payload = { json_path: string; model_path: string; image_revision: number; 
 type Task = { id: string; status: string; error?: string; logs: string[]; result?: Payload; progress?: { percent?: number; message?: string; revision?: number; image_revision?: number | null; outputs?: Record<string, string> } }
 type Session = { form: Form; taskId: string | null; manualModel: boolean }
 const sessions: Partial<Record<Mode, Session>> = {}
+const mpcPlots = [
+  ['dnn_mpc', '总览', 'simulation_figure', '四个状态偏差与控制输入的整体响应'],
+  ['mpc_states', '状态响应', 'state_figure', '位置、速度、角度与角速度相对参考值的偏差'],
+  ['mpc_control', '控制输入', 'control_figure', '控制力随仿真时间的变化'],
+] as const
+let lastMpcPlot: typeof mpcPlots[number][0] = 'dnn_mpc'
 const initial: Form = { output_dir: '', model_path: '' }
 const absolute = (value: string) => /^[A-Za-z]:[\\/]/.test(value.trim()) || /^\\\\/.test(value.trim()) || value.trim().startsWith('/')
 
@@ -36,6 +43,9 @@ export function DnnMpcPage({ mode }: { mode: Mode }) {
   const [submitting, setSubmitting] = useState(false)
   const [selecting, setSelecting] = useState(false)
   const [imageError, setImageError] = useState(false)
+  const [plotErrors, setPlotErrors] = useState<Record<string, boolean>>({})
+  const [activePlot, setActivePlot] = useState(lastMpcPlot)
+  const tabButtons = useRef<(HTMLButtonElement | null)[]>([])
   const training = mode === 'training'
   const running = submitting || (!!taskId && (!task || ['queued', 'running'].includes(task.status)))
   const payload = task?.result
@@ -83,7 +93,12 @@ export function DnnMpcPage({ mode }: { mode: Mode }) {
     void poll()
     return () => { active = false; clearTimeout(timer) }
   }, [taskId, training])
-  useEffect(() => { setImageError(false) }, [imageUrl])
+  useEffect(() => { setImageError(false); setPlotErrors({}) }, [imageUrl])
+
+  function selectPlot(index: number) {
+    lastMpcPlot = mpcPlots[index][0]
+    setActivePlot(lastMpcPlot)
+  }
 
   useEffect(() => {
     if (training || task?.status !== 'succeeded' || !payload) return
@@ -149,11 +164,11 @@ export function DnnMpcPage({ mode }: { mode: Mode }) {
   const pathField = (label: string, key: 'output_dir' | 'model_path' | 'dataset_path') => <label className="training-path-field">
     <span>{label}</span><div className="training-path-control"><input aria-label={label} value={form[key] ?? ''} placeholder={key === 'dataset_path' ? '留空则按原状态方程生成数据集' : undefined} onChange={e => update(key, e.target.value)} disabled={running || !ready}/><button type="button" onClick={() => void choose(key)} disabled={running || selecting || !ready}>选择</button>{key === 'dataset_path' && <button type="button" onClick={() => update(key, '')} disabled={running || selecting || !ready}>清空</button>}</div>
   </label>
-  const downloads = training ? [['SVG', 'training_rmse.svg'], ['PDF', 'training_rmse.pdf'], ['模型 NPZ', 'trained_model.npz'], ['训练记录', 'training_history.csv'], ['数据集 MAT', 'training_dataset.mat']] : [['SVG', 'dnn_mpc.svg'], ['PDF', 'dnn_mpc.pdf'], ['结果 ZIP', 'dnn_mpc_results.zip']]
-  return <main className="training-page dnn-python-page" aria-label={training ? '控制模型训练评估' : '优化控制仿真验证'}>
+  const downloads = training ? [['SVG', 'training_rmse.svg'], ['PDF', 'training_rmse.pdf'], ['模型 NPZ', 'trained_model.npz'], ['训练记录', 'training_history.csv'], ['数据集 MAT', 'training_dataset.mat']] : [['当前图 SVG', `${activePlot}.svg`], ['当前图 PDF', `${activePlot}.pdf`], ['结果 ZIP', 'dnn_mpc_results.zip']]
+  return <main className="training-page dnn-python-page control-module" aria-label={training ? '控制模型训练评估' : '优化控制仿真验证'}>
     <div className="training-layout">
       <section className="training-panel training-config-panel">
-        <h3>{training ? '控制模型训练评估' : '优化控制仿真验证'}</h3>
+        <h3>{training ? '训练设置' : '仿真设置'}</h3>
         <form className="training-config-scroll" onSubmit={e => void submit(e)}>
           <section className="training-subpanel"><h4>路径设置</h4>
             {pathField('输出目录', 'output_dir')}{pathField('模型文件', 'model_path')}
@@ -197,16 +212,49 @@ export function DnnMpcPage({ mode }: { mode: Mode }) {
           <section className="training-subpanel"><h4>结果文件</h4><div className="training-result-path">{payload?.json_path ?? '运行后显示本次结果路径。'}</div></section>
         </form>
       </section>
-      <section className="training-panel training-result-panel">
-        <h3>{training ? '训练 / 验证 RMSE' : '状态偏差与控制输入'}</h3>
-        <div className="training-status-panel" aria-live="polite"><span>{task?.status === 'failed' ? '执行失败' : task?.status === 'succeeded' ? `执行完成，用时 ${payload?.result.elapsed_seconds.toFixed(2)} 秒` : task?.progress?.message ?? (running ? '等待执行' : '待执行')}</span><progress value={percent} max={100} aria-label="任务进度"/><span>{percent}%</span></div>
-        <DnnPlotViewer key={`${mode}:${taskId}`} src={hasImage && !imageError ? imageUrl : undefined}
-          alt={training ? '训练和验证 RMSE 曲线' : '四个状态偏差（2×2）与底部控制输入曲线'}
-          placeholder={running ? '计算中，等待图像更新…' : '运行后显示本次计算结果'} onError={() => setImageError(true)}/>
-        {metrics && <p className="dnn-metrics">{training ? `测试 RMSE（原始量纲综合）：${metrics.test_rmse.toFixed(6)}；最佳轮次：${metrics.best_epoch}` : `跟踪 RMSE：${metrics.tracking_rmse.toFixed(4)}；最大 |u|：${metrics.max_abs_control.toFixed(2)} N；输入越界：${metrics.input_violations}；累计代价：${metrics.total_cost.toFixed(2)}`}</p>}
-        <p className="dnn-caption">{training ? '曲线为标准化 RMSE；参数修改后需重新训练。' : 'x₁：位置(m)，x₂：速度(m/s)，x₃=θ−π(rad)，x₄：角速度(rad/s)，u：控制力(N)。图示相对参考值的偏差；综合 RMSE 混合量纲，累计代价不代表实际能耗。'}</p>
-        {payload?.result.warning && <p role="alert">{payload.result.warning}</p>}
-        {task?.status === 'succeeded' && <div className="dnn-downloads">{downloads.map(([label, name]) => <a key={name} href={`/api/dnn/${mode}/tasks/${taskId}/files/${name}`} download>下载 {label}</a>)}</div>}
+      <section className="training-results" aria-label={training ? '训练结果' : 'MPC 仿真结果'}>
+        <section className="training-panel training-result-panel">
+          <h3>结果图示</h3>
+          <ControlTaskStatus state={running ? 'running' : task?.status === 'succeeded' ? 'succeeded' : task?.status === 'failed' ? 'failed' : 'idle'}
+            message={task?.status === 'failed' ? '执行失败，请查看错误详情' : task?.status === 'succeeded' ? `执行完成 · 用时 ${payload?.result.elapsed_seconds.toFixed(2)} 秒` : task?.progress?.message ?? (running ? '等待执行' : '设置参数后开始运行')}
+            percent={percent} label={training ? '训练进度' : 'MPC 仿真进度'}/>
+          {training ? <>
+            <header className="dnn-output-heading"><h4>训练 / 验证 RMSE</h4><p className="muted">训练集与验证集的标准化误差随轮次变化</p></header>
+            <DnnPlotViewer key={`${mode}:${taskId}`} src={hasImage && !imageError ? imageUrl : undefined}
+              alt="训练和验证 RMSE 曲线"
+              placeholder={running ? '计算中，等待图像更新…' : '运行后显示本次计算结果'} onError={() => setImageError(true)}/>
+            </>
+            : <div className="mpc-output-plots">
+              <div className="mpc-plot-tabs" role="tablist" aria-label="MPC 输出图像">{mpcPlots.map(([name, title], index) =>
+                <button type="button" key={name} role="tab" id={`mpc-tab-${name}`} aria-controls={`mpc-panel-${name}`}
+                  aria-selected={activePlot === name} tabIndex={activePlot === name ? 0 : -1}
+                  ref={node => { tabButtons.current[index] = node }} onClick={() => selectPlot(index)}
+                  onKeyDown={event => {
+                    let next: number
+                    if (event.key === 'ArrowRight') next = (index + 1) % mpcPlots.length
+                    else if (event.key === 'ArrowLeft') next = (index + mpcPlots.length - 1) % mpcPlots.length
+                    else if (event.key === 'Home') next = 0
+                    else if (event.key === 'End') next = mpcPlots.length - 1
+                    else return
+                    event.preventDefault(); selectPlot(next); tabButtons.current[next]?.focus()
+                  }}>{title}</button>)}</div>
+              {mpcPlots.map(([name, title, outputKey, description]) => <section key={name} className="mpc-plot-panel" role="tabpanel"
+                id={`mpc-panel-${name}`} aria-labelledby={`mpc-tab-${name}`} hidden={activePlot !== name}>
+                <header className="dnn-output-heading"><h4>{title}</h4><p className="muted">{description}</p></header>
+                <DnnPlotViewer key={`${taskId}:${name}`}
+                  src={(!!payload || !!task?.progress?.outputs?.[outputKey]) && !plotErrors[name] ? imageUrl.replace(imageName, `${name}.svg`) : undefined}
+                  alt={`${title}曲线`} placeholder={plotErrors[name] ? '图片加载失败，请重试。' : running ? '计算中，等待图像更新…' : '运行后显示本次计算结果'}
+                  onError={() => setPlotErrors(previous => ({ ...previous, [name]: true }))}/>
+                {plotErrors[name] && <button type="button" onClick={() => setPlotErrors(previous => ({ ...previous, [name]: false }))}>重新加载图片</button>}
+              </section>)}
+            </div>}
+          <div className="dnn-result-summary">
+            {metrics && <p className="dnn-metrics">{training ? `测试 RMSE（原始量纲综合）：${metrics.test_rmse.toFixed(6)}；最佳轮次：${metrics.best_epoch}` : `跟踪 RMSE：${metrics.tracking_rmse.toFixed(4)}；最大 |u|：${metrics.max_abs_control.toFixed(2)} N；输入越界：${metrics.input_violations}；累计代价：${metrics.total_cost.toFixed(2)}`}</p>}
+            <p className="dnn-caption">{training ? '曲线为标准化 RMSE；参数修改后需重新训练。' : 'x₁：位置(m)，x₂：速度(m/s)，x₃=θ−π(rad)，x₄：角速度(rad/s)，u：控制力(N)。图示相对参考值的偏差；综合 RMSE 混合量纲，累计代价不代表实际能耗。'}</p>
+            {payload?.result.warning && <p role="alert">{payload.result.warning}</p>}
+            {task?.status === 'succeeded' && <div className="dnn-downloads">{downloads.map(([label, name]) => <a key={name} href={`/api/dnn/${mode}/tasks/${taskId}/files/${name}`} download>下载 {label}</a>)}</div>}
+          </div>
+        </section>
         {task?.logs?.length ? <details className="dnn-logs"><summary>运行日志</summary><pre>{task.logs.join('\n')}</pre></details> : null}
       </section>
     </div>

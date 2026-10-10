@@ -12,8 +12,6 @@ CS（桌面端）使用 PySide6，主入口链路为：
 Framework.py -> main_interface.py -> 各功能 QWidget 页面
 ```
 
-当前桌面端页面源码位于项目根目录，主要包括：
-
 | 功能 | CS 页面文件 |
 | --- | --- |
 | 基于移动目标防御的异常检测 | `anomaly_detection.py` |
@@ -21,6 +19,8 @@ Framework.py -> main_interface.py -> 各功能 QWidget 页面
 | 多评估准则融合的风险学习分析 | `auto_score.py` |
 | 风险场景动态匹配与适配方案生成算法 | `cdq_risk_matching.py` |
 | 控制模型训练评估、优化控制仿真验证 | `process_control_dnn_mpc.py` |
+| 虚假数据注入下的自适应控制 | `fdi_page.py` |
+| 重放攻击下的自适应控制 | `replay_page.py` |
 | SDG-HAZOP | `sdg_hazop.py` |
 | 基于 GSPN-MC 模型的动态化 SIL 验证方法 | `sil_validation.py` |
 
@@ -38,6 +38,7 @@ BS（浏览器/服务端）由 React 前端和 FastAPI 后端组成：
 | 层 | 目录/文件 | 技术 |
 | --- | --- | --- |
 | 页面和导航 | `web_frontend/src/App.tsx` | React + TypeScript |
+| 风险管控页面、组件与样式 | `web_frontend/src/`、`styles.css` | React + TypeScript + CSS |
 | 页面样式 | `web_frontend/src/styles.css` | CSS |
 | 前端构建和开发服务器 | `web_frontend/package.json`、`web_frontend/vite.config.ts` | Vite |
 | API、请求模型、任务和结果接口 | `web_backend/app.py` | FastAPI |
@@ -87,8 +88,10 @@ BS 启动入口是：
 | 潜在安全威胁识别与自动分类 | `error_classification.py` | `ClassificationPage` | `web_backend/services/classification.py`；`/api/classification/*` | `input_data/error_classification_*.csv` |
 | 多评估准则融合的风险学习分析 | `auto_score.py` | `ScorePage` | `platform_core/scoring.py`、`web_backend/services/scoring.py`；`/api/score/*` | 公共评分逻辑 |
 | 风险场景动态匹配与适配方案生成算法 | `cdq_risk_matching.py` | `CdqPageReplica` | `web_backend/services/cdq.py`；`/api/cdq/*` | `input_data/cdq_data.xlsx` |
-| 控制模型训练评估 | `process_control_dnn_mpc.py` 的 `page_mode="training"` | `TrainingPage` | `web_backend/services/training.py`；`/api/training/*` | `dnnmpcpkg`、DNN 训练输出 |
-| 优化控制仿真验证 | `process_control_dnn_mpc.py` 的 `page_mode="mpc"` | `MpcPage` | `web_backend/services/mpc.py`；`/api/mpc/*` | `dnnmpcpkg`、MPC 输出 |
+| 控制模型训练评估 | `process_control_dnn_mpc.py` 的 `page_mode="training"` | `DnnMpcPage.tsx` | `web_backend/services/training.py`；`/api/training/*` | `platform_core/dnn_mpc`、DNN 训练输出 |
+| 优化控制仿真验证 | `process_control_dnn_mpc.py` 的 `page_mode="mpc"` | `DnnMpcPage.tsx` | `web_backend/services/mpc.py`；`/api/mpc/*` | `platform_core/dnn_mpc`、MPC 输出 |
+| 虚假数据注入下的自适应控制 | `fdi_page.py` | `FdiPage.tsx` | `web_backend/services/fdi.py`；`/api/fdi/*` | `platform_core/fdi` |
+| 重放攻击下的自适应控制 | `replay_page.py` | `ReplayPage.tsx` | `web_backend/services/replay.py`；`/api/replay/*` | `platform_core/replay` |
 | SDG-HAZOP | `sdg_hazop.py` | `SdgPage` | `web_backend/services/sdg.py`；`/api/sdg/*` | SDG 示例/分析数据 |
 | 基于 GSPN-MC 模型的动态化 SIL 验证方法 | `sil_validation.py` | `SilPage` | `web_backend/services/sil.py`；`/api/sil/*` | GSPN-MC 仿真参数和结果 |
 
@@ -287,7 +290,7 @@ python -c "import dnnmpcpkg; h=dnnmpcpkg.initialize(); print('dnnmpcpkg ok'); h.
 
 ### 5.1 新增 CS 模块
 
-1. 在项目根目录新建继承 `QWidget` 的页面文件，例如 `new_module.py`。
+1. 沿用现有模块结构，在项目根目录新建继承 `QWidget` 的页面；优先复用已有公共控件和文件，不为单个模块另建前端目录。
 2. 在 `main_interface.py` 中增加页面导入（推荐在懒加载分支内导入）、页面容器成员和统一隐藏逻辑。
 3. 在导航菜单列表中增加一级菜单或子模块名称。
 4. 在 `_on_submodule_clicked()` 中增加与菜单名称完全一致的显示分支。
@@ -310,7 +313,7 @@ python -c "import dnnmpcpkg; h=dnnmpcpkg.initialize(); print('dnnmpcpkg ok'); h.
 2. 新建页面组件，沿用现有 `Page`、`panel`、结果图、状态区和错误提示结构。
 3. 在 `web_frontend/src/styles.css` 中补充样式，重点检查父级高度、`overflow`、图片完整显示、左右栏对齐和窄窗口响应式布局。
 4. 需要后端计算时，在 `web_backend/services/` 中新建适配器；不要在 React 组件中复制 Runtime 或长时间算法逻辑。
-5. 在 `web_backend/app.py` 中增加必要的 Pydantic 请求模型、默认配置接口、任务提交接口、任务查询/进度接口，以及图片、JSON 或其他结果接口。
+5. 请求模型、默认配置、任务提交和结果接口统一放在 `web_backend/app.py`，服务适配放在 `web_backend/services/`，复用公共 TaskManager。先考虑现有文件和目录能否承载，避免为单个模块另建 routes 层。
 6. 长时间训练、仿真和 Runtime 调用必须使用 `TaskManager`，不能阻塞 FastAPI 请求线程。
 7. 进度文件、结果文件和图片只能通过任务 ID 或受控输出目录访问，避免任意路径读取。
 8. 如果 BS 需要复用 CS 的算法逻辑，应抽取无 UI 依赖的部分到 `platform_core` 或独立 service；不要导入 PySide6 页面。
