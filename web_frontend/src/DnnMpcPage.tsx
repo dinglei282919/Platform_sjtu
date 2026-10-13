@@ -1,14 +1,14 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
-import { api, post } from './api'
+import { ApiError, api, post } from './api'
 import { DnnPlotViewer } from './DnnPlotViewer'
 import { ControlTaskStatus } from './ControlTaskStatus'
+import { readSession, writeSession } from './taskSession'
 
 type Mode = 'training' | 'mpc'
 type Form = { output_dir: string; model_path: string; dataset_path?: string; sample_count?: number; epochs?: number; lr?: number; hidden_layers?: string; sim_time?: number; prediction_horizon?: number }
 type Payload = { json_path: string; model_path: string; image_revision: number; result: { model_sha256: string; metrics: Record<string, number>; warning?: string; elapsed_seconds: number } }
 type Task = { id: string; status: string; error?: string; logs: string[]; result?: Payload; progress?: { percent?: number; message?: string; revision?: number; image_revision?: number | null; outputs?: Record<string, string> } }
 type Session = { form: Form; taskId: string | null; manualModel: boolean }
-const sessions: Partial<Record<Mode, Session>> = {}
 const mpcPlots = [
   ['dnn_mpc', '总览', 'simulation_figure', '四个状态偏差与控制输入的整体响应'],
   ['mpc_states', '状态响应', 'state_figure', '位置、速度、角度与角速度相对参考值的偏差'],
@@ -16,6 +16,13 @@ const mpcPlots = [
 ] as const
 let lastMpcPlot: typeof mpcPlots[number][0] = 'dnn_mpc'
 const initial: Form = { output_dir: '', model_path: '' }
+const sessions: Partial<Record<Mode, Session>> = {
+  training: readSession<Session>('training.session', { form: initial, taskId: null, manualModel: false }),
+  mpc: readSession<Session>('mpc.session', { form: initial, taskId: null, manualModel: false }),
+}
+for (const mode of ['training', 'mpc'] as const) {
+  if (!sessions[mode]?.form.output_dir || !sessions[mode]?.form.model_path) delete sessions[mode]
+}
 const absolute = (value: string) => /^[A-Za-z]:[\\/]/.test(value.trim()) || /^\\\\/.test(value.trim()) || value.trim().startsWith('/')
 
 function validate(mode: Mode, form: Form): string | null {
@@ -56,6 +63,10 @@ export function DnnMpcPage({ mode }: { mode: Mode }) {
   const imageUrl = `/api/${mode}/tasks/${taskId}/images/${imageName}?v=${task?.progress?.image_revision ?? task?.progress?.revision ?? payload?.image_revision ?? 0}`
 
   useEffect(() => {
+    if (sessions[mode]) writeSession(`${mode}.session`, sessions[mode])
+  }, [form, taskId, mode])
+
+  useEffect(() => {
     let active = true
     void api<Form>(`/${mode}/defaults`).then(defaults => {
       if (!active) return
@@ -83,16 +94,25 @@ export function DnnMpcPage({ mode }: { mode: Mode }) {
             (!sessions.mpc.manualModel || sessions.mpc.form.model_path === value.result?.model_path)) {
           sessions.mpc.taskId = null
           if (!sessions.mpc.manualModel) sessions.mpc.form.model_path = value.result!.model_path
+          writeSession('mpc.session', sessions.mpc)
         }
-        if (['succeeded', 'failed'].includes(value.status)) return
+        if (['succeeded', 'failed', 'cancelled'].includes(value.status)) return
       } catch (e) {
-        if (active) setError(`任务状态读取失败：${e instanceof Error ? e.message : String(e)}`)
+        if (!active) return
+        if (e instanceof ApiError && e.status === 404) {
+          setTask(null)
+          setTaskId(null)
+          if (sessions[mode]?.taskId === taskId) sessions[mode]!.taskId = null
+          setError('任务不存在，可能服务已重启或任务已被清理，请重新运行。')
+          return
+        }
+        setError(`任务状态读取失败，将自动重试：${e instanceof Error ? e.message : String(e)}`)
       }
       if (active) timer = setTimeout(poll, training ? 1000 : 500)
     }
     void poll()
     return () => { active = false; clearTimeout(timer) }
-  }, [taskId, training])
+  }, [taskId, training, mode])
   useEffect(() => { setImageError(false); setPlotErrors({}) }, [imageUrl])
 
   function selectPlot(index: number) {
@@ -215,8 +235,8 @@ export function DnnMpcPage({ mode }: { mode: Mode }) {
       <section className="training-results" aria-label={training ? '训练结果' : 'MPC 仿真结果'}>
         <section className="training-panel training-result-panel">
           <h3>结果图示</h3>
-          <ControlTaskStatus state={running ? 'running' : task?.status === 'succeeded' ? 'succeeded' : task?.status === 'failed' ? 'failed' : 'idle'}
-            message={task?.status === 'failed' ? '执行失败，请查看错误详情' : task?.status === 'succeeded' ? `执行完成 · 用时 ${payload?.result.elapsed_seconds.toFixed(2)} 秒` : task?.progress?.message ?? (running ? '等待执行' : '设置参数后开始运行')}
+          <ControlTaskStatus state={running ? 'running' : task?.status === 'succeeded' ? 'succeeded' : task?.status === 'failed' ? 'failed' : task?.status === 'cancelled' ? 'cancelled' : 'idle'}
+            message={task?.status === 'failed' ? '执行失败，请查看错误详情' : task?.status === 'cancelled' ? '任务已取消，可重新运行' : task?.status === 'succeeded' ? `执行完成 · 用时 ${payload?.result.elapsed_seconds.toFixed(2)} 秒` : task?.progress?.message ?? (running ? '等待执行' : '设置参数后开始运行')}
             percent={percent} label={training ? '训练进度' : 'MPC 仿真进度'}/>
           {training ? <>
             <header className="dnn-output-heading"><h4>训练 / 验证 RMSE</h4><p className="muted">训练集与验证集的标准化误差随轮次变化</p></header>

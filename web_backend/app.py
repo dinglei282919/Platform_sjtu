@@ -21,7 +21,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 FRONTEND_DIST = ROOT / "web_frontend" / "dist"
 
-from web_backend.task_manager import TaskManager
+from web_backend.task_manager import TaskManager, TaskStateUnavailable
 from web_backend.services import anomaly, cdq, classification, fdi, replay, mpc, path_picker, scoring, sdg, sil, training
 
 
@@ -228,6 +228,11 @@ def _json_safe(value: Any) -> Any:
 @app.exception_handler(RequestValidationError)
 async def request_validation_exception_handler(_, exc: RequestValidationError) -> JSONResponse:
     return JSONResponse(status_code=422, content={"detail": _json_safe(exc.errors())})
+
+
+@app.exception_handler(TaskStateUnavailable)
+async def task_state_exception_handler(_, exc: TaskStateUnavailable) -> JSONResponse:
+    return JSONResponse(status_code=503, content={"detail": str(exc)})
 
 
 def _bad_request(exc: Exception) -> HTTPException:
@@ -437,7 +442,7 @@ def dnn_artifact(mode: Literal["training", "mpc"], task_id: str, file_name: str)
     from platform_core.dnn_mpc.runner import artifact_path
     directory = task_manager.artifact_dir(task_id)
     if directory is None:
-        raise HTTPException(status_code=404, detail="任务不存在或本机服务已重启")
+        raise HTTPException(status_code=404, detail="任务不存在或任务记录已被移除")
     try:
         path = artifact_path(mode, file_name, directory)
     except FileNotFoundError as exc:
@@ -474,7 +479,7 @@ def create_classification_task(request: ClassificationTaskRequest) -> dict[str, 
 def get_task(task_id: str) -> dict[str, Any]:
     task = task_manager.get(task_id)
     if task is None:
-        raise HTTPException(status_code=404, detail="任务不存在或本机服务已重启")
+        raise HTTPException(status_code=404, detail="任务不存在或任务记录已被移除")
     return task
 
 

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { ApiError, api, post } from './api'
 import { DnnPlotViewer } from './DnnPlotViewer'
 import { ControlTaskStatus } from './ControlTaskStatus'
+import { readSession, writeSession } from './taskSession'
 
 type Result = { module: 'replay'; config: { sim_time: number }; elapsed_seconds: number; tracking_rmse: number; disturbance_rmse: number }
 type Task = { id: string; status: string; error?: string; logs: string[]; cancellable?: boolean; cancel_requested?: boolean; progress?: { percent?: number; message?: string; image_revision?: number; outputs?: Record<string, string> }; result?: Result }
@@ -13,7 +14,8 @@ const groups = [
 ] as const
 // Preserve the running task when switching to another module and back.
 type PlotName = typeof groups[number][0]
-const session: { duration: string; taskId: string | null; activePlot: PlotName } = { duration: '50', taskId: null, activePlot: 'tracking' }
+const session = readSession<{ duration: string; taskId: string | null; activePlot: PlotName }>('replay.session', { duration: '50', taskId: null, activePlot: 'tracking' })
+if (!groups.some(([name]) => name === session.activePlot)) session.activePlot = 'tracking'
 
 export function ReplayPage() {
   const [duration, setDuration] = useState(session.duration)
@@ -25,6 +27,7 @@ export function ReplayPage() {
   const [pollingError, setPollingError] = useState('')
   const [imageErrors, setImageErrors] = useState<Record<string, boolean>>({})
   const [activePlot, setActivePlot] = useState(session.activePlot)
+  useEffect(() => { writeSession('replay.session', { duration, taskId, activePlot }) }, [duration, taskId, activePlot])
   const tabButtons = useRef<(HTMLButtonElement | null)[]>([])
   const running = submitting || (!!taskId && (!task || ['queued', 'running'].includes(task.status)))
   const result = task?.status === 'succeeded' ? task.result : undefined

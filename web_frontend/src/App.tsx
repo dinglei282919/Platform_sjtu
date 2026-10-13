@@ -4,6 +4,8 @@ import { api, post } from './api'
 import { DnnMpcPage } from './DnnMpcPage'
 import { FdiPage } from './FdiPage'
 import { ReplayPage } from './ReplayPage'
+import { useTask } from './useTask'
+import { useStoredState } from './taskSession'
 
 type ModuleId = 'governance' | 'score' | 'classification' | 'cdq' | 'sdg' | 'sil' | 'anomaly' | 'training' | 'dnn-mpc' | 'fdi' | 'replay'
 type TaskProgress = { percent?: number; message?: string; module?: string; timestamp?: string; revision?: number; outputs?: Record<string, unknown> }
@@ -260,27 +262,6 @@ function Chart({ option, height = 330, fill = false, className = '', onClick, on
   return <div className={`chart ${className}`} ref={element} style={fill ? undefined : { height }} />
 }
 
-function useTask(taskId: string | null) {
-  const [task, setTask] = useState<Task | null>(null)
-  useEffect(() => {
-    setTask(null)
-    if (!taskId) return
-    let active = true
-    const load = async () => {
-      try {
-        const next = await api<Task>(`/tasks/${taskId}`)
-        if (active) setTask(next)
-      } catch (error) {
-        if (active) setTask({ id: taskId, title: '任务', status: 'failed', logs: [], error: error instanceof Error ? error.message : String(error) })
-      }
-    }
-    void load()
-    const handle = window.setInterval(() => void load(), 1000)
-    return () => { active = false; window.clearInterval(handle) }
-  }, [taskId])
-  return task
-}
-
 function TaskPanel({ task }: { task: Task | null }) {
   if (!task) return null
   return <section className="task-panel">
@@ -306,14 +287,15 @@ function ErrorDialog({ title, message, onClose }: { title: string; message: stri
 }
 
 function AnomalyPage() {
-  const [form, setForm] = useState<AnomalyForm>({
+  const [form, setForm] = useStoredState<AnomalyForm>('anomaly.form', {
     mcr_root: 'E:\\MATLAB2024',
     attack_min_pct: '5',
     attack_max_pct: '10',
     measurement_noise_pct: '2',
     process_disturbance_pct: '5',
   })
-  const [taskId, setTaskId] = useState<string | null>(null)
+  const [taskId, setTaskId] = useStoredState<string | null>('anomaly.task', null)
+  const [submitting, setSubmitting] = useState(false)
   const [imageMode, setImageMode] = useState<'topology' | 'detection'>('topology')
   const [imageRevision, setImageRevision] = useState(0)
   const [imageError, setImageError] = useState(false)
@@ -324,12 +306,12 @@ function AnomalyPage() {
   const runButtonRef = useRef<HTMLButtonElement>(null)
   const dialogReturnFocusRef = useRef<HTMLElement | null>(null)
   const notifiedTaskFailures = useRef(new Set<string>())
-  const task = useTask(taskId)
+  const { task, pollingError } = useTask<Task>(taskId, setTaskId)
   const result = task?.result as Record<string, any> | undefined
-  const running = task?.status === 'queued' || task?.status === 'running'
+  const running = submitting || (!!taskId && (!task || ['queued', 'running'].includes(task.status)))
   const pageError = validationError || error || task?.error || ''
-  const statusText = pageError || task?.status === 'failed' ? '执行失败' : task?.status === 'succeeded' ? '执行完成' : running ? '运行中' : '待执行'
-  const statusEnglish = pageError || task?.status === 'failed' ? 'Failed' : task?.status === 'succeeded' ? 'Completed' : running ? 'Running' : 'Idle'
+  const statusText = pageError || task?.status === 'failed' ? '执行失败' : task?.status === 'succeeded' ? '执行完成' : task?.status === 'cancelled' ? '已取消' : running ? '运行中' : '待执行'
+  const statusEnglish = pageError || task?.status === 'failed' ? 'Failed' : task?.status === 'succeeded' ? 'Completed' : task?.status === 'cancelled' ? 'Cancelled' : running ? 'Running' : 'Idle'
   const imageName = imageMode === 'detection' ? 'detection_probability.png' : 'topology.png'
   const imageTitle = imageMode === 'detection' ? '异常检测概率图 (detection_probability.png)' : '网络拓扑图 (topology.png)'
   const imageUrl = `/api/anomaly/images/${imageName}?v=${encodeURIComponent(String(result?.image_revision ?? imageRevision))}`
@@ -371,6 +353,7 @@ function AnomalyPage() {
     setValidationError(validateAnomalyForm(form)?.message ?? '')
   }
   const submit = async () => {
+    if (running) return
     const formError = validateAnomalyForm(form)
     if (formError) {
       setValidationError(formError.message)
@@ -378,6 +361,7 @@ function AnomalyPage() {
       return
     }
     try {
+      setSubmitting(true)
       setValidationError('')
       setError('')
       const nextTask = await post<{ task_id: string }>('/anomaly/tasks', {
@@ -392,7 +376,7 @@ function AnomalyPage() {
       const message = e instanceof Error ? e.message : String(e)
       setError(message)
       showErrorDialog('异常检测执行失败', message, runButtonRef.current)
-    }
+    } finally { setSubmitting(false) }
   }
   const exportResult = () => {
     if (!result) return
@@ -435,6 +419,7 @@ function AnomalyPage() {
     </div>
     <div className="anomaly-status-bar"><span>状态：{statusText}</span><span>Status: {statusEnglish}</span></div>
     {pageError && <ErrorBox text={pageError} />}
+    {pollingError && <ErrorBox text={pollingError} />}
     {dialog && <ErrorDialog title={dialog.title} message={dialog.message} onClose={closeErrorDialog} />}
   </Page>
 }
@@ -1162,15 +1147,16 @@ function buildSilReport(result: Record<string, any>) {
 }
 
 function SilPage({ recommendation }: { recommendation: Recommendation | null }) {
-  const [form, setForm] = useState<SilForm>(SIL_DEFAULT_FORM)
+  const [form, setForm] = useStoredState<SilForm>('sil.form', SIL_DEFAULT_FORM)
   const [lambdaSource, setLambdaSource] = useState<'direct' | 'estimate'>('direct')
   const [lambdaEstimate, setLambdaEstimate] = useState('')
-  const [taskId, setTaskId] = useState<string | null>(null)
+  const [taskId, setTaskId] = useStoredState<string | null>('sil.task', null)
+  const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
   const [dialog, setDialog] = useState<ErrorDialogState | null>(null)
   const runButtonRef = useRef<HTMLButtonElement>(null)
   const dialogReturnFocusRef = useRef<HTMLElement | null>(null)
-  const task = useTask(taskId)
+  const { task, pollingError } = useTask<Task>(taskId, setTaskId)
   const showErrorDialog = useCallback((title: string, message: string, returnFocus: HTMLElement | null) => {
     dialogReturnFocusRef.current = returnFocus
     setDialog({ title, message })
@@ -1186,7 +1172,7 @@ function SilPage({ recommendation }: { recommendation: Recommendation | null }) 
     showErrorDialog('参数边界错误', issue.message, document.getElementById(issue.fieldId))
   }, [showErrorDialog])
   useEffect(() => {
-    void api<Record<string, any>>('/sil/defaults').then(data => setForm(previous => ({
+    void api<Record<string, any>>('/sil/defaults').then(data => setForm(previous => previous !== SIL_DEFAULT_FORM ? previous : ({
       ...previous,
       ...data,
       partial_betas: { ...previous.partial_betas, ...(data.partial_betas ?? {}) },
@@ -1313,12 +1299,14 @@ function SilPage({ recommendation }: { recommendation: Recommendation | null }) 
 
   const toggleLambdaSource = () => setLambdaSource(previous => previous === 'direct' ? 'estimate' : 'direct')
   const submit = async () => {
+    if (running) return
     const issue = validateSilForm()
     if (issue) {
       showSilIssue(issue)
       return
     }
     try {
+      setSubmitting(true)
       setError('')
       const partialBetas = Object.fromEntries(partialBetaOrders.map(order => [String(order), Number(form.partial_betas?.[String(order)] ?? defaultPartialBeta)]))
       const nextTask = await post<{ task_id: string }>('/sil/tasks', {
@@ -1338,7 +1326,7 @@ function SilPage({ recommendation }: { recommendation: Recommendation | null }) 
       const message = e instanceof Error ? e.message : String(e)
       setError(message)
       showErrorDialog('参数边界错误', message, runButtonRef.current)
-    }
+    } finally { setSubmitting(false) }
   }
 
   const result = task?.result as Record<string, any> | undefined
@@ -1349,8 +1337,8 @@ function SilPage({ recommendation }: { recommendation: Recommendation | null }) 
     if (!match) return 0
     return Math.min(100, Math.round(Number(match[1]) / Math.max(1, Number(match[2])) * 100))
   }, [task])
-  const running = task?.status === 'queued' || task?.status === 'running'
-  const statusText = task?.status === 'failed' || error ? '验证异常' : task?.status === 'succeeded' ? '仿真完成' : running ? '仿真运行中...' : '就绪'
+  const running = submitting || (!!taskId && (!task || ['queued', 'running'].includes(task.status)))
+  const statusText = task?.status === 'failed' || error ? '验证异常' : task?.status === 'succeeded' ? '仿真完成' : task?.status === 'cancelled' ? '已取消，可重新运行' : running ? '仿真运行中...' : '就绪'
   const report = result ? buildSilReport(result) : '示例参数已加载 (2oo4, λ=111.11 FIT, 全局β=0.1)'
   const histogramLabels = result?.histogram?.centers?.map((value: number) => value.toExponential(1)) ?? result?.histogram?.edges?.slice(0, -1).map((value: number) => value.toExponential(1)) ?? []
   const histogramValues = result?.histogram?.density ?? result?.histogram?.counts ?? []
@@ -1431,6 +1419,7 @@ function SilPage({ recommendation }: { recommendation: Recommendation | null }) 
       </section>
     </div>
     {(error || task?.error) && <ErrorBox text={error || task?.error || '验证失败'} />}
+    {pollingError && <ErrorBox text={pollingError} />}
     {dialog && <ErrorDialog title={dialog.title} message={dialog.message} onClose={closeErrorDialog} />}
   </Page>
 }
@@ -1441,14 +1430,15 @@ function ClassificationPage() {
     { id: 'easy', name: '数据集2' },
     { id: 'hard', name: '数据集3' },
   ])
-  const [form, setForm] = useState<ClassificationFormValues>({ dataset: 'original', epochs: 50, batch_size: 32, learning_rate: 0.001 })
-  const [taskId, setTaskId] = useState<string | null>(null)
+  const [form, setForm] = useStoredState<ClassificationFormValues>('classification.form', { dataset: 'original', epochs: 50, batch_size: 32, learning_rate: 0.001 })
+  const [taskId, setTaskId] = useStoredState<string | null>('classification.task', null)
+  const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
   const [dialog, setDialog] = useState<ErrorDialogState | null>(null)
   const runButtonRef = useRef<HTMLButtonElement>(null)
   const dialogReturnFocusRef = useRef<HTMLElement | null>(null)
   const notifiedTaskFailures = useRef(new Set<string>())
-  const task = useTask(taskId)
+  const { task, pollingError } = useTask<Task>(taskId, setTaskId)
   useEffect(() => { void api<Array<{ id: string; name: string }>>('/classification/datasets').then(setDatasets).catch(e => setError(e.message)) }, [])
   const showErrorDialog = useCallback((title: string, message: string, returnFocus: HTMLElement | null) => {
     dialogReturnFocusRef.current = returnFocus
@@ -1467,6 +1457,7 @@ function ClassificationPage() {
     showErrorDialog('训练执行失败', task.error, runButtonRef.current)
   }, [task?.error, task?.id, task?.status, showErrorDialog])
   const submit = async () => {
+    if (trainingActive) return
     const formError = validateClassificationForm(form)
     if (formError) {
       setError(formError.message)
@@ -1474,6 +1465,7 @@ function ClassificationPage() {
       return
     }
     try {
+      setSubmitting(true)
       setError('')
       const nextTask = await post<{ task_id: string }>('/classification/tasks', form)
       setTaskId(nextTask.task_id)
@@ -1481,7 +1473,7 @@ function ClassificationPage() {
       const message = e instanceof Error ? e.message : String(e)
       setError(message)
       showErrorDialog('训练提交失败', message, runButtonRef.current)
-    }
+    } finally { setSubmitting(false) }
   }
   const validateFieldOnBlur = (event: FocusEvent<HTMLInputElement>, field: 'epochs' | 'batch_size' | 'learning_rate') => {
     let issue: FormValidationIssue | null = null
@@ -1498,7 +1490,7 @@ function ClassificationPage() {
     }
   }
   const result = task?.result as Record<string, any> | undefined
-  const trainingActive = taskId !== null && (!task || task.status === 'queued' || task.status === 'running')
+  const trainingActive = submitting || (taskId !== null && (!task || task.status === 'queued' || task.status === 'running'))
   const matrix = result?.confusion_matrix as number[][] | undefined
   const classNames = result?.class_names as string[] | undefined
   const confusionData = matrix && classNames
@@ -1535,7 +1527,7 @@ function ClassificationPage() {
   } as echarts.EChartsOption : null
   const statusText = !task ? '状态：待命' : task.status === 'succeeded' && result
     ? `状态：训练完成 (最高精度: ${(Number(result.best_accuracy) * 100).toFixed(2)}%)`
-    : task.status === 'failed' ? '状态：训练异常中断' : '状态：正在训练模型...'
+    : task.status === 'failed' ? '状态：训练异常中断' : task.status === 'cancelled' ? '状态：训练已取消' : '状态：正在训练模型...'
   return <Page title="风险动态分析 - 潜在安全威胁识别与自动分类">
     <div className="two-column classification-layout">
       <section className="panel classification-input-panel">
@@ -1559,7 +1551,7 @@ function ClassificationPage() {
       </section>
     </div>
     <div className="module-status-bar">{statusText}</div>
-    {error && <ErrorBox text={error} />}
+    {(error || pollingError) && <ErrorBox text={error || pollingError} />}
     {dialog && <ErrorDialog title={dialog.title} message={dialog.message} onClose={closeErrorDialog} />}
   </Page>
 }

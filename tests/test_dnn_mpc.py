@@ -33,7 +33,14 @@ from platform_core.dnn_mpc.model import deserialize
 from platform_core.dnn_mpc.simulation import INITIAL, REFERENCE, Q, R, ArrayPredictor, cost_gradient, simulate, terminal_weight
 from platform_core.dnn_mpc.plots import simulation_figure, vector_bytes
 from web_backend.task_manager import TaskManager
-import web_backend.app as web
+
+# App import constructs a session-only manager. Keep test collection away from
+# the live service's runtime directory without changing the shared TaskManager.
+_web_runtime = TemporaryDirectory(prefix="dnn-mpc-api-tests-")
+_manager_init = TaskManager.__init__
+with patch.object(TaskManager, "__init__", lambda self, runtime_root=None:
+                  _manager_init(self, runtime_root or Path(_web_runtime.name))):
+    import web_backend.app as web
 
 
 class DnnMpcTests(unittest.TestCase):
@@ -88,6 +95,187 @@ class DnnMpcTests(unittest.TestCase):
             self.assertEqual(first.parent, directory / "runs")
             self.assertNotEqual(first, second)
             self.assertTrue(first.is_dir() and second.is_dir())
+
+    def test_invalid_latest_state_falls_back_in_core_api_and_desktop(self):
+        from process_control_dnn_mpc import ProcessControlDnnMpcWidget
+        app = QApplication.instance() or QApplication([])
+        state_path = config.LATEST_TRAINING_STATE_PATH
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        fallback = str(config.DEFAULT_OUTPUT_DIR / "trained_model.npz")
+        existing = self.root / "existing.npz"
+        existing.write_bytes(b"existing model must remain unchanged")
+        invalid = [[], None, 42, "bad", True, {},
+                   {"format_version": True, "model_path": str(existing)},
+                   {"format_version": "1", "model_path": str(existing)},
+                   {"format_version": 2, "model_path": str(existing)}]
+        invalid += [{"format_version": 1, "model_path": value}
+                    for value in (None, [], {}, 42, "", " ", "relative.npz", str(self.root), str(self.root / "missing.npz"))]
+        manager = TaskManager(self.root / "tasks")
+        with patch.object(web, "task_manager", manager), TestClient(web.app) as client:
+            for raw in [json.dumps(value) for value in invalid] + ["{", ""]:
+                with self.subTest(raw=raw):
+                    state_path.write_text(raw, encoding="utf-8")
+                    self.assertEqual(config.mpc_defaults()["model_path"], fallback)
+                    response = client.get("/api/mpc/defaults")
+                    self.assertEqual(response.status_code, 200, response.text)
+                    self.assertEqual(response.json()["model_path"], fallback)
+                    self.assertEqual(web.MpcTaskRequest().model_path, fallback)
+                    widget = ProcessControlDnnMpcWidget(page_mode="mpc")
+                    try:
+                        widget.show()
+                        app.processEvents()
+                        widget._use_latest_model()
+                        self.assertEqual(widget._model_path_input.text(), fallback)
+                    finally:
+                        widget.close()
+                    self.assertEqual(state_path.read_text(encoding="utf-8"), raw)
+        self.assertEqual(existing.read_bytes(), b"existing model must remain unchanged")
+
+    def test_late_training_failures_preserve_publication_and_previous_results(self):
+        cfg = self.training_config() | dict(epochs=1)
+        successful = runner.run("training", cfg)
+        paths = [Path(cfg["model_path"]), config.LATEST_TRAINING_STATE_PATH,
+                 config.DEFAULT_OUTPUT_DIR / "latest_training.json"]
+        originals = {path: path.read_bytes() for path in paths}
+        previous = {path: path.read_bytes() for path in Path(successful["artifact_dir"]).rglob("*") if path.is_file()}
+        original_write = runner.atomic_write
+        phases = ("training_history.csv", "training_rmse.pdf", "training_summary.json",
+                  "model", "latest_training_state.json", "latest_training.json", "completion", "log")
+        for phase in phases:
+            with self.subTest(phase=phase):
+                run_dir = self.root / ("failed-" + phase)
+                def fail_write(path, raw):
+                    path = Path(path)
+                    fails = (path == paths[0] if phase == "model" else path.name == phase)
+                    if phase == "completion" and path.name == "progress.json":
+                        fails = json.loads(raw)["percent"] == 100
+                    if fails:
+                        raise OSError("injected " + phase)
+                    return original_write(path, raw)
+                def log(message):
+                    if phase == "log" and message.startswith("执行完成"):
+                        raise OSError("injected log")
+                with patch.object(runner, "atomic_write", side_effect=fail_write):
+                    with self.assertRaisesRegex(OSError, "injected"):
+                        runner.run("training", cfg | dict(lr=.002), log, run_dir=run_dir)
+                self.assertEqual({path: path.read_bytes() for path in paths}, originals)
+                self.assertEqual({path: path.read_bytes() for path in previous}, previous)
+                self.assertEqual(json.loads((run_dir / "progress.json").read_text(encoding="utf-8"))["percent"], 0)
+                self.assertFalse(list(self.root.rglob("*.bak")))
+        retried = runner.run("training", cfg | dict(lr=.002))
+        actual_hash = hashlib.sha256(paths[0].read_bytes()).hexdigest()
+        self.assertNotEqual(paths[0].read_bytes(), originals[paths[0]])
+        self.assertEqual(json.loads(paths[1].read_bytes())["model_sha256"], actual_hash)
+        self.assertEqual(json.loads(paths[2].read_bytes())["result"]["model_sha256"], actual_hash)
+        self.assertEqual(retried["result"]["model_sha256"], actual_hash)
+        self.assertEqual({path: path.read_bytes() for path in previous}, previous)
+
+    def test_first_publication_failure_leaves_no_model_or_success_indexes(self):
+        cfg = self.training_config() | dict(epochs=1)
+        original_write = runner.write_json
+        def fail_index(path, value):
+            if Path(path) == config.LATEST_TRAINING_STATE_PATH:
+                raise OSError("injected index failure")
+            return original_write(path, value)
+        with patch.object(runner, "write_json", side_effect=fail_index):
+            with self.assertRaisesRegex(OSError, "injected index"):
+                runner.run("training", cfg)
+        for path in (Path(cfg["model_path"]), config.LATEST_TRAINING_STATE_PATH,
+                     config.DEFAULT_OUTPUT_DIR / "latest_training.json"):
+            self.assertFalse(path.exists())
+        self.assertFalse(list(self.root.rglob("*.bak")))
+
+    def test_failed_rollback_retains_original_model_backup(self):
+        model = self.root / "published.npz"
+        model.write_bytes(b"original model")
+        staged = self.root / "staged.npz"
+        staged.write_bytes(b"replacement model")
+        state = dict(model_path=str(model))
+        replace = runner._replace_file
+        def deny_restore(source, destination):
+            if Path(source).suffix == ".bak":
+                raise OSError("injected restore failure")
+            return replace(source, destination)
+        with patch.object(runner, "_replace_file", side_effect=deny_restore):
+            with self.assertRaisesRegex(RuntimeError, "备份已保留"):
+                with runner._training_publication(staged, state, {}):
+                    raise OSError("injected final failure")
+        backups = list(self.root.glob("published.npz.*.bak"))
+        self.assertEqual(len(backups), 1)
+        self.assertEqual(backups[0].read_bytes(), b"original model")
+
+    def test_web_training_export_failure_preserves_model_and_allows_retry(self):
+        cfg = self.training_config() | dict(epochs=1)
+        runner.run("training", cfg)
+        model = Path(cfg["model_path"])
+        before = model.read_bytes()
+        original_write = runner.atomic_write
+        def fail_export(path, raw):
+            if Path(path).name == "training_rmse.pdf":
+                raise OSError("injected PDF failure")
+            return original_write(path, raw)
+        manager = TaskManager(self.root / "tasks")
+        with patch.object(web, "task_manager", manager), TestClient(web.app) as client:
+            with patch.object(runner, "atomic_write", side_effect=fail_export):
+                response = client.post("/api/training/tasks", json=cfg | dict(lr=.002))
+                self.assertEqual(response.status_code, 200, response.text)
+                failed = self.wait_task(client, response.json()["task_id"])
+            self.assertEqual(failed["status"], "failed")
+            self.assertIn("injected PDF", failed["error"])
+            self.assertEqual(model.read_bytes(), before)
+            defaults = client.get("/api/mpc/defaults")
+            self.assertEqual(defaults.status_code, 200)
+            self.assertEqual(defaults.json()["model_path"], str(model))
+            retried = client.post("/api/training/tasks", json=cfg | dict(lr=.002))
+            completed = self.wait_task(client, retried.json()["task_id"])
+            self.assertEqual(completed["status"], "succeeded", completed)
+            self.assertEqual(completed["result"]["result"]["model_sha256"], hashlib.sha256(model.read_bytes()).hexdigest())
+
+    def test_desktop_training_export_failure_restores_controls_and_retries(self):
+        from process_control_dnn_mpc import ProcessControlDnnMpcWidget
+        app = QApplication.instance() or QApplication([])
+        cfg = self.training_config() | dict(epochs=1)
+        runner.run("training", cfg)
+        model = Path(cfg["model_path"])
+        before = model.read_bytes()
+        widget = ProcessControlDnnMpcWidget(page_mode="training")
+        widget._dataset_path_input.setText(cfg["dataset_path"])
+        widget._epochs_input.setValue(1)
+        widget._hidden_layers_input.setText(cfg["hidden_layers"])
+        widget._lr_input.setValue(.002)
+        widget.resize(1400, 850)
+        widget.show()
+        app.processEvents()
+        original_write = runner.atomic_write
+        def fail_export(path, raw):
+            if Path(path).name == "training_rmse.pdf":
+                raise OSError("injected desktop PDF failure")
+            return original_write(path, raw)
+        def wait_for_worker():
+            deadline = time.monotonic() + 60
+            while widget._thread is not None and time.monotonic() < deadline:
+                app.processEvents()
+                QTest.qWait(10)
+            self.assertIsNone(widget._thread, "Desktop worker did not finish")
+        try:
+            with patch.object(runner, "atomic_write", side_effect=fail_export), \
+                    patch("process_control_dnn_mpc.QMessageBox.warning") as warning:
+                QTest.mouseClick(widget._run_btn, Qt.LeftButton)
+                wait_for_worker()
+                warning.assert_called_once()
+            self.assertEqual(widget._task_status.property("state"), "failed")
+            self.assertTrue(widget._run_btn.isEnabled())
+            self.assertFalse(widget._progress_timer.isActive())
+            self.assertEqual(model.read_bytes(), before)
+            QTest.mouseClick(widget._run_btn, Qt.LeftButton)
+            wait_for_worker()
+            self.assertEqual(widget._task_status.property("state"), "succeeded")
+            self.assertTrue(widget._run_btn.isEnabled())
+            self.assertTrue(widget._image.renderer().isValid())
+            self.assertTrue(all(button.isEnabled() for button in widget._download_buttons))
+            self.assertEqual(widget._payload["result"]["model_sha256"], hashlib.sha256(model.read_bytes()).hexdigest())
+        finally:
+            widget.close()
 
     def test_data_formats_and_rejection(self):
         x, y = load_dataset(config.DEFAULT_DATASET)

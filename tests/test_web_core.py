@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from threading import Event
 import json
+import subprocess
+import sys
 import time
 import unittest
 from unittest.mock import patch
@@ -12,7 +17,224 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from platform_core.scoring import default_values, evaluate
+from web_backend.task_manager import TaskManager, TaskStateUnavailable
 from web_backend.app import AnomalyTaskRequest, MpcTaskRequest, SDGNodeRequest, SILTaskRequest, TrainingTaskRequest, app
+
+
+class TaskManagerPersistenceTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+        self.managers = []
+
+    def manager(self):
+        manager = TaskManager(self.root / "tasks")
+        self.managers.append(manager)
+        return manager
+
+    def tearDown(self):
+        for manager in self.managers:
+            manager.shutdown()
+            manager._executor.shutdown(wait=True)
+        self.temporary.cleanup()
+
+    def wait(self, manager, task_id):
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            task = manager.get(task_id)
+            if task["status"] in {"succeeded", "failed", "cancelled"}:
+                return task
+            time.sleep(.01)
+        self.fail("Task did not finish")
+
+    def test_construction_and_shutdown_preserve_existing_files(self):
+        first = self.manager()
+        self.assertFalse((self.root / "tasks").exists(), "Import/construction must not write to disk")
+        original = self.root / "tasks" / "legacy" / "result.bin"
+        original.parent.mkdir(parents=True)
+        original.write_bytes(b"historical result")
+        second = self.manager()
+        first.shutdown()
+        second.shutdown()
+        self.assertEqual(original.read_bytes(), b"historical result")
+
+    def test_completed_record_and_artifact_routes_survive_restart(self):
+        manager = self.manager()
+        artifacts = self.root / "artifacts"
+        artifacts.mkdir()
+        image = artifacts / "training_rmse.svg"
+        image.write_text('<svg xmlns="http://www.w3.org/2000/svg"/>', encoding="utf-8")
+        created = manager.submit("saved result", lambda log: {"answer": 42}, artifact_dir=artifacts)
+        finished = self.wait(manager, created.id)
+        original = (created.work_dir / "task.json").read_bytes()
+        manager.shutdown()
+        recovered = self.manager()
+        self.assertEqual(recovered.get(created.id)["result"], finished["result"])
+        self.assertEqual(recovered.artifact_dir(created.id), artifacts)
+        with patch("web_backend.app.task_manager", recovered), TestClient(app) as client:
+            self.assertEqual(client.get(f"/api/tasks/{created.id}").json()["status"], "succeeded")
+            response = client.get(f"/api/training/tasks/{created.id}/images/training_rmse.svg")
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.content, image.read_bytes())
+        self.assertEqual((created.work_dir / "task.json").read_bytes(), original)
+
+    def test_second_instance_does_not_invalidate_a_live_owner(self):
+        ready, release = Event(), Event()
+        def operation(log):
+            ready.set()
+            release.wait(10)
+            return {"ok": True}
+        owner = self.manager()
+        created = owner.submit("live", operation)
+        try:
+            self.assertTrue(ready.wait(5))
+            original = (created.work_dir / "task.json").read_bytes()
+            reader = self.manager()
+            self.assertEqual(reader.get(created.id)["status"], "running")
+            with self.assertRaisesRegex(ValueError, "另一服务实例"):
+                reader.cancel(created.id)
+            reader.shutdown()
+            self.assertEqual((created.work_dir / "task.json").read_bytes(), original)
+        finally:
+            release.set()
+        self.assertEqual(self.wait(owner, created.id)["status"], "succeeded")
+
+    def test_crashed_owner_is_reported_interrupted_without_deleting_artifacts(self):
+        code = """
+import sys
+from pathlib import Path
+from threading import Event
+from web_backend.task_manager import TaskManager
+ready, stop = Event(), Event()
+def operation(log):
+    ready.set()
+    stop.wait(60)
+    return {}
+manager = TaskManager(Path(sys.argv[1]))
+task = manager.submit('crash fixture', operation)
+ready.wait(10)
+(task.work_dir / 'preview.svg').write_bytes(b'keep preview')
+print(task.id, flush=True)
+sys.stdin.read()
+"""
+        process = subprocess.Popen([sys.executable, "-B", "-c", code, str(self.root / "tasks")],
+                                   cwd=Path(__file__).resolve().parents[1], stdin=subprocess.PIPE,
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            task_id = process.stdout.readline().strip()
+            self.assertRegex(task_id, r"^[a-f0-9]{32}$")
+            reader = self.manager()
+            self.assertEqual(reader.get(task_id)["status"], "running")
+            original = (self.root / "tasks" / task_id / "task.json").read_bytes()
+            process.terminate()
+            process.wait(timeout=10)
+            recovered = reader.get(task_id)
+            self.assertEqual(recovered["status"], "failed")
+            self.assertIn("已中断", recovered["error"])
+            self.assertEqual((self.root / "tasks" / task_id / "preview.svg").read_bytes(), b"keep preview")
+            self.assertEqual((self.root / "tasks" / task_id / "task.json").read_bytes(), original)
+        finally:
+            if process.poll() is None:
+                process.terminate()
+            process.communicate(timeout=10)
+
+    def test_shutdown_cancels_queue_and_keeps_running_work_directory(self):
+        ready, release, queued_ran = Event(), Event(), Event()
+        def operation(log):
+            ready.set()
+            release.wait(10)
+            return {"done": True}
+        manager = self.manager()
+        active = manager.submit("active", operation)
+        try:
+            self.assertTrue(ready.wait(5))
+            queued = manager.submit("queued", lambda log: queued_ran.set() or {})
+            manager.shutdown()
+            self.assertEqual(manager.get(queued.id)["status"], "cancelled")
+            self.assertEqual(manager.get(active.id)["status"], "running")
+            self.assertTrue(active.work_dir.is_dir())
+            with self.assertRaises(TaskStateUnavailable):
+                manager.submit("late", lambda log: {})
+        finally:
+            release.set()
+        self.assertEqual(self.wait(manager, active.id)["status"], "succeeded")
+        self.assertFalse(queued_ran.is_set())
+        self.assertEqual(self.manager().get(queued.id)["status"], "cancelled")
+
+    def test_corrupt_record_is_503_and_missing_record_is_404(self):
+        manager = self.manager()
+        created = manager.submit("saved", lambda log: {})
+        self.wait(manager, created.id)
+        record = created.work_dir / "task.json"
+        reader = self.manager()
+        with patch("web_backend.app.task_manager", reader), TestClient(app) as client:
+            for raw in ("{", "[]", "null", '{"format_version":1,"task":{}}'):
+                with self.subTest(raw=raw):
+                    record.write_text(raw, encoding="utf-8")
+                    self.assertEqual(client.get(f"/api/tasks/{created.id}").status_code, 503)
+                    self.assertEqual(record.read_text(encoding="utf-8"), raw)
+            self.assertEqual(client.get("/api/tasks/" + "f" * 32).status_code, 404)
+            record.write_bytes(b"\xff\xfe")
+            self.assertEqual(client.get(f"/api/tasks/{created.id}").status_code, 503)
+            self.assertEqual(record.read_bytes(), b"\xff\xfe")
+
+    def test_worker_exit_releases_ownership_and_persists_failure(self):
+        def operation(log):
+            raise SystemExit("worker exited")
+        manager = self.manager()
+        created = manager.submit("worker exit", operation)
+        self.assertEqual(self.wait(manager, created.id)["status"], "failed")
+        self.assertIsNone(created._lease)
+        self.assertEqual(self.manager().get(created.id)["error"], "worker exited")
+
+    def test_completion_during_recovery_is_not_misreported_as_interruption(self):
+        manager = self.manager()
+        created = manager.submit("finishing", lambda log: {"answer": 42})
+        self.wait(manager, created.id)
+        record = created.work_dir / "task.json"
+        finished = record.read_bytes()
+        running = json.loads(finished)
+        running["task"]["status"] = "running"
+        running["task"]["result"] = None
+        record.write_text(json.dumps(running), encoding="utf-8")
+        def complete_before_releasing_lease(directory):
+            record.write_bytes(finished)
+            return False
+        with patch("web_backend.task_manager._owner_is_alive", side_effect=complete_before_releasing_lease):
+            recovered = self.manager().get(created.id)
+        self.assertEqual(recovered["status"], "succeeded")
+        self.assertEqual(recovered["result"], {"answer": 42})
+
+    def test_initial_save_failure_does_not_start_the_operation(self):
+        manager, ran = self.manager(), Event()
+        with patch.object(manager, "_persist", side_effect=OSError("disk unavailable")):
+            with self.assertRaises(TaskStateUnavailable):
+                manager.submit("unrecorded", lambda log: ran.set() or {})
+        self.assertFalse(ran.is_set())
+        self.assertEqual(manager._tasks, {})
+
+    def test_transient_save_failure_keeps_result_and_recovers_on_query(self):
+        manager, ready, release = self.manager(), Event(), Event()
+        def operation(log):
+            ready.set()
+            release.wait(10)
+            return {"answer": 42}
+        created = manager.submit("save retry", operation)
+        try:
+            self.assertTrue(ready.wait(5))
+            record = created.work_dir / "task.json"
+            before = record.read_bytes()
+            with patch.object(manager, "_persist", side_effect=OSError("disk unavailable")):
+                release.set()
+                result = self.wait(manager, created.id)
+                self.assertEqual(result["status"], "succeeded")
+                self.assertEqual(result["result"], {"answer": 42})
+                self.assertIn("无法保存", result["persistence_error"])
+                self.assertEqual(record.read_bytes(), before)
+            self.assertIsNone(manager.get(created.id)["persistence_error"])
+            self.assertEqual(self.manager().get(created.id)["result"], {"answer": 42})
+        finally:
+            release.set()
 
 
 class SharedScoringTests(unittest.TestCase):

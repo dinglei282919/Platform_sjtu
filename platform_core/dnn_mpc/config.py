@@ -28,8 +28,14 @@ def mpc_defaults():
                   sim_time=5.0, prediction_horizon=10)
     try:
         state = json.loads(LATEST_TRAINING_STATE_PATH.read_text(encoding="utf-8"))
-        if state.get("format_version") == 1 and Path(state["model_path"]).is_file():
-            result.update(model_path=state["model_path"])
+        if not isinstance(state, dict) or type(state.get("format_version")) is not int or state["format_version"] != 1:
+            return result
+        model_path = state.get("model_path")
+        if not isinstance(model_path, str) or not model_path.strip():
+            return result
+        path = Path(model_path)
+        if path.is_absolute() and path.suffix.lower() == ".npz" and path.is_file():
+            result.update(model_path=model_path)
     except (OSError, ValueError, KeyError, TypeError):
         pass
     return result

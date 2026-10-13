@@ -11,6 +11,7 @@ import hashlib
 import json
 import logging
 import os
+import shutil
 import time
 from . import config as settings
 
@@ -29,6 +30,18 @@ def new_run_dir(config):
     return Path(config["output_dir"]) / "runs" / uuid4().hex
 
 
+def _replace_file(source, destination):
+    # Python/Qt readers may briefly omit FILE_SHARE_DELETE on Windows.
+    for attempt in range(11):
+        try:
+            os.replace(source, destination)
+            return
+        except OSError as exc:
+            if getattr(exc, "winerror", None) not in (5, 32, 33) or attempt == 10:
+                raise
+            time.sleep(min(0.02 * 2 ** attempt, 0.2))
+
+
 def atomic_write(path, data):
     """Publish complete files, allowing brief Windows reader/rename conflicts."""
     path = Path(path)
@@ -36,16 +49,7 @@ def atomic_write(path, data):
     temporary = path.with_name(path.name + "." + uuid4().hex + ".tmp")
     try:
         temporary.write_bytes(data)
-        # Python/Qt readers may temporarily omit FILE_SHARE_DELETE on Windows.
-        # Keep the old file intact while retrying; never unlink it as a fallback.
-        for attempt in range(11):
-            try:
-                os.replace(temporary, path)
-                break
-            except OSError as exc:
-                if getattr(exc, "winerror", None) not in (5, 32, 33) or attempt == 10:
-                    raise
-                time.sleep(min(0.02 * 2 ** attempt, 0.2))
+        _replace_file(temporary, path)
     finally:
         try:
             temporary.unlink(missing_ok=True)
@@ -56,6 +60,52 @@ def atomic_write(path, data):
 
 def write_json(path, value):
     atomic_write(path, json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False).encode("utf-8"))
+
+
+@contextmanager
+def _training_publication(model_file, state, payload):
+    """Restore the prior publication if a final write or completion callback fails.
+
+    Called under execution_lock, after all run artifacts have been exported.
+    Keep disk backups so even an unsuccessful rollback cannot discard the originals.
+    """
+    paths = [Path(state["model_path"]), settings.LATEST_TRAINING_STATE_PATH,
+             settings.DEFAULT_OUTPUT_DIR / "latest_training.json"]
+    backups, changed, retained = {}, [], set()
+    try:
+        for path in paths:
+            backup = path.with_name(path.name + "." + uuid4().hex + ".bak") if path.exists() else None
+            backups[path] = backup
+            if backup is not None:
+                shutil.copyfile(path, backup)
+        try:
+            atomic_write(paths[0], Path(model_file).read_bytes())
+            changed.append(paths[0])
+            for path, value in zip(paths[1:], (state, payload)):
+                write_json(path, value)
+                changed.append(path)
+            yield
+        except BaseException as exc:
+            failures = []
+            for path in reversed(changed):
+                try:
+                    if backups[path] is None:
+                        path.unlink(missing_ok=True)
+                    else:
+                        _replace_file(backups[path], path)
+                except OSError as rollback_error:
+                    retained.add(backups[path])
+                    failures.append(f"{path}（备份：{backups[path]}）：{rollback_error}")
+            if failures:
+                raise RuntimeError(f"模型发布失败：{exc}；恢复失败，原文件备份已保留：" + "; ".join(failures)) from exc
+            raise
+    finally:
+        for backup in backups.values():
+            if backup is not None and backup not in retained:
+                try:
+                    backup.unlink(missing_ok=True)
+                except OSError as exc:
+                    logging.getLogger(__name__).warning("无法删除发布备份 %s：%s", backup, exc)
 
 
 @contextmanager
@@ -143,12 +193,16 @@ def run(mode, config, log=lambda message: None, *, run_dir=None):
                            json_path=outputs["summary_json"], model_path=result["model_path"],
                            artifact_dir=str(run_dir), image_revision=time.time_ns())
             if mode == "training":
-                write_json(settings.LATEST_TRAINING_STATE_PATH, dict(format_version=1,
+                state = dict(format_version=1,
                     model_path=result["model_path"], model_sha256=result["model_sha256"],
-                    output_dir=config["output_dir"], summary_json=outputs["summary_json"], timestamp=result["timestamp"]))
-            write_json(settings.DEFAULT_OUTPUT_DIR / f"latest_{mode}.json", payload)
-            progress(100, "执行完成")
-            log("执行完成，结果已保存。")
+                    output_dir=config["output_dir"], summary_json=outputs["summary_json"], timestamp=result["timestamp"])
+                with _training_publication(run_dir / "trained_model.npz", state, payload):
+                    progress(100, "执行完成")
+                    log("执行完成，结果已保存。")
+            else:
+                write_json(settings.DEFAULT_OUTPUT_DIR / f"latest_{mode}.json", payload)
+                progress(100, "执行完成")
+                log("执行完成，结果已保存。")
             return payload
         except Exception as exc:
             try:
@@ -206,7 +260,6 @@ def _training(config, directory, outputs, progress, log):
     predictor.metadata["dataset"] = dataset_info
     raw = serialize(predictor)
     atomic_write(directory / "trained_model.npz", raw)
-    atomic_write(config["model_path"], raw)
     history_csv = StringIO(newline="")
     writer = csv.DictWriter(history_csv, fieldnames=list(history[0]))
     writer.writeheader()
