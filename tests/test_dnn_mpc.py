@@ -20,7 +20,7 @@ from fastapi.testclient import TestClient
 
 # Use a headless Qt platform when this test module creates its application.
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-from PySide6.QtCore import QPoint, QPointF, Qt
+from PySide6.QtCore import QEventLoop, QPoint, QPointF, QTimer, Qt
 from PySide6.QtGui import QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
@@ -237,7 +237,6 @@ class DnnMpcTests(unittest.TestCase):
         cfg = self.training_config() | dict(epochs=1)
         runner.run("training", cfg)
         model = Path(cfg["model_path"])
-        before = model.read_bytes()
         widget = ProcessControlDnnMpcWidget(page_mode="training")
         widget._dataset_path_input.setText(cfg["dataset_path"])
         widget._epochs_input.setValue(1)
@@ -252,30 +251,97 @@ class DnnMpcTests(unittest.TestCase):
                 raise OSError("injected desktop PDF failure")
             return original_write(path, raw)
         def wait_for_worker():
-            deadline = time.monotonic() + 60
-            while widget._thread is not None and time.monotonic() < deadline:
-                app.processEvents()
-                QTest.qWait(10)
+            # Run Qt's event loop as the application does, giving Python workers
+            # time to execute between queued signals instead of polling qWait.
+            loop = QEventLoop()
+            poll = QTimer()
+            poll.setInterval(10)
+            poll.timeout.connect(lambda: loop.quit() if widget._thread is None else None)
+            timeout = QTimer()
+            timeout.setSingleShot(True)
+            timeout.timeout.connect(loop.quit)
+            poll.start()
+            timeout.start(60000)
+            try:
+                if widget._thread is not None:
+                    loop.exec()
+            finally:
+                poll.stop()
+                timeout.stop()
             self.assertIsNone(widget._thread, "Desktop worker did not finish")
         try:
-            with patch.object(runner, "atomic_write", side_effect=fail_export), \
-                    patch("process_control_dnn_mpc.QMessageBox.warning") as warning:
+            # Reuse the same window: later attempts also exercise deferred Qt
+            # cleanup, restored controls, and publication after an earlier retry.
+            for attempt in range(3):
+                before = model.read_bytes()
+                protected = [config.LATEST_TRAINING_STATE_PATH,
+                             config.DEFAULT_OUTPUT_DIR / "latest_training.json"]
+                previous_indexes = {path: path.read_bytes() for path in protected}
+                with self.subTest(attempt=attempt), \
+                        patch.object(runner, "atomic_write", side_effect=fail_export), \
+                        patch("process_control_dnn_mpc.QMessageBox.warning") as warning:
+                    QTest.mouseClick(widget._run_btn, Qt.LeftButton)
+                    wait_for_worker()
+                    warning.assert_called_once()
+                self.assertEqual(widget._task_status.property("state"), "failed")
+                self.assertTrue(widget._run_btn.isEnabled())
+                self.assertFalse(widget._progress_timer.isActive())
+                self.assertEqual(model.read_bytes(), before)
+                for path, contents in previous_indexes.items():
+                    self.assertEqual(path.read_bytes(), contents)
                 QTest.mouseClick(widget._run_btn, Qt.LeftButton)
                 wait_for_worker()
-                warning.assert_called_once()
-            self.assertEqual(widget._task_status.property("state"), "failed")
-            self.assertTrue(widget._run_btn.isEnabled())
-            self.assertFalse(widget._progress_timer.isActive())
-            self.assertEqual(model.read_bytes(), before)
-            QTest.mouseClick(widget._run_btn, Qt.LeftButton)
-            wait_for_worker()
-            self.assertEqual(widget._task_status.property("state"), "succeeded")
-            self.assertTrue(widget._run_btn.isEnabled())
-            self.assertTrue(widget._image.renderer().isValid())
-            self.assertTrue(all(button.isEnabled() for button in widget._download_buttons))
-            self.assertEqual(widget._payload["result"]["model_sha256"], hashlib.sha256(model.read_bytes()).hexdigest())
+                self.assertEqual(widget._task_status.property("state"), "succeeded")
+                self.assertTrue(widget._run_btn.isEnabled())
+                self.assertFalse(widget._progress_timer.isActive())
+                self.assertTrue(widget._image.renderer().isValid())
+                self.assertTrue(all(button.isEnabled() for button in widget._download_buttons))
+                self.assertEqual(widget._payload["result"]["model_sha256"], hashlib.sha256(model.read_bytes()).hexdigest())
         finally:
             widget.close()
+
+    def test_desktop_result_layout_stays_stable_across_status_and_size_changes(self):
+        from process_control_dnn_mpc import ProcessControlDnnMpcWidget
+        app = QApplication.instance() or QApplication([])
+
+        def settle(widget):
+            previous = None
+            for _ in range(12):
+                app.processEvents()
+                geometry = (widget._result_content.size(), widget._result_scroll.viewport().size(),
+                            widget._result_scroll.verticalScrollBar().maximum())
+                if geometry == previous:
+                    return
+                previous = geometry
+            self.fail("Result layout did not settle")
+
+        for mode in ("training", "mpc"):
+            with self.subTest(mode=mode):
+                widget = ProcessControlDnnMpcWidget(page_mode=mode)
+                try:
+                    widget.show()
+                    for width, height in ((1400, 850), (1000, 640), (1600, 1200)):
+                        widget.resize(width, height)
+                        widget._clear_result()
+                        settle(widget)
+                        viewport_width = widget._result_scroll.viewport().width()
+                        for state in ("running", "failed", "succeeded"):
+                            widget._task_status.set_status(state, "状态变化后仍可继续操作", 50)
+                            widget._metrics_label.setText("训练 RMSE：0.01234；验证 RMSE：0.05678")
+                            widget._result_path_label.setText(str(self.root / ("results_" * 12) / "result.json"))
+                            widget._logs.append("验证折叠和展开日志时图表区域保持稳定。")
+                            widget._logs.toggle.setChecked(state != "running")
+                            settle(widget)
+                            self.assertEqual(widget._result_scroll.viewport().width(), viewport_width)
+                            self.assertEqual(widget._result_scroll.horizontalScrollBar().maximum(), 0)
+                            widget._result_scroll.ensureWidgetVisible(widget._caption)
+                            settle(widget)
+                            viewport = widget._result_scroll.viewport()
+                            top = widget._caption.mapTo(viewport, QPoint(0, 0)).y()
+                            self.assertGreaterEqual(top, 0)
+                            self.assertLessEqual(top + widget._caption.height(), viewport.height())
+                finally:
+                    widget.close()
 
     def test_data_formats_and_rejection(self):
         x, y = load_dataset(config.DEFAULT_DATASET)

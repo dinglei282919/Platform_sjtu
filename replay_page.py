@@ -11,9 +11,9 @@ from platform_core.replay.config import PLOT_GROUPS, defaults
 
 PLOT_DESCRIPTIONS = {
     "tracking": "参考轨迹、系统输出与跟踪误差",
-    "disturbance": "失配扰动、估计值与估计误差",
+    "disturbance": "失配扰动与估计误差；绿色阴影为恢复窗口，虚线为 1.8627 秒恢复时限",
     "state_control": "系统状态与控制输入；阴影表示重放时段",
-    "switching_replay": "切换函数、实时状态与重放信号",
+    "switching_replay": "上方分别显示两路切换函数，下方对比实时状态与重放信号",
 }
 
 
@@ -80,7 +80,7 @@ class ReplayWidget(QWidget):
         self.cancel_button.setEnabled(False)
         self.cancel_button.clicked.connect(self.cancel)
         left.addWidget(self.cancel_button)
-        description = QLabel("初始状态\nx₁ = 0，x₂ = 0\n\n参考轨迹\nyᵈ = sin(0.5t) + 0.5sin(t)\n\n重放时段 / 回放延迟（秒）\n5–9 / 4.8\n12–14 / 2.5\n18–21 / 3.5\n27–32 / 5.5\n36–39 / 3.7\n42–45 / 3.0\n\n阴影区域表示重放攻击时段。")
+        description = QLabel("初始状态\nx₁ = 0，x₂ = 0\n\n参考轨迹\nyᵈ = sin(0.5t) + 0.5sin(t)\n\n重放时段 / 回放延迟（秒）\n5–9 / 4.8\n12–14 / 2.5\n18–21 / 3.5\n27–32 / 5.5\n36–39 / 3.7\n42–45 / 3.0\n\n橙色阴影表示重放攻击时段；扰动误差图的绿色阴影表示恢复窗口。")
         description.setWordWrap(True)
         left.addWidget(description)
         self.metrics = ControlRmseMetrics(columns=2)

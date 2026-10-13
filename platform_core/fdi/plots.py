@@ -1,6 +1,7 @@
 """Four landscape figure pairs with the signals from plot0.m; no GUI dependency."""
 from matplotlib.figure import Figure
 import numpy as np
+from ..control_plots import signal_legend
 
 
 def figures(data, *, duration=None):
@@ -9,6 +10,7 @@ def figures(data, *, duration=None):
     result = {}
     for group in ("tracking", "disturbance", "state_control", "gain_switching"):
         fig = Figure(figsize=(12, 4.6), constrained_layout=True)
+        fig.get_layout_engine().set(h_pad=.12, w_pad=.08)
         left, right = fig.subplots(1, 2)
         for ax in (left, right):
             ax.set_xlim(0, duration if duration is not None else float(t[-1]))
@@ -43,6 +45,6 @@ def figures(data, *, duration=None):
             right.step(t, data["sig"], where="post", gid="live-sig", color=blue, label=r"Switching signal $\sigma(t)$")
             right.set(ylabel="Mode", ylim=(.5, 2.5), yticks=[1, 2])
         for ax in (left, right):
-            ax.legend(loc="upper right", fontsize=9, framealpha=.92)
+            signal_legend(ax)
         result[group] = fig
     return result

@@ -8,9 +8,9 @@ type Result = { module: 'replay'; config: { sim_time: number }; elapsed_seconds:
 type Task = { id: string; status: string; error?: string; logs: string[]; cancellable?: boolean; cancel_requested?: boolean; progress?: { percent?: number; message?: string; image_revision?: number; outputs?: Record<string, string> }; result?: Result }
 const groups = [
   ['tracking', '跟踪性能', '参考轨迹、系统输出与跟踪误差'],
-  ['disturbance', '扰动观测', '失配扰动、估计值与估计误差'],
+  ['disturbance', '扰动观测', '失配扰动与估计误差；绿色阴影为恢复窗口，虚线为 1.8627 秒恢复时限'],
   ['state_control', '状态与控制', '系统状态与控制输入；阴影表示重放时段'],
-  ['switching_replay', '切换与重放', '切换函数、实时状态与重放信号'],
+  ['switching_replay', '切换与重放', '上方分别显示两路切换函数，下方对比实时状态与重放信号'],
 ] as const
 // Preserve the running task when switching to another module and back.
 type PlotName = typeof groups[number][0]
@@ -116,7 +116,7 @@ export function ReplayPage() {
       <button type="button" className="primary" disabled={running} onClick={() => void start()}>{running ? '仿真运行中…' : '开始重放攻击仿真'}</button>
       <button type="button" disabled={!running || !task?.cancellable || cancelling || task.cancel_requested} onClick={() => void cancel()}>{running && (cancelling || task?.cancel_requested) ? '正在取消…' : '取消仿真'}</button>
       <dl><dt>初始状态</dt><dd>x₁ = 0，x₂ = 0</dd><dt>参考轨迹</dt><dd>yᵈ = sin(0.5t) + 0.5sin(t)</dd><dt>重放时段 / 回放延迟（秒）</dt><dd>5–9 / 4.8<br/>12–14 / 2.5<br/>18–21 / 3.5<br/>27–32 / 5.5<br/>36–39 / 3.7<br/>42–45 / 3.0</dd></dl>
-      <p className="muted">沿用原实验的六段重放场景。曲线中的阴影表示攻击时段。</p>
+      <p className="muted">橙色阴影表示重放攻击时段；扰动误差图的绿色阴影表示恢复窗口。</p>
       {result && <div className="fdi-metrics"><p>跟踪误差 RMSE<br/><strong>{result.tracking_rmse.toPrecision(4)}</strong></p><p>扰动估计 RMSE<br/><strong>{result.disturbance_rmse.toPrecision(4)}</strong></p>
         <div className="fdi-downloads">{[['signals.csv', '下载 CSV'], ['signals.npz', '下载完整数据'], ['result.json', '下载结果摘要']].map(([name, label]) =>
           <a key={name} href={`/api/replay/tasks/${taskId}/files/${name}`} download>{label}</a>)}</div></div>}

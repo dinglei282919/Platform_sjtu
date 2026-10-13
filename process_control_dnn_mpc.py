@@ -228,6 +228,10 @@ class ProcessControlDnnMpcWidget(QWidget):
         result_column.addWidget(self._logs)
         result_column.addStretch()
         self._result_scroll = ControlScrollArea(self._result_content)
+        # Keep the viewport width stable when wrapped results/logs change height.
+        # Qt 6.11's as-needed scrollbar sizing can recursively resize this content
+        # at the overflow threshold, eventually overflowing the GUI thread stack.
+        self._result_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
         self._result_content.installEventFilter(self)
         self._layout_downloads()
         splitter.addWidget(self._result_scroll)

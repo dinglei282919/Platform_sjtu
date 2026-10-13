@@ -14,6 +14,13 @@ from .dnn_mpc.runner import atomic_write
 _RENDER_LOCK = Lock()
 
 
+def signal_legend(ax):
+    """Reserve space above the axes so legends never cover live signal paths."""
+    handles, _ = ax.get_legend_handles_labels()
+    return ax.legend(loc="lower center", bbox_to_anchor=(.5, 1.02),
+                     ncols=min(2, len(handles)), fontsize=9, framealpha=.92)
+
+
 class _SvgPreview:
     """Lay out a fixed-axis figure once; refresh only its tagged signal paths.
 
@@ -49,9 +56,13 @@ class _SvgPreview:
             values = -values if negative else values
             line.set_data(data["t"], np.where(np.isfinite(values), values, np.nan))
             transform = line.get_transform() + Affine2D().scale(1, -1).translate(0, self.height)
+            # Qt SVG does not consistently honor clipPath. Trim geometry to the
+            # signal's axes as well, so off-axis samples cannot paint over labels.
+            bounds = line.axes.bbox
+            clip = (bounds.x0, self.height - bounds.y1, bounds.x1, self.height - bounds.y0)
             commands = []
             for vertices, code in line.get_path().iter_segments(
-                    transform=transform, clip=(0, 0, self.width, self.height), curves=False):
+                    transform=transform, clip=clip, curves=False):
                 if code in (MplPath.MOVETO, MplPath.LINETO):
                     commands.append(f"{'M' if code == MplPath.MOVETO else 'L'} {vertices[0]:.6f} {vertices[1]:.6f}")
             paths[name] = "\n".join(commands)
@@ -108,9 +119,10 @@ class SimulationPlotPublisher:
             try:
                 for index, (name, figure) in enumerate(plots.items()):
                     self.check_cancelled()
-                    buffer = BytesIO()
-                    figure.savefig(buffer, format="svg")
-                    atomic_write(self.directory / f"{name}.svg", buffer.getvalue())
+                    # Use the same clipped paths in final exports and live views.
+                    layout = figure.get_layout_engine()
+                    atomic_write(self.directory / f"{name}.svg", _SvgPreview(figure).render(data))
+                    figure.set_layout_engine(layout)
                     if final:
                         figure.savefig(self.directory / f"{name}.png", format="png", dpi=160)
                     if on_plot is not None:
