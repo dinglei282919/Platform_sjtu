@@ -479,16 +479,6 @@ main { min-width: 0; padding: 16px; }
   .desktop-shell.anomaly-shell .content-shell { min-height: 0; height: 0; flex: 1 1 0; overflow: hidden; }
   .desktop-shell.anomaly-shell .anomaly-content-body { min-height: 0; height: 0; flex: 1 1 0; overflow: hidden; }
 
-  /* DNNTrain also fills the viewport. Its result image must not make the
-   * document taller than the shell, otherwise the browser exposes a page
-   * scrollbar and clips the lower part of the plot. */
-  .desktop-shell.training-shell { height: 100vh; min-height: 0; overflow: hidden; }
-  .desktop-shell.training-shell .content-shell { min-height: 0; height: 0; flex: 1 1 0; overflow: hidden; }
-  .desktop-shell.training-shell .training-content-body { min-height: 0; height: 0; flex: 1 1 0; overflow: hidden; }
-  .desktop-shell.mpc-shell { height: 100vh; min-height: 0; overflow: hidden; }
-  .desktop-shell.mpc-shell .content-shell { min-height: 0; height: 0; flex: 1 1 0; overflow: hidden; }
-  .desktop-shell.mpc-shell .training-content-body { min-height: 0; height: 0; flex: 1 1 0; overflow: hidden; }
-
   /* Keep each legend inside its own panel. The former negative top offset
    * placed the title outside the content body's clipping area. */
   .anomaly-box { overflow: hidden; padding-top: 34px; }
@@ -547,9 +537,7 @@ main { min-width: 0; padding: 16px; }
 }
 
 /* CS-style process-control DNNTrain page. */
-.training-content-title-bar { min-height: 68px; }
-.training-content-title-bar h2 { font-size: clamp(28px, 2.35vw, 36px); }
-.content-body.training-content-body { min-height: 0; height: 100%; overflow: hidden; display: flex; flex-direction: column; }
+.content-body.training-content-body { min-height: 0; height: auto; overflow: visible; }
 .training-page { min-width: 0; min-height: 0; height: 0; flex: 1 1 0; display: flex; flex-direction: column; gap: 10px; overflow: hidden; padding: 10px; }
 .training-layout { min-width: 0; min-height: 0; flex: 1 1 0; display: grid; grid-template-columns: minmax(430px, .72fr) minmax(600px, 1.28fr); gap: 10px; }
 .training-panel { min-width: 0; min-height: 0; overflow: hidden; border: 1px solid rgba(123, 167, 210, .35); border-radius: 8px; padding: 10px; background: rgba(31, 49, 70, .88); }
@@ -584,6 +572,57 @@ main { min-width: 0; padding: 16px; }
 .training-image-title { flex: 0 0 auto; margin: 0 0 7px; padding: 2px 0 2px 2px; color: #e4f2ff; font-size: 20px; font-weight: 650; }
 .training-image-frame { min-width: 0; min-height: 260px; flex: 1 1 0; display: grid; place-items: center; overflow: hidden; border: 1px solid rgba(129, 169, 206, .45); border-radius: 5px; background: rgba(18, 32, 48, .92); }
 .training-image-frame img { display: block; width: 100%; height: 100%; object-fit: contain; }
+/* Like FDI/replay, size result cards from their contents and scroll the page.
+ * A fixed-height flex chain lets the plot's minimum height overlap its footer. */
+.training-page.dnn-python-page { display: block; flex: none; height: auto; min-height: 0; overflow: visible; padding: 16px; }
+.dnn-python-page .training-layout { display: grid; grid-template-columns: clamp(320px, 25vw, 380px) minmax(0, 1fr); align-items: start; gap: 18px; min-height: 0; }
+.dnn-python-page .training-panel { padding: 20px; overflow: visible; }
+.dnn-python-page .training-panel > h3 { position: static; padding: 0; background: none; }
+.dnn-python-page .training-config-panel, .dnn-python-page .training-result-panel { display: block; min-height: 0; }
+.dnn-python-page .training-config-scroll { overflow: visible; padding: 0; }
+.dnn-python-page .training-results { min-width: 0; }
+.dnn-python-page .training-subpanel { padding: 12px; margin: 0 0 16px; }
+.dnn-python-page .training-subpanel h4 { position: static; margin: 0 0 12px; padding: 0; background: none; }
+.dnn-python-page .training-subpanel label { display: grid; grid-template-columns: minmax(0, 1fr) !important; gap: 7px; margin-bottom: 14px; text-align: left; font-size: 14px; }
+.dnn-python-page .training-path-field > span { text-align: left; }
+.dnn-python-page .training-path-control { grid-template-columns: minmax(0, 1fr) auto; }
+.dnn-python-page .training-path-control:has(button + button) { grid-template-columns: minmax(0, 1fr) auto auto; }
+.dnn-python-page .training-path-control button { min-width: 48px; padding: 6px 8px; }
+.dnn-python-page .training-number-field input { max-width: none; text-align: left; }
+.dnn-python-page .training-number-field { align-items: start; }
+.dnn-python-page .dnn-parameter-control { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-width: 0; text-align: left; }
+.dnn-python-page .dnn-parameter-control input { width: 100%; }
+.dnn-python-page .dnn-parameter-control small { color: #acc6df; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.dnn-python-page .training-run-action button, .dnn-python-page .training-subpanel > button { width: 100%; }
+.dnn-python-page .training-result-path { font-size: 13px; min-height: 0; }
+.dnn-python-page .dnn-output-heading { margin: 0 0 14px; }
+.dnn-python-page .dnn-output-heading h4 { margin: 0 0 7px; font-size: 16px; }
+.dnn-python-page .dnn-output-heading p { margin: 0; }
+.dnn-python-page .dnn-result-summary { margin-top: 18px; padding-top: 10px; border-top: 1px solid var(--control-border); overflow-wrap: anywhere; }
+.dnn-python-page .dnn-logs { margin: 12px 0; }
+.dnn-python-page input:disabled { color: #87a2bd; opacity: .7; }
+.dnn-python-page .training-subpanel p, .dnn-caption { font-size: 13px; line-height: 1.55; margin: 8px 0; }
+.dnn-plot-viewer { min-width: 0; min-height: 300px; flex: 1 1 0; display: flex; flex-direction: column; gap: 7px; }
+.dnn-plot-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; flex: 0 0 auto; }
+.dnn-plot-toolbar button { min-height: 30px; padding: 4px 10px; font-size: 13px; }
+.dnn-plot-toolbar output { min-width: 45px; font-variant-numeric: tabular-nums; text-align: center; }
+.dnn-plot-toolbar span { color: #bcd8f6; font-size: 12px; }
+.dnn-plot-viewport { position: relative; min-width: 0; min-height: 230px; flex: 1 1 0; overflow: hidden; border: 1px solid #7999b9; border-radius: 5px; background: white; color: #334155; touch-action: none; user-select: none; cursor: grab; }
+.dnn-plot-viewport.is-dragging { cursor: grabbing; }
+.dnn-plot-viewport:focus-visible { outline: 2px solid #63bcff; outline-offset: -3px; }
+.dnn-plot-viewport img { position: absolute; left: 50%; top: 50%; display: block; max-width: none; max-height: none; object-fit: fill; pointer-events: none; }
+.dnn-plot-placeholder { position: absolute; inset: 0; display: grid; place-items: center; padding: 20px; }
+.dnn-metrics { margin: 8px 0; line-height: 1.6; }
+.dnn-downloads { display: flex; gap: 12px; flex-wrap: wrap; padding: 6px 0; }
+.dnn-downloads a { color: #9bc8ff; }
+.dnn-logs pre { max-height: 100px; overflow: auto; white-space: pre-wrap; }
+@media (max-width: 1000px) {
+  .dnn-python-page .training-layout { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 760px) {
+  .training-page.dnn-python-page { padding: 12px; }
+  .dnn-python-page .training-panel { padding: 16px; }
+}
 .training-image-placeholder { padding: 20px; color: #bcd8f6; text-align: center; font-size: 15px; }
 .training-module-status { flex: 0 0 auto; margin-top: 0; }
 @media (max-width: 1180px) {
@@ -668,3 +707,103 @@ main { min-width: 0; padding: 16px; }
   .training-model-subpanel input { min-height: 40px; font-size: 16px; }
   .training-model-subpanel .training-path-control button { min-height: 40px; font-size: 15px; }
 }
+
+/* Scoped risk-control presentation. */
+/* Scoped to Risk Control's Python pages; other platform modules keep their theme. */
+.control-module {
+  --control-panel: #102640;
+  --control-inset: #0d2035;
+  --control-border: #365477;
+  --control-text: #d9ecff;
+  --control-muted: #a3bdd5;
+  color: var(--control-text);
+  font-size: 14px;
+}
+.control-module .training-panel, .control-module .panel {
+  background: var(--control-panel); border: 1px solid var(--control-border); border-radius: 8px; padding: 14px;
+}
+.control-module .training-subpanel { background: var(--control-inset); border-color: var(--control-border); border-radius: 8px; }
+.control-module .training-panel > h3, .control-module .panel > h3,
+.control-module .fdi-plot-panel h3 { color: var(--control-text); font-size: 18px; font-weight: 600; line-height: 1.4; margin: 0 0 12px; }
+.control-module .training-subpanel h4 { font-size: 15px; font-weight: 600; color: var(--control-text); }
+.control-module .muted, .control-module .dnn-caption, .control-module .training-subpanel p,
+.control-module .dnn-parameter-control small, .control-module .fdi-plot-panel p,
+.control-module dt { color: var(--control-muted); font-size: 13px; line-height: 1.6; }
+.control-module input { background: var(--control-inset); color: var(--control-text); border: 1px solid var(--control-border); border-radius: 6px; font: inherit; min-height: 34px; padding: 6px 8px; }
+.control-module button { background: #214c70; color: #e2efff; border: 1px solid #4c83ac; border-radius: 8px; font: inherit; font-weight: 600; min-height: 34px; padding: 7px 12px; }
+.control-module button:hover:not(:disabled) { background: #31678f; }
+.control-module button:disabled { color: #87a2bd; border-color: #365477; background: #21374d; cursor: not-allowed; }
+.control-module button:focus-visible, .control-module input:focus-visible,
+.control-module a:focus-visible { outline: 2px solid #a8ddff; outline-offset: 3px; }
+.control-module [role="tablist"] button { min-width: 0; padding: 10px 8px; }
+.control-module [role="tablist"] button[aria-selected="true"],
+.control-module .primary, .control-module .training-run-action button:not(:disabled) {
+  background: linear-gradient(135deg, #438fc3, #2f689b); border-color: #85cef6;
+}
+.control-module .primary:disabled { background: #21374d; border-color: #365477; }
+.control-module .dnn-plot-toolbar button { padding: 4px 10px; min-height: 30px; font-size: 13px; }
+.control-module .dnn-plot-toolbar span { flex-basis: 100%; color: var(--control-muted); font-size: 13px; line-height: 1.5; }
+/* Match training: size the plot canvas independently of its toolbar and captions. */
+.control-module .dnn-plot-viewer { flex: none; width: 100%; height: auto; min-height: 0; }
+.control-module .dnn-plot-viewport { flex: none; height: auto; min-height: 260px; max-height: 650px; aspect-ratio: var(--control-plot-aspect, 2.35); }
+.control-module .mpc-plot-panel { --control-plot-aspect: 8.6 / 6.5; }
+.fdi-wide-page { --control-plot-aspect: 12 / 4.6; }
+.replay-page { --control-plot-aspect: 8.6 / 6.2; }
+.control-module a, .control-module summary { color: #9bc8ff; font-size: 13px; }
+.control-module .dnn-metrics, .control-module .fdi-metrics { color: var(--control-text); font-size: 14px; line-height: 1.6; }
+.control-module .fdi-metrics strong { font-size: 18px; font-weight: 600; }
+.control-module .training-result-path { background: var(--control-inset); border-color: var(--control-border); color: var(--control-muted); font-size: 13px; }
+.control-module .control-task-status {
+  --status-accent: #8eaac4;
+  flex: none; min-width: 0; padding: 12px; margin: 0 0 14px;
+  border: 1px solid var(--control-border); border-radius: 8px; background: var(--control-inset);
+}
+.control-module .control-task-status[data-state="running"] { --status-accent: #79c9f8; }
+.control-module .control-task-status[data-state="succeeded"] { --status-accent: #79d9b5; }
+.control-module .control-task-status[data-state="failed"] { --status-accent: #ffaaaa; }
+.control-module .control-task-status[data-state="cancelled"] { --status-accent: #e9c27d; }
+.control-task-summary { display: flex; align-items: flex-start; gap: 10px; min-width: 0; margin-bottom: 10px; line-height: 22px; }
+.control-task-badge { flex: none; color: var(--status-accent); border: 1px solid currentColor; border-radius: 5px; padding: 0 8px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.control-task-message { flex: 1; min-width: 0; overflow-wrap: anywhere; color: #d9ecff; font-size: 14px; font-weight: 400; }
+.control-task-percent { flex: none; min-width: 44px; text-align: right; color: var(--status-accent); font-size: 14px; font-variant-numeric: tabular-nums; }
+.control-task-status progress { display: block; appearance: none; width: 100%; height: 8px; border: 0; border-radius: 4px; overflow: hidden; background: #233b53; accent-color: var(--status-accent); }
+.control-task-status progress::-webkit-progress-bar { background: #233b53; border-radius: 4px; }
+.control-task-status progress::-webkit-progress-value { background: var(--status-accent); border-radius: 4px; }
+.control-task-status progress::-moz-progress-bar { background: var(--status-accent); border-radius: 4px; }
+
+.dnn-python-page .mpc-output-plots { min-width: 0; }
+.dnn-python-page .mpc-plot-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 0 0 18px; }
+.dnn-python-page .mpc-plot-panel { min-width: 0; }
+.dnn-python-page .mpc-plot-panel[hidden] { display: none; }
+
+.fdi-page { display: grid; grid-template-columns: clamp(320px, 25vw, 380px) minmax(0, 1fr); gap: 18px; align-items: start; }
+.fdi-page .fdi-controls, .fdi-page .fdi-output { padding: 20px; }
+.fdi-page .fdi-controls { position: sticky; top: 12px; min-width: 0; }
+.fdi-page .fdi-controls input, .fdi-page .fdi-controls button { width: 100%; margin-bottom: 12px; }
+.fdi-page .fdi-controls label { display: block; margin-bottom: 7px; }
+.fdi-page dl { line-height: 1.6; }
+.fdi-page dt { margin-top: 12px; }
+.fdi-page dd { margin: 2px 0 0; }
+.fdi-page .fdi-results { min-width: 0; }
+.fdi-page .fdi-output { min-width: 0; }
+.fdi-page .fdi-tabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 22px; }
+.fdi-page .fdi-plot-panel { min-width: 0; }
+.fdi-page .fdi-plot-panel[hidden] { display: none; }
+.fdi-page .fdi-plot-panel header { display: flex; align-items: start; justify-content: space-between; gap: 8px; margin-bottom: 14px; }
+.fdi-page .fdi-plot-panel h3 { margin: 0 0 7px; }
+.fdi-page .fdi-plot-panel p { margin: 0; }
+.fdi-page .fdi-metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 12px; border-top: 1px solid var(--control-border); margin-top: 20px; }
+.fdi-page .fdi-metrics strong { display: inline-block; margin-top: 4px; color: #86d4ff; }
+.fdi-page .fdi-downloads { display: flex; flex-direction: column; gap: 10px; }
+.fdi-page .fdi-metrics .fdi-downloads { grid-column: 1 / -1; }
+.fdi-page .fdi-logs { margin: 12px 0; }
+.fdi-page .fdi-logs pre { white-space: pre-wrap; }
+.fdi-page .error { margin: 0 0 12px; }
+@media (max-width: 1200px) { .fdi-page .fdi-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 1000px) { .fdi-page { grid-template-columns: 1fr; } .fdi-page .fdi-controls { position: static; } }
+@media (max-width: 760px) { .fdi-page .fdi-controls, .fdi-page .fdi-output { padding: 16px; } }
+
+/* Keep the landscape figure heading compact. */
+.fdi-wide-page .fdi-tabs { margin-bottom: 18px; }
+.fdi-wide-page .fdi-plot-panel header { align-items: center; }
+.fdi-wide-page .fdi-plot-panel header a { flex-shrink: 0; }

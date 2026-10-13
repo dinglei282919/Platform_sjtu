@@ -1,5 +1,7 @@
 # 化工控制过程 DNN-MPC MATLAB Python Package 使用说明
 
+> 历史编译包说明。当前风险管控页面不再调用本包；Python 部署与输出结构见 [README](README.md)。
+
 本模块参照 `gridattackpkg`，通过 MATLAB Compiler SDK 导出为 Python Package，再由 platform 在 MATLAB Runtime R2024b 下调用。默认 Python 导入模块名为 `dnnmpcpkg`，默认导出目录为 `dnn_mpc/build_python`，pip 包名为 `dnnmpcpkg-R2024b`。
 
 ## 1. 环境要求

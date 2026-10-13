@@ -1,12 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FocusEvent, type ReactNode } from 'react'
 import * as echarts from 'echarts'
 import { api, post } from './api'
+import { DnnMpcPage } from './DnnMpcPage'
+import { FdiPage } from './FdiPage'
+import { ReplayPage } from './ReplayPage'
+import { useTask } from './useTask'
+import { useStoredState } from './taskSession'
 
-type ModuleId = 'governance' | 'score' | 'classification' | 'cdq' | 'sdg' | 'sil' | 'anomaly' | 'training' | 'dnn-mpc'
+type ModuleId = 'governance' | 'score' | 'classification' | 'cdq' | 'sdg' | 'sil' | 'anomaly' | 'training' | 'dnn-mpc' | 'fdi' | 'replay'
 type TaskProgress = { percent?: number; message?: string; module?: string; timestamp?: string; revision?: number; outputs?: Record<string, unknown> }
 type Task = { id: string; title: string; status: string; logs: string[]; result?: Record<string, unknown>; error?: string; progress?: TaskProgress }
 type Recommendation = { node_id: string; node_name: string; frequency: number; severity: number; rrf: number; target_sil: number }
-type LocalPathKind = 'directory' | 'open-mat' | 'save-mat'
 type SdgNode = { id: string; name: string; type: 'R' | 'P' | 'C'; probability: number }
 type SdgEdge = { source: string; target: string; type: '+' | '-'; probability: number }
 type SdgIssue = { title: string; message: string; fieldId?: string }
@@ -18,12 +22,6 @@ type ErrorDialogState = { title: string; message: string }
 type FormValidationIssue = ErrorDialogState
 type CdqVectorBound = { min: number; max: number }
 type CdqVectorBounds = { u_now?: CdqVectorBound[]; u_after?: CdqVectorBound[]; cv?: CdqVectorBound[] }
-type RuntimePathForm = { package_dir: string; package_name: string; mcr_root: string; output_dir: string; model_path: string }
-type TrainingFormValues = RuntimePathForm & { sample_count: number; epochs: number; hidden_layers: string; dataset_path: string }
-type MpcFormValues = RuntimePathForm & { sim_time: number; prediction_horizon: number }
-
-const pythonPackageNamePattern = /^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$/
-
 function defaultCdqVectorBounds(): CdqVectorBounds {
   const fallback = Array.from({ length: 7 }, () => ({ min: 0, max: 999999 }))
   return {
@@ -31,100 +29,6 @@ function defaultCdqVectorBounds(): CdqVectorBounds {
     u_after: fallback.map(bound => ({ ...bound })),
     cv: fallback.map(bound => ({ ...bound })),
   }
-}
-
-function isAbsoluteLocalPath(value: string): boolean {
-  const path = value.trim()
-  return /^[A-Za-z]:[\\/]/.test(path) || /^\\\\/.test(path) || path.startsWith('/')
-}
-
-function validateRuntimePaths(form: RuntimePathForm): FormValidationIssue | null {
-  const packageName = form.package_name.trim()
-  if (!packageName) return { title: '参数错误', message: 'Python 包名不能为空。' }
-  if (!pythonPackageNamePattern.test(packageName)) {
-    return { title: '参数错误', message: 'Python 包名格式不正确，只能使用合法的 Python 模块名。' }
-  }
-  if (form.package_dir.trim() && !isAbsoluteLocalPath(form.package_dir)) {
-    return { title: '路径错误', message: 'Python 包目录必须是本机绝对路径；也可以留空以使用当前环境中已安装的包。' }
-  }
-  if (!form.mcr_root.trim()) return { title: '路径错误', message: 'MATLAB Runtime 根目录不能为空。' }
-  if (!isAbsoluteLocalPath(form.mcr_root)) return { title: '路径错误', message: 'MATLAB Runtime 根目录必须是本机绝对路径。' }
-  if (!form.output_dir.trim()) return { title: '路径错误', message: '输出目录不能为空。' }
-  if (!isAbsoluteLocalPath(form.output_dir)) return { title: '路径错误', message: '输出目录必须是本机绝对路径。' }
-  if (!form.model_path.trim()) return { title: '路径错误', message: '模型文件路径不能为空。' }
-  if (!isAbsoluteLocalPath(form.model_path)) return { title: '路径错误', message: '模型文件必须使用本机绝对路径。' }
-  if (!form.model_path.trim().toLowerCase().endsWith('.mat')) return { title: '路径错误', message: '模型文件必须使用 .mat 扩展名。' }
-  return null
-}
-
-function validateTrainingForm(form: TrainingFormValues): FormValidationIssue | null {
-  const pathIssue = validateRuntimePaths(form)
-  if (pathIssue) return pathIssue
-  if (!Number.isInteger(form.sample_count) || form.sample_count < 100 || form.sample_count > 100000) {
-    return { title: '参数错误', message: '训练样本数必须是 100～100000 之间的整数（含边界）。' }
-  }
-  if (!Number.isInteger(form.epochs) || form.epochs < 1 || form.epochs > 5000) {
-    return { title: '参数错误', message: '训练轮数必须是 1～5000 之间的整数（含边界）。' }
-  }
-  const hiddenLayerText = form.hidden_layers.trim()
-  if (!/^\d+(?:\s*,\s*\d+)*$/.test(hiddenLayerText)) {
-    return { title: '参数错误', message: '隐藏层规模必须是用逗号分隔的正整数，例如 64,64。' }
-  }
-  const hiddenLayers = hiddenLayerText.split(',').map(value => Number(value.trim()))
-  if (hiddenLayers.length > 10 || hiddenLayers.some(value => !Number.isInteger(value) || value < 1 || value > 4096)) {
-    return { title: '参数错误', message: '隐藏层最多设置 10 层，每层神经元数量必须是 1～4096 之间的整数。' }
-  }
-  if (form.dataset_path.trim()) {
-    if (!isAbsoluteLocalPath(form.dataset_path)) return { title: '路径错误', message: '外部数据集必须使用本机绝对路径。' }
-    if (!form.dataset_path.trim().toLowerCase().endsWith('.mat')) return { title: '路径错误', message: '外部数据集必须是 .mat 文件。' }
-  }
-  return null
-}
-
-function validateTrainingPathField(form: RuntimePathForm | TrainingFormValues | MpcFormValues, field: keyof RuntimePathForm | 'dataset_path'): FormValidationIssue | null {
-  if (field === 'package_name') {
-    const packageName = form.package_name.trim()
-    if (!packageName) return { title: '参数错误', message: 'Python 包名不能为空。' }
-    if (!pythonPackageNamePattern.test(packageName)) return { title: '参数错误', message: 'Python 包名格式不正确，只能使用合法的 Python 模块名。' }
-    return null
-  }
-  if (field === 'package_dir') {
-    if (form.package_dir.trim() && !isAbsoluteLocalPath(form.package_dir)) return { title: '路径错误', message: 'Python 包目录必须是本机绝对路径。' }
-    return null
-  }
-  if (field === 'mcr_root') {
-    if (!form.mcr_root.trim()) return { title: '路径错误', message: 'MATLAB Runtime 根目录不能为空。' }
-    if (!isAbsoluteLocalPath(form.mcr_root)) return { title: '路径错误', message: 'MATLAB Runtime 根目录必须是本机绝对路径。' }
-    return null
-  }
-  if (field === 'output_dir') {
-    if (!form.output_dir.trim()) return { title: '路径错误', message: '输出目录不能为空。' }
-    if (!isAbsoluteLocalPath(form.output_dir)) return { title: '路径错误', message: '输出目录必须是本机绝对路径。' }
-    return null
-  }
-  if (field === 'model_path') {
-    if (!form.model_path.trim()) return { title: '路径错误', message: '模型文件路径不能为空。' }
-    if (!isAbsoluteLocalPath(form.model_path)) return { title: '路径错误', message: '模型文件必须使用本机绝对路径。' }
-    if (!form.model_path.trim().toLowerCase().endsWith('.mat')) return { title: '路径错误', message: '模型文件必须使用 .mat 扩展名。' }
-    return null
-  }
-  const datasetPath = 'dataset_path' in form ? form.dataset_path : ''
-  if (datasetPath.trim() && (!isAbsoluteLocalPath(datasetPath) || !datasetPath.trim().toLowerCase().endsWith('.mat'))) {
-    return { title: '路径错误', message: '外部数据集必须使用本机绝对路径和 .mat 扩展名。' }
-  }
-  return null
-}
-
-function validateMpcForm(form: MpcFormValues): FormValidationIssue | null {
-  const pathIssue = validateRuntimePaths(form)
-  if (pathIssue) return pathIssue
-  if (!Number.isFinite(form.sim_time) || form.sim_time < 0.2 || form.sim_time > 20) {
-    return { title: '参数错误', message: '仿真时长必须在 0.2～20 秒之间（含边界）。' }
-  }
-  if (!Number.isInteger(form.prediction_horizon) || form.prediction_horizon < 1 || form.prediction_horizon > 60) {
-    return { title: '参数错误', message: '预测步长必须是 1～60 之间的整数（含边界）。' }
-  }
-  return null
 }
 
 type NavigationItem = { id: ModuleId; name: string; deferred?: boolean }
@@ -330,6 +234,8 @@ const navigationGroups: NavigationGroup[] = [
     id: 'risk-control', icon: '🎛', name: '风险管控优化决策', items: [
       { id: 'training', name: '风险场景下控制系统智能模型训练算法' },
       { id: 'dnn-mpc', name: '风险场景下智能模型优化控制算法' },
+      { id: 'fdi', name: '虚假数据注入下的自适应控制仿真' },
+      { id: 'replay', name: '重放攻击下的自适应控制仿真' },
     ],
   },
   { id: 'sis', icon: '🛡', name: 'SIS自主化检测', items: [{ id: 'sdg', name: 'SDG-HAZOP' }] },
@@ -354,27 +260,6 @@ function Chart({ option, height = 330, fill = false, className = '', onClick, on
     return () => { if (onClick) instance.off('click', onClick); window.removeEventListener('resize', resize); observer?.disconnect() }
   }, [option, onClick, onResize])
   return <div className={`chart ${className}`} ref={element} style={fill ? undefined : { height }} />
-}
-
-function useTask(taskId: string | null) {
-  const [task, setTask] = useState<Task | null>(null)
-  useEffect(() => {
-    setTask(null)
-    if (!taskId) return
-    let active = true
-    const load = async () => {
-      try {
-        const next = await api<Task>(`/tasks/${taskId}`)
-        if (active) setTask(next)
-      } catch (error) {
-        if (active) setTask({ id: taskId, title: '任务', status: 'failed', logs: [], error: error instanceof Error ? error.message : String(error) })
-      }
-    }
-    void load()
-    const handle = window.setInterval(() => void load(), 1000)
-    return () => { active = false; window.clearInterval(handle) }
-  }, [taskId])
-  return task
 }
 
 function TaskPanel({ task }: { task: Task | null }) {
@@ -402,14 +287,15 @@ function ErrorDialog({ title, message, onClose }: { title: string; message: stri
 }
 
 function AnomalyPage() {
-  const [form, setForm] = useState<AnomalyForm>({
+  const [form, setForm] = useStoredState<AnomalyForm>('anomaly.form', {
     mcr_root: 'E:\\MATLAB2024',
     attack_min_pct: '5',
     attack_max_pct: '10',
     measurement_noise_pct: '2',
     process_disturbance_pct: '5',
   })
-  const [taskId, setTaskId] = useState<string | null>(null)
+  const [taskId, setTaskId] = useStoredState<string | null>('anomaly.task', null)
+  const [submitting, setSubmitting] = useState(false)
   const [imageMode, setImageMode] = useState<'topology' | 'detection'>('topology')
   const [imageRevision, setImageRevision] = useState(0)
   const [imageError, setImageError] = useState(false)
@@ -420,12 +306,12 @@ function AnomalyPage() {
   const runButtonRef = useRef<HTMLButtonElement>(null)
   const dialogReturnFocusRef = useRef<HTMLElement | null>(null)
   const notifiedTaskFailures = useRef(new Set<string>())
-  const task = useTask(taskId)
+  const { task, pollingError } = useTask<Task>(taskId, setTaskId)
   const result = task?.result as Record<string, any> | undefined
-  const running = task?.status === 'queued' || task?.status === 'running'
+  const running = submitting || (!!taskId && (!task || ['queued', 'running'].includes(task.status)))
   const pageError = validationError || error || task?.error || ''
-  const statusText = pageError || task?.status === 'failed' ? '执行失败' : task?.status === 'succeeded' ? '执行完成' : running ? '运行中' : '待执行'
-  const statusEnglish = pageError || task?.status === 'failed' ? 'Failed' : task?.status === 'succeeded' ? 'Completed' : running ? 'Running' : 'Idle'
+  const statusText = pageError || task?.status === 'failed' ? '执行失败' : task?.status === 'succeeded' ? '执行完成' : task?.status === 'cancelled' ? '已取消' : running ? '运行中' : '待执行'
+  const statusEnglish = pageError || task?.status === 'failed' ? 'Failed' : task?.status === 'succeeded' ? 'Completed' : task?.status === 'cancelled' ? 'Cancelled' : running ? 'Running' : 'Idle'
   const imageName = imageMode === 'detection' ? 'detection_probability.png' : 'topology.png'
   const imageTitle = imageMode === 'detection' ? '异常检测概率图 (detection_probability.png)' : '网络拓扑图 (topology.png)'
   const imageUrl = `/api/anomaly/images/${imageName}?v=${encodeURIComponent(String(result?.image_revision ?? imageRevision))}`
@@ -467,6 +353,7 @@ function AnomalyPage() {
     setValidationError(validateAnomalyForm(form)?.message ?? '')
   }
   const submit = async () => {
+    if (running) return
     const formError = validateAnomalyForm(form)
     if (formError) {
       setValidationError(formError.message)
@@ -474,6 +361,7 @@ function AnomalyPage() {
       return
     }
     try {
+      setSubmitting(true)
       setValidationError('')
       setError('')
       const nextTask = await post<{ task_id: string }>('/anomaly/tasks', {
@@ -488,7 +376,7 @@ function AnomalyPage() {
       const message = e instanceof Error ? e.message : String(e)
       setError(message)
       showErrorDialog('异常检测执行失败', message, runButtonRef.current)
-    }
+    } finally { setSubmitting(false) }
   }
   const exportResult = () => {
     if (!result) return
@@ -531,6 +419,7 @@ function AnomalyPage() {
     </div>
     <div className="anomaly-status-bar"><span>状态：{statusText}</span><span>Status: {statusEnglish}</span></div>
     {pageError && <ErrorBox text={pageError} />}
+    {pollingError && <ErrorBox text={pollingError} />}
     {dialog && <ErrorDialog title={dialog.title} message={dialog.message} onClose={closeErrorDialog} />}
   </Page>
 }
@@ -1258,15 +1147,16 @@ function buildSilReport(result: Record<string, any>) {
 }
 
 function SilPage({ recommendation }: { recommendation: Recommendation | null }) {
-  const [form, setForm] = useState<SilForm>(SIL_DEFAULT_FORM)
+  const [form, setForm] = useStoredState<SilForm>('sil.form', SIL_DEFAULT_FORM)
   const [lambdaSource, setLambdaSource] = useState<'direct' | 'estimate'>('direct')
   const [lambdaEstimate, setLambdaEstimate] = useState('')
-  const [taskId, setTaskId] = useState<string | null>(null)
+  const [taskId, setTaskId] = useStoredState<string | null>('sil.task', null)
+  const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
   const [dialog, setDialog] = useState<ErrorDialogState | null>(null)
   const runButtonRef = useRef<HTMLButtonElement>(null)
   const dialogReturnFocusRef = useRef<HTMLElement | null>(null)
-  const task = useTask(taskId)
+  const { task, pollingError } = useTask<Task>(taskId, setTaskId)
   const showErrorDialog = useCallback((title: string, message: string, returnFocus: HTMLElement | null) => {
     dialogReturnFocusRef.current = returnFocus
     setDialog({ title, message })
@@ -1282,7 +1172,7 @@ function SilPage({ recommendation }: { recommendation: Recommendation | null }) 
     showErrorDialog('参数边界错误', issue.message, document.getElementById(issue.fieldId))
   }, [showErrorDialog])
   useEffect(() => {
-    void api<Record<string, any>>('/sil/defaults').then(data => setForm(previous => ({
+    void api<Record<string, any>>('/sil/defaults').then(data => setForm(previous => previous !== SIL_DEFAULT_FORM ? previous : ({
       ...previous,
       ...data,
       partial_betas: { ...previous.partial_betas, ...(data.partial_betas ?? {}) },
@@ -1409,12 +1299,14 @@ function SilPage({ recommendation }: { recommendation: Recommendation | null }) 
 
   const toggleLambdaSource = () => setLambdaSource(previous => previous === 'direct' ? 'estimate' : 'direct')
   const submit = async () => {
+    if (running) return
     const issue = validateSilForm()
     if (issue) {
       showSilIssue(issue)
       return
     }
     try {
+      setSubmitting(true)
       setError('')
       const partialBetas = Object.fromEntries(partialBetaOrders.map(order => [String(order), Number(form.partial_betas?.[String(order)] ?? defaultPartialBeta)]))
       const nextTask = await post<{ task_id: string }>('/sil/tasks', {
@@ -1434,7 +1326,7 @@ function SilPage({ recommendation }: { recommendation: Recommendation | null }) 
       const message = e instanceof Error ? e.message : String(e)
       setError(message)
       showErrorDialog('参数边界错误', message, runButtonRef.current)
-    }
+    } finally { setSubmitting(false) }
   }
 
   const result = task?.result as Record<string, any> | undefined
@@ -1445,8 +1337,8 @@ function SilPage({ recommendation }: { recommendation: Recommendation | null }) 
     if (!match) return 0
     return Math.min(100, Math.round(Number(match[1]) / Math.max(1, Number(match[2])) * 100))
   }, [task])
-  const running = task?.status === 'queued' || task?.status === 'running'
-  const statusText = task?.status === 'failed' || error ? '验证异常' : task?.status === 'succeeded' ? '仿真完成' : running ? '仿真运行中...' : '就绪'
+  const running = submitting || (!!taskId && (!task || ['queued', 'running'].includes(task.status)))
+  const statusText = task?.status === 'failed' || error ? '验证异常' : task?.status === 'succeeded' ? '仿真完成' : task?.status === 'cancelled' ? '已取消，可重新运行' : running ? '仿真运行中...' : '就绪'
   const report = result ? buildSilReport(result) : '示例参数已加载 (2oo4, λ=111.11 FIT, 全局β=0.1)'
   const histogramLabels = result?.histogram?.centers?.map((value: number) => value.toExponential(1)) ?? result?.histogram?.edges?.slice(0, -1).map((value: number) => value.toExponential(1)) ?? []
   const histogramValues = result?.histogram?.density ?? result?.histogram?.counts ?? []
@@ -1527,6 +1419,7 @@ function SilPage({ recommendation }: { recommendation: Recommendation | null }) 
       </section>
     </div>
     {(error || task?.error) && <ErrorBox text={error || task?.error || '验证失败'} />}
+    {pollingError && <ErrorBox text={pollingError} />}
     {dialog && <ErrorDialog title={dialog.title} message={dialog.message} onClose={closeErrorDialog} />}
   </Page>
 }
@@ -1537,14 +1430,15 @@ function ClassificationPage() {
     { id: 'easy', name: '数据集2' },
     { id: 'hard', name: '数据集3' },
   ])
-  const [form, setForm] = useState<ClassificationFormValues>({ dataset: 'original', epochs: 50, batch_size: 32, learning_rate: 0.001 })
-  const [taskId, setTaskId] = useState<string | null>(null)
+  const [form, setForm] = useStoredState<ClassificationFormValues>('classification.form', { dataset: 'original', epochs: 50, batch_size: 32, learning_rate: 0.001 })
+  const [taskId, setTaskId] = useStoredState<string | null>('classification.task', null)
+  const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
   const [dialog, setDialog] = useState<ErrorDialogState | null>(null)
   const runButtonRef = useRef<HTMLButtonElement>(null)
   const dialogReturnFocusRef = useRef<HTMLElement | null>(null)
   const notifiedTaskFailures = useRef(new Set<string>())
-  const task = useTask(taskId)
+  const { task, pollingError } = useTask<Task>(taskId, setTaskId)
   useEffect(() => { void api<Array<{ id: string; name: string }>>('/classification/datasets').then(setDatasets).catch(e => setError(e.message)) }, [])
   const showErrorDialog = useCallback((title: string, message: string, returnFocus: HTMLElement | null) => {
     dialogReturnFocusRef.current = returnFocus
@@ -1563,6 +1457,7 @@ function ClassificationPage() {
     showErrorDialog('训练执行失败', task.error, runButtonRef.current)
   }, [task?.error, task?.id, task?.status, showErrorDialog])
   const submit = async () => {
+    if (trainingActive) return
     const formError = validateClassificationForm(form)
     if (formError) {
       setError(formError.message)
@@ -1570,6 +1465,7 @@ function ClassificationPage() {
       return
     }
     try {
+      setSubmitting(true)
       setError('')
       const nextTask = await post<{ task_id: string }>('/classification/tasks', form)
       setTaskId(nextTask.task_id)
@@ -1577,7 +1473,7 @@ function ClassificationPage() {
       const message = e instanceof Error ? e.message : String(e)
       setError(message)
       showErrorDialog('训练提交失败', message, runButtonRef.current)
-    }
+    } finally { setSubmitting(false) }
   }
   const validateFieldOnBlur = (event: FocusEvent<HTMLInputElement>, field: 'epochs' | 'batch_size' | 'learning_rate') => {
     let issue: FormValidationIssue | null = null
@@ -1594,7 +1490,7 @@ function ClassificationPage() {
     }
   }
   const result = task?.result as Record<string, any> | undefined
-  const trainingActive = taskId !== null && (!task || task.status === 'queued' || task.status === 'running')
+  const trainingActive = submitting || (taskId !== null && (!task || task.status === 'queued' || task.status === 'running'))
   const matrix = result?.confusion_matrix as number[][] | undefined
   const classNames = result?.class_names as string[] | undefined
   const confusionData = matrix && classNames
@@ -1631,7 +1527,7 @@ function ClassificationPage() {
   } as echarts.EChartsOption : null
   const statusText = !task ? '状态：待命' : task.status === 'succeeded' && result
     ? `状态：训练完成 (最高精度: ${(Number(result.best_accuracy) * 100).toFixed(2)}%)`
-    : task.status === 'failed' ? '状态：训练异常中断' : '状态：正在训练模型...'
+    : task.status === 'failed' ? '状态：训练异常中断' : task.status === 'cancelled' ? '状态：训练已取消' : '状态：正在训练模型...'
   return <Page title="风险动态分析 - 潜在安全威胁识别与自动分类">
     <div className="two-column classification-layout">
       <section className="panel classification-input-panel">
@@ -1655,380 +1551,11 @@ function ClassificationPage() {
       </section>
     </div>
     <div className="module-status-bar">{statusText}</div>
-    {error && <ErrorBox text={error} />}
+    {(error || pollingError) && <ErrorBox text={error || pollingError} />}
     {dialog && <ErrorDialog title={dialog.title} message={dialog.message} onClose={closeErrorDialog} />}
   </Page>
 }
 
-function TrainingPage() {
-  const [form, setForm] = useState<TrainingFormValues>({
-    package_dir: '', package_name: 'dnnmpcpkg', mcr_root: 'E:\\MATLAB2024', output_dir: '', model_path: '',
-    sample_count: 1000, epochs: 50, hidden_layers: '64,64', dataset_path: '',
-  })
-  const [taskId, setTaskId] = useState<string | null>(null)
-  const [imageMode, setImageMode] = useState<'training' | 'prediction'>('training')
-  const [imageRevision, setImageRevision] = useState(0)
-  const [imageError, setImageError] = useState(false)
-  const [error, setError] = useState('')
-  const [dialog, setDialog] = useState<ErrorDialogState | null>(null)
-  const runButtonRef = useRef<HTMLButtonElement>(null)
-  const dialogReturnFocusRef = useRef<HTMLElement | null>(null)
-  const notifiedTaskFailures = useRef(new Set<string>())
-  const showErrorDialog = useCallback((title: string, message: string, returnFocus: HTMLElement | null) => {
-    dialogReturnFocusRef.current = returnFocus
-    setDialog({ title, message })
-  }, [])
-  const closeErrorDialog = useCallback(() => {
-    const returnFocus = dialogReturnFocusRef.current
-    setDialog(null)
-    dialogReturnFocusRef.current = null
-    window.requestAnimationFrame(() => returnFocus?.focus())
-  }, [])
-  const handlePathSelectionError = useCallback((message: string) => {
-    setError(message)
-    showErrorDialog('路径选择失败', message, runButtonRef.current)
-  }, [showErrorDialog])
-  const task = useTask(taskId)
-  const taskResult = task?.result as Record<string, any> | undefined
-  const result = taskResult?.result as Record<string, any> | undefined
-  const running = task?.status === 'queued' || task?.status === 'running'
-  const taskProgress = task?.progress
-  const progress = task?.status === 'succeeded' ? 100 : running ? Math.max(0, Math.min(100, Number(taskProgress?.percent ?? 0))) : 0
-  const progressMessage = task?.status === 'succeeded'
-    ? '\u6267\u884c\u5b8c\u6210'
-    : task?.status === 'failed'
-      ? '\u6267\u884c\u5931\u8d25'
-      : taskProgress?.message || (running ? '\u542f\u52a8\u4e2d' : '\u7b49\u5f85\u542f\u52a8')
-  const progressLabel = `${progress}%  ${progressMessage}`
-  const imageName = imageMode === 'prediction' ? 'prediction_error.png' : 'training_performance.png'
-  const imageTitle = imageMode === 'prediction' ? '预测误差 (prediction_error.png)' : '训练曲线 (training_performance.png)'
-  const imageRevisionKey = taskProgress?.revision ?? taskProgress?.timestamp ?? taskResult?.image_revision ?? imageRevision
-  const imageUrl = `${taskId ? `/api/training/tasks/${taskId}/images` : '/api/training/images'}/${imageName}?v=${encodeURIComponent(String(imageRevisionKey))}`
-
-  useEffect(() => {
-    void api<Record<string, any>>('/training/defaults').then(defaults => setForm(previous => ({ ...previous, ...defaults }))).catch(e => {
-      const message = e instanceof Error ? e.message : String(e)
-      setError(message)
-      showErrorDialog('配置加载失败', message, runButtonRef.current)
-    })
-  }, [showErrorDialog])
-  useEffect(() => {
-    if (task?.status === 'succeeded') {
-      setImageRevision(Number(taskResult?.image_revision ?? Date.now()))
-      setImageError(false)
-    }
-  }, [task?.status, taskResult?.image_revision])
-  useEffect(() => {
-    setImageError(false)
-  }, [imageUrl])
-  useEffect(() => {
-    if (task?.status !== 'failed' || !task.error || notifiedTaskFailures.current.has(task.id)) return
-    notifiedTaskFailures.current.add(task.id)
-    setError(task.error)
-    showErrorDialog('DNNTrain 执行失败', task.error, runButtonRef.current)
-  }, [task?.error, task?.id, task?.status, showErrorDialog])
-
-  const update = (key: string, value: string | number) => setForm(previous => ({ ...previous, [key]: value }))
-  const validateTrainingFieldOnBlur = (field: 'sample_count' | 'epochs' | 'hidden_layers', event: FocusEvent<HTMLInputElement>) => {
-    const issue = field === 'sample_count'
-      ? (!Number.isFinite(form.sample_count) || !Number.isInteger(form.sample_count) || form.sample_count < 100 || form.sample_count > 100000
-        ? { title: '参数错误', message: '训练样本数必须是 100～100000 之间的整数（含边界）。' } : null)
-      : field === 'epochs'
-        ? (!Number.isFinite(form.epochs) || !Number.isInteger(form.epochs) || form.epochs < 1 || form.epochs > 5000
-          ? { title: '参数错误', message: '训练轮数必须是 1～5000 之间的整数（含边界）。' } : null)
-        : (() => {
-          const hiddenLayerText = form.hidden_layers.trim()
-          if (!/^\d+(?:\s*,\s*\d+)*$/.test(hiddenLayerText)) return { title: '参数错误', message: '隐藏层规模必须是用逗号分隔的正整数，例如 64,64。' }
-          const hiddenLayers = hiddenLayerText.split(',').map(value => Number(value.trim()))
-          return hiddenLayers.length > 10 || hiddenLayers.some(value => !Number.isInteger(value) || value < 1 || value > 4096)
-            ? { title: '参数错误', message: '隐藏层最多设置 10 层，每层神经元数量必须是 1～4096 之间的整数。' }
-            : null
-        })()
-    if (issue) {
-      setError(issue.message)
-      showErrorDialog(issue.title, issue.message, event.currentTarget)
-    }
-  }
-  const validateTrainingPathOnBlur = (field: keyof TrainingFormValues, element: HTMLElement) => {
-    const issue = validateTrainingPathField(form, field as keyof RuntimePathForm | 'dataset_path')
-    if (issue) {
-      setError(issue.message)
-      showErrorDialog(issue.title, issue.message, element)
-    }
-  }
-  const submit = async () => {
-    setError('')
-    const validationIssue = validateTrainingForm(form)
-    if (validationIssue) {
-      setError(validationIssue.message)
-      showErrorDialog(validationIssue.title, validationIssue.message, runButtonRef.current)
-      return
-    }
-    try {
-      setImageMode('training')
-      setImageError(false)
-      const nextTask = await post<{ task_id: string }>('/training/tasks', form)
-      setTaskId(nextTask.task_id)
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e)
-      setError(message)
-      showErrorDialog('DNNTrain 执行失败', message, runButtonRef.current)
-    }
-  }
-
-  const statusText = error || task?.status === 'failed'
-    ? '状态：执行失败'
-    : task?.status === 'succeeded'
-      ? `状态：训练完成${result?.best_accuracy == null ? '' : `（最佳测试准确率：${(Number(result.best_accuracy) * 100).toFixed(2)}%）`}`
-      : running ? '状态：正在训练模型...' : '状态：待执行'
-  const progressStatusText = running && taskProgress?.message
-    ? `状态：${taskProgress.module ? `${taskProgress.module} - ` : ''}${taskProgress.message}`
-    : statusText
-  const jsonPath = taskResult?.json_path ? String(taskResult.json_path) : '运行后显示 JSON 结果文件路径。'
-
-  return <Page title="风险场景下控制系统智能模型训练算法" className="training-page">
-    <div className="training-layout">
-      <section className="training-panel training-config-panel">
-        <h3>DNNTrain</h3>
-        <div className="training-config-scroll">
-          <section className="training-subpanel"><h4>路径设置</h4>
-            <TrainingPathField label="Python包目录:" value={form.package_dir} onChange={value => update('package_dir', value)} placeholder="可留空；使用当前环境已安装的包" disabled={running} onError={handlePathSelectionError} onBlur={() => validateTrainingPathOnBlur('package_dir', document.activeElement as HTMLElement)}/>
-            <TrainingPathField label="Python包名:" value={form.package_name} onChange={value => update('package_name', value)} disabled={running} browse={false} onBlur={() => validateTrainingPathOnBlur('package_name', document.activeElement as HTMLElement)}/>
-            <TrainingPathField label="MCR_ROOT:" value={form.mcr_root} onChange={value => update('mcr_root', value)} disabled={running} onError={handlePathSelectionError} onBlur={() => validateTrainingPathOnBlur('mcr_root', document.activeElement as HTMLElement)}/>
-            <TrainingPathField label="输出目录:" value={form.output_dir} onChange={value => update('output_dir', value)} disabled={running} onError={handlePathSelectionError} onBlur={() => validateTrainingPathOnBlur('output_dir', document.activeElement as HTMLElement)}/>
-            <TrainingPathField label="模型文件:" value={form.model_path} onChange={value => update('model_path', value)} disabled={running} pathKind="save-mat" onError={handlePathSelectionError} onBlur={() => validateTrainingPathOnBlur('model_path', document.activeElement as HTMLElement)}/>
-          </section>
-          <section className="training-subpanel training-model-subpanel"><h4>DNNTrain</h4>
-            <label className="training-number-field">训练样本数:<input id="training-sample-count" type="number" min={100} max={100000} step={100} value={form.sample_count} onChange={e => update('sample_count', Number(e.target.value))} onBlur={e => validateTrainingFieldOnBlur('sample_count', e)} disabled={running}/></label>
-            <label className="training-number-field">训练轮数:<input id="training-epochs" type="number" min={1} max={5000} step={1} value={form.epochs} onChange={e => update('epochs', Number(e.target.value))} onBlur={e => validateTrainingFieldOnBlur('epochs', e)} disabled={running}/></label>
-            <label htmlFor="training-hidden-layers">隐藏层规模:<input id="training-hidden-layers" type="text" value={form.hidden_layers} onChange={e => update('hidden_layers', e.target.value)} onBlur={e => validateTrainingFieldOnBlur('hidden_layers', e)} placeholder="例如 64,64" disabled={running}/></label>
-            <TrainingPathField label="外部数据集:" value={form.dataset_path} onChange={value => update('dataset_path', value)} placeholder="留空则自动生成数据集；选择 .mat 则使用外部 X_data/Y_data" disabled={running} allowClear pathKind="open-mat" onError={handlePathSelectionError} onBlur={() => validateTrainingPathOnBlur('dataset_path', document.activeElement as HTMLElement)}/>
-            <div className="training-run-action"><button ref={runButtonRef} type="button" onClick={() => void submit()} disabled={running}>{running ? '训练执行中...' : '运行训练模块'}</button></div>
-          </section>
-          <section className="training-subpanel"><h4>结果文件</h4><div className="training-result-path">{jsonPath}</div></section>
-        </div>
-      </section>
-      <section className="training-panel training-result-panel">
-        <h3>结果图</h3>
-        <div className="training-status-panel"><span>{progressStatusText}</span><div className="training-progress-wrap"><progress value={progress} max={100} aria-label="训练进度"/><span>{progressLabel}</span></div></div>
-        <div className="training-image-switches"><button type="button" className={imageMode === 'training' ? 'active' : ''} onClick={() => { setImageMode('training'); setImageError(false) }} disabled={running}>训练曲线</button><button type="button" className={imageMode === 'prediction' ? 'active' : ''} onClick={() => { setImageMode('prediction'); setImageError(false) }} disabled={running}>预测误差</button></div>
-        <h4 className="training-image-title">{imageTitle}</h4>
-        <div className="training-image-frame" role="img" aria-label={imageTitle} style={imageError ? undefined : { backgroundImage: `url("${imageUrl}")`, backgroundSize: 'contain', backgroundPosition: 'center', backgroundRepeat: 'no-repeat' }}>{imageError ? <div className="training-image-placeholder">暂无图像</div> : <img src={imageUrl} alt="" aria-hidden="true" style={{ display: 'none' }} onError={() => setImageError(true)}/>}</div>
-      </section>
-    </div>
-    <div className="module-status-bar training-module-status">{progressStatusText}</div>
-    {(error || task?.error) && <ErrorBox text={error || task?.error || '训练执行失败'} />}
-    {dialog && <ErrorDialog title={dialog.title} message={dialog.message} onClose={closeErrorDialog}/>}
-  </Page>
-}
-
-function MpcPage() {
-  const [form, setForm] = useState<MpcFormValues>({
-    package_dir: '', package_name: 'dnnmpcpkg', mcr_root: 'E:\\MATLAB2024', output_dir: '', model_path: '',
-    sim_time: 1.0, prediction_horizon: 5,
-  })
-  const [taskId, setTaskId] = useState<string | null>(null)
-  const [imageMode, setImageMode] = useState<'trajectory' | 'control' | 'tracking' | 'cost'>('trajectory')
-  const [imageRevision, setImageRevision] = useState(0)
-  const [imageError, setImageError] = useState(false)
-  const [error, setError] = useState('')
-  const [dialog, setDialog] = useState<ErrorDialogState | null>(null)
-  const runButtonRef = useRef<HTMLButtonElement>(null)
-  const dialogReturnFocusRef = useRef<HTMLElement | null>(null)
-  const notifiedTaskFailures = useRef(new Set<string>())
-  const showErrorDialog = useCallback((title: string, message: string, returnFocus: HTMLElement | null) => {
-    dialogReturnFocusRef.current = returnFocus
-    setDialog({ title, message })
-  }, [])
-  const closeErrorDialog = useCallback(() => {
-    const returnFocus = dialogReturnFocusRef.current
-    setDialog(null)
-    dialogReturnFocusRef.current = null
-    window.requestAnimationFrame(() => returnFocus?.focus())
-  }, [])
-  const handlePathSelectionError = useCallback((message: string) => {
-    setError(message)
-    showErrorDialog('路径选择失败', message, runButtonRef.current)
-  }, [showErrorDialog])
-  const task = useTask(taskId)
-  const taskResult = task?.result as Record<string, any> | undefined
-  const result = taskResult?.result as Record<string, any> | undefined
-  const running = task?.status === 'queued' || task?.status === 'running'
-  const taskProgress = task?.progress
-  const progress = task?.status === 'succeeded' ? 100 : running ? Math.max(0, Math.min(100, Number(taskProgress?.percent ?? 0))) : 0
-  const progressMessage = task?.status === 'succeeded'
-    ? '执行完成'
-    : task?.status === 'failed'
-      ? '执行失败'
-      : taskProgress?.message || (running ? '启动中' : '等待启动')
-  const progressLabel = `${progress}%  ${progressMessage}`
-  const imageMap = {
-    trajectory: ['process_control_trajectory.png', '状态轨迹 (process_control_trajectory.png)'],
-    control: ['control_input.png', '控制输入 (control_input.png)'],
-    tracking: ['tracking_error.png', '跟踪误差 (tracking_error.png)'],
-    cost: ['cost_curve.png', '代价曲线 (cost_curve.png)'],
-  } as const
-  const [imageName, imageTitle] = imageMap[imageMode]
-  const imageRevisionKey = taskProgress?.revision ?? taskProgress?.timestamp ?? taskResult?.image_revision ?? imageRevision
-  const imageUrl = `${taskId ? `/api/mpc/tasks/${taskId}/images` : '/api/mpc/images'}/${imageName}?v=${encodeURIComponent(String(imageRevisionKey))}`
-
-  useEffect(() => {
-    void api<Record<string, any>>('/mpc/defaults').then(defaults => setForm(previous => ({ ...previous, ...defaults }))).catch(e => {
-      const message = e instanceof Error ? e.message : String(e)
-      setError(message)
-      showErrorDialog('配置加载失败', message, runButtonRef.current)
-    })
-  }, [showErrorDialog])
-  useEffect(() => {
-    if (task?.status === 'succeeded') {
-      setImageRevision(Number(taskResult?.image_revision ?? Date.now()))
-      setImageError(false)
-    }
-  }, [task?.status, taskResult?.image_revision])
-  useEffect(() => {
-    setImageError(false)
-  }, [imageUrl])
-  useEffect(() => {
-    if (task?.status !== 'failed' || !task.error || notifiedTaskFailures.current.has(task.id)) return
-    notifiedTaskFailures.current.add(task.id)
-    setError(task.error)
-    showErrorDialog('MPC 仿真执行失败', task.error, runButtonRef.current)
-  }, [task?.error, task?.id, task?.status, showErrorDialog])
-
-  const update = (key: string, value: string | number) => setForm(previous => ({ ...previous, [key]: value }))
-  const validateMpcFieldOnBlur = (field: 'sim_time' | 'prediction_horizon', event: FocusEvent<HTMLInputElement>) => {
-    const issue = field === 'sim_time'
-      ? (!Number.isFinite(form.sim_time) || form.sim_time < 0.2 || form.sim_time > 20
-        ? { title: '参数错误', message: '仿真时长必须在 0.2～20 秒之间（含边界）。' } : null)
-      : (!Number.isFinite(form.prediction_horizon) || !Number.isInteger(form.prediction_horizon) || form.prediction_horizon < 1 || form.prediction_horizon > 60
-        ? { title: '参数错误', message: '预测步长必须是 1～60 之间的整数（含边界）。' } : null)
-    if (issue) {
-      setError(issue.message)
-      showErrorDialog(issue.title, issue.message, event.currentTarget)
-    }
-  }
-  const validateMpcPathOnBlur = (field: keyof MpcFormValues, element: HTMLElement) => {
-    const issue = validateTrainingPathField(form, field as keyof RuntimePathForm | 'dataset_path')
-    if (issue) {
-      setError(issue.message)
-      showErrorDialog(issue.title, issue.message, element)
-    }
-  }
-  const submit = async () => {
-    setError('')
-    const validationIssue = validateMpcForm(form)
-    if (validationIssue) {
-      setError(validationIssue.message)
-      showErrorDialog(validationIssue.title, validationIssue.message, runButtonRef.current)
-      return
-    }
-    try {
-      setImageMode('trajectory')
-      setImageError(false)
-      const nextTask = await post<{ task_id: string }>('/mpc/tasks', form)
-      setTaskId(nextTask.task_id)
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e)
-      setError(message)
-      showErrorDialog('MPC 仿真执行失败', message, runButtonRef.current)
-    }
-  }
-
-  const statusText = error || task?.status === 'failed'
-    ? '状态：执行失败'
-    : task?.status === 'succeeded'
-      ? `状态：MPC 仿真完成${result?.tracking_mse == null ? '' : `（跟踪 MSE：${Number(result.tracking_mse).toFixed(4)}）`}`
-      : running ? '状态：正在运行 MPC 仿真...' : '状态：待执行'
-  const progressStatusText = running && taskProgress?.message
-    ? `状态：${taskProgress.module ? `${taskProgress.module} - ` : ''}${taskProgress.message}`
-    : statusText
-  const jsonPath = taskResult?.json_path ? String(taskResult.json_path) : '运行后显示 JSON 结果文件路径。'
-
-  return <Page title="风险场景下智能模型优化控制算法" className="training-page mpc-page">
-    <div className="training-layout">
-      <section className="training-panel training-config-panel">
-        <h3>MPC simulation</h3>
-        <div className="training-config-scroll">
-          <section className="training-subpanel"><h4>路径设置</h4>
-            <TrainingPathField label="Python包目录:" value={form.package_dir} onChange={value => update('package_dir', value)} placeholder="可留空；使用当前环境已安装的包" disabled={running} onError={handlePathSelectionError} onBlur={() => validateMpcPathOnBlur('package_dir', document.activeElement as HTMLElement)}/>
-            <TrainingPathField label="Python包名:" value={form.package_name} onChange={value => update('package_name', value)} disabled={running} browse={false} onBlur={() => validateMpcPathOnBlur('package_name', document.activeElement as HTMLElement)}/>
-            <TrainingPathField label="MCR_ROOT:" value={form.mcr_root} onChange={value => update('mcr_root', value)} disabled={running} onError={handlePathSelectionError} onBlur={() => validateMpcPathOnBlur('mcr_root', document.activeElement as HTMLElement)}/>
-            <TrainingPathField label="输出目录:" value={form.output_dir} onChange={value => update('output_dir', value)} disabled={running} onError={handlePathSelectionError} onBlur={() => validateMpcPathOnBlur('output_dir', document.activeElement as HTMLElement)}/>
-            <TrainingPathField label="模型文件:" value={form.model_path} onChange={value => update('model_path', value)} disabled={running} pathKind="open-mat" onError={handlePathSelectionError} onBlur={() => validateMpcPathOnBlur('model_path', document.activeElement as HTMLElement)}/>
-          </section>
-          <section className="training-subpanel training-model-subpanel"><h4>MPC simulation</h4>
-            <label className="training-number-field">仿真时长(s):<input id="mpc-sim-time" type="number" min={0.2} max={20} step={0.2} value={form.sim_time} onChange={e => update('sim_time', Number(e.target.value))} onBlur={e => validateMpcFieldOnBlur('sim_time', e)} disabled={running}/></label>
-            <label className="training-number-field">预测步长:<input id="mpc-prediction-horizon" type="number" min={1} max={60} step={1} value={form.prediction_horizon} onChange={e => update('prediction_horizon', Number(e.target.value))} onBlur={e => validateMpcFieldOnBlur('prediction_horizon', e)} disabled={running}/></label>
-            <div className="training-run-action"><button ref={runButtonRef} type="button" onClick={() => void submit()} disabled={running}>{running ? '仿真执行中...' : '运行 MPC 仿真'}</button></div>
-          </section>
-          <section className="training-subpanel"><h4>结果文件</h4><div className="training-result-path">{jsonPath}</div></section>
-        </div>
-      </section>
-      <section className="training-panel training-result-panel">
-        <h3>结果图</h3>
-        <div className="training-status-panel"><span>{progressStatusText}</span><div className="training-progress-wrap"><progress value={progress} max={100} aria-label="MPC 仿真进度"/><span>{progressLabel}</span></div></div>
-        <div className="training-image-switches"><button type="button" className={imageMode === 'trajectory' ? 'active' : ''} onClick={() => setImageMode('trajectory')}>状态轨迹</button><button type="button" className={imageMode === 'control' ? 'active' : ''} onClick={() => setImageMode('control')}>控制输入</button><button type="button" className={imageMode === 'tracking' ? 'active' : ''} onClick={() => setImageMode('tracking')}>跟踪误差</button><button type="button" className={imageMode === 'cost' ? 'active' : ''} onClick={() => setImageMode('cost')}>代价曲线</button><button type="button" className="mpc-refresh-button" onClick={() => { setImageRevision(Date.now()); setImageError(false) }}>刷新图像</button></div>
-        <h4 className="training-image-title">{imageTitle}</h4>
-        <div className="training-image-frame" role="img" aria-label={imageTitle} style={imageError ? undefined : { backgroundImage: `url("${imageUrl}")`, backgroundSize: 'contain', backgroundPosition: 'center', backgroundRepeat: 'no-repeat' }}>{imageError ? <div className="training-image-placeholder">暂无图像</div> : <img src={imageUrl} alt="" aria-hidden="true" style={{ display: 'none' }} onError={() => setImageError(true)}/>}</div>
-      </section>
-    </div>
-    <div className="module-status-bar training-module-status">{progressStatusText}</div>
-    {(error || task?.error) && <ErrorBox text={error || task?.error || 'MPC 仿真执行失败'} />}
-    {dialog && <ErrorDialog title={dialog.title} message={dialog.message} onClose={closeErrorDialog}/>}
-  </Page>
-}
-
-function TrainingPathField({
-  label,
-  value,
-  onChange,
-  onError,
-  placeholder,
-  disabled,
-  browse = true,
-  allowClear = false,
-  pathKind = 'directory',
-  onBlur,
-}: {
-  label: string
-  value: string
-  onChange: (value: string) => void
-  onError?: (message: string) => void
-  placeholder?: string
-  disabled?: boolean
-  browse?: boolean
-  allowClear?: boolean
-  pathKind?: LocalPathKind
-  onBlur?: () => void
-}) {
-  const [selecting, setSelecting] = useState(false)
-  const [selectionError, setSelectionError] = useState('')
-
-  const selectPath = async () => {
-    setSelecting(true)
-    setSelectionError('')
-    try {
-      const result = await post<{ path: string }>('/local-paths/select', { kind: pathKind, initial_path: value })
-      if (result.path) onChange(result.path)
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      setSelectionError(message)
-      onError?.(message)
-    } finally {
-      setSelecting(false)
-    }
-  }
-
-  return <div className="training-path-field">
-    <span>{label}</span>
-    <div className="training-path-control">
-      <input type="text" value={value} placeholder={placeholder} onChange={event => { setSelectionError(''); onChange(event.target.value) }} onBlur={onBlur} disabled={disabled}/>
-      {browse && <button type="button" onClick={() => void selectPath()} disabled={disabled || selecting}>{selecting ? '\u9009\u62e9\u4e2d...' : '\u9009\u62e9'}</button>}
-      {allowClear && <button type="button" onClick={() => { setSelectionError(''); onChange('') }} disabled={disabled || selecting}>{'\u6e05\u7a7a'}</button>}
-      {selectionError && <small className="training-path-error" role="alert">{selectionError}</small>}
-    </div>
-  </div>
-}
 function ClassificationMatrix({ matrix, names }: { matrix: number[][]; names: string[] }) {
   const rowTotals = matrix.map(row => row.reduce((sum, value) => sum + value, 0))
   const columnTotals = names.map((_, column) => matrix.reduce((sum, row) => sum + row[column], 0))
@@ -2055,7 +1582,7 @@ function App() {
     setOpenMenu(null)
   }
   useEffect(() => {
-    const locked = active === 'anomaly' || active === 'training' || active === 'dnn-mpc'
+    const locked = active === 'anomaly'
     document.documentElement.classList.toggle('anomaly-page-locked', locked)
     document.body.classList.toggle('anomaly-page-locked', locked)
     return () => {
@@ -2063,7 +1590,7 @@ function App() {
       document.body.classList.remove('anomaly-page-locked')
     }
   }, [active])
-  const content = active === 'score' ? <ScorePage/> : active === 'anomaly' ? <AnomalyPage/> : active === 'training' ? <TrainingPage/> : active === 'dnn-mpc' ? <MpcPage/> : active === 'sdg' ? <SdgPage onRecommend={value => { setRecommendation(value); selectModule('sil') }}/> : active === 'sil' ? <SilPage recommendation={recommendation}/> : active === 'cdq' ? <CdqPageReplica/> : active === 'classification' ? <ClassificationPage/> : active === 'governance' ? <Page title="异构数据治理" subtitle="该一级导航已保留，当前暂无可用子模块。"><Empty text="暂无可用子模块，后续可在此扩展异构数据接入、清洗和治理能力。"/></Page> : <Page title={activeItem?.name ?? ''} subtitle="该模块仍可在桌面端使用。"><div className="deferred"><h3>桌面端可用，Web版后续迁移</h3><p>此模块依赖 MATLAB Runtime。首期本机 Web 版不会调用或重新编译 Runtime 包，以避免影响当前桌面端。</p></div></Page>
+  const content = active === 'replay' ? <ReplayPage/> : active === 'fdi' ? <FdiPage/> : active === 'score' ? <ScorePage/> : active === 'anomaly' ? <AnomalyPage/> : active === 'training' ? <DnnMpcPage key="training" mode="training"/> : active === 'dnn-mpc' ? <DnnMpcPage key="mpc" mode="mpc"/> : active === 'sdg' ? <SdgPage onRecommend={value => { setRecommendation(value); selectModule('sil') }}/> : active === 'sil' ? <SilPage recommendation={recommendation}/> : active === 'cdq' ? <CdqPageReplica/> : active === 'classification' ? <ClassificationPage/> : active === 'governance' ? <Page title="异构数据治理" subtitle="该一级导航已保留，当前暂无可用子模块。"><Empty text="暂无可用子模块，后续可在此扩展异构数据接入、清洗和治理能力。"/></Page> : <Page title={activeItem?.name ?? ''} subtitle="该模块仍可在桌面端使用。"><div className="deferred"><h3>桌面端可用，Web版后续迁移</h3><p>此模块依赖 MATLAB Runtime。首期本机 Web 版不会调用或重新编译 Runtime 包，以避免影响当前桌面端。</p></div></Page>
   return <div className={`desktop-shell ${active === 'anomaly' ? 'anomaly-shell' : ''} ${active === 'training' ? 'training-shell' : ''} ${active === 'dnn-mpc' ? 'mpc-shell' : ''}`}><header className="platform-header"><div className="platform-brand"><span className="logo-block">◈</span><h1>流程行业动态风险管控工具集平台</h1></div><div className="header-actions" aria-label="平台工具"><button type="button" title="用户">👤</button><button type="button" title="设置">⚙</button><button type="button" title="退出">⏻</button></div></header><nav className="function-bar" aria-label="功能导航"><div className="function-bar-scroll">{navigationGroups.map(group => { const selected = activeGroup?.id === group.id; const isOpen = openMenu === group.id; const hasMenu = group.items.length > 0; return <div className="nav-menu" key={group.id}><button type="button" className={`top-nav-button ${selected ? 'active' : ''}`} aria-expanded={hasMenu ? isOpen : undefined} onClick={() => { if (!hasMenu) { selectModule('governance'); return } setOpenMenu(isOpen ? null : group.id) }}><span>{group.icon}</span>{group.name}{hasMenu && <b>⌄</b>}</button>{hasMenu && isOpen && <div className="nav-dropdown">{group.items.map(item => <button type="button" key={item.id} className={active === item.id ? 'drop-active' : ''} onClick={() => selectModule(item.id)}>{item.name}{item.deferred && <em>桌面端</em>}</button>)}</div>}</div> })}</div></nav><section className="content-shell"><header className={`content-title-bar ${active === 'sil' ? 'sil-content-title-bar' : active === 'anomaly' ? 'anomaly-content-title-bar' : active === 'training' || active === 'dnn-mpc' ? 'training-content-title-bar' : ''}`}><h2>{contentTitle}</h2></header><div className={`content-body ${active === 'classification' ? 'classification-content-body' : active === 'cdq' ? 'cdq-content-body' : active === 'sdg' ? 'sdg-content-body' : active === 'sil' ? 'sil-content-body' : active === 'anomaly' ? 'anomaly-content-body' : active === 'training' || active === 'dnn-mpc' ? 'training-content-body' : ''}`}>{content}</div></section></div>
 }
 

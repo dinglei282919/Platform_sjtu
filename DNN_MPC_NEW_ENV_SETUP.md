@@ -1,5 +1,7 @@
 # Dnn-Mpc 新环境部署教程
 
+> 历史 MATLAB Runtime 部署说明。当前 `refactor/dnn-mpc-python` 分支的训练、MPC、FDI 和重放页面已使用 Python 共享核心，无需 `dnnmpcpkg`。请优先阅读 [当前使用说明](dnn_mpc/README.md)；下文仅用于旧版 Runtime 工程。
+
 本文面向“目标系统只安装 MATLAB Runtime R2024b，不安装完整 MATLAB，也不使用 MATLAB Engine”的部署场景。`dnnmpcpkg` 是化工控制过程 DNN-MPC 模块通过 MATLAB Compiler SDK 导出的 Python Package，平台通过 MATLAB Runtime 直接调用它。
 
 ## 0.部署完成之后的使用

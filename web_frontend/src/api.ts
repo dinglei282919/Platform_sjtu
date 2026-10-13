@@ -17,6 +17,7 @@ const fieldLabels: Record<string, string> = {
   model_path: '模型文件',
   sample_count: '训练样本数',
   epochs: '训练轮数',
+  lr: '学习率',
   hidden_layers: '隐藏层规模',
   dataset_path: '外部数据集',
   sim_time: '仿真时长',
@@ -71,13 +72,19 @@ function formatApiError(detail: unknown, status: number): string {
   return `请求失败（${status}）`
 }
 
+export class ApiError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message)
+  }
+}
+
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`/api${path}`, {
     headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
     ...init,
   })
   const body = await response.json().catch(() => ({}))
-  if (!response.ok) throw new Error(formatApiError(body.detail, response.status))
+  if (!response.ok) throw new ApiError(formatApiError(body.detail, response.status), response.status)
   return body as T
 }
 

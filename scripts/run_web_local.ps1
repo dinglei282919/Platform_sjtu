@@ -1,13 +1,24 @@
 [CmdletBinding()]
 param(
     [switch]$Rebuild,
-    [switch]$NoBrowser
+    [switch]$NoBrowser,
+    [string]$PythonExe = $env:PLATFORM_PYTHON
 )
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$python = 'D:\ana3\envs\Platform\python.exe'
-$npm = 'C:\Program Files\nodejs\npm.cmd'
+$python = $PythonExe
+if (-not $python -and $env:CONDA_PREFIX) {
+    $python = Join-Path $env:CONDA_PREFIX 'python.exe'
+}
+if (-not $python) {
+    $pythonCommand = Get-Command python.exe -ErrorAction SilentlyContinue
+    if ($pythonCommand -and $pythonCommand.Source -notlike '*WindowsApps*') {
+        $python = $pythonCommand.Source
+    }
+}
+$npmCommand = Get-Command npm.cmd -ErrorAction SilentlyContinue
+$npm = if ($npmCommand) { $npmCommand.Source } else { '' }
 $frontend = Join-Path $repoRoot 'web_frontend'
 $index = Join-Path $frontend 'dist\index.html'
 $hostAddress = if ($env:PLATFORM_WEB_HOST) { $env:PLATFORM_WEB_HOST } else { '127.0.0.1' }
@@ -16,12 +27,12 @@ $port = if ($env:PLATFORM_WEB_PORT) { [int]$env:PLATFORM_WEB_PORT } else { 8000 
 if ($hostAddress -ne '127.0.0.1') {
     throw 'The local Web edition may only bind to 127.0.0.1.'
 }
-if (-not (Test-Path -LiteralPath $python)) {
-    throw "Platform Python environment was not found: $python"
+if (-not $python -or -not (Test-Path -LiteralPath $python)) {
+    throw 'Activate the project Conda environment, or pass -PythonExe with its python.exe path.'
 }
 
 if ($Rebuild -or -not (Test-Path -LiteralPath $index)) {
-    if (-not (Test-Path -LiteralPath $npm)) {
+    if (-not $npm -or -not (Test-Path -LiteralPath $npm)) {
         throw 'Node.js/npm was not found. Install Node.js LTS and try again.'
     }
     Push-Location $frontend

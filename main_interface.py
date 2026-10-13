@@ -62,6 +62,8 @@ class MainWindow(QMainWindow):
         self._cdq_matching_content_widget = None
         self._process_training_content_widget = None
         self._process_mpc_content_widget = None
+        self._fdi_content_widget = None
+        self._replay_content_widget = None
         self._sis_detection_content_widget = None
         self._sil_validation_content_widget = None
 
@@ -138,7 +140,7 @@ class MainWindow(QMainWindow):
              ["潜在安全威胁识别与自动分类",
               "多评估准则融合的风险学习分析",
               "风险场景动态匹配与适配方案生成算法"]),
-            ("🎛", "风险管控优化决策", False, ["控制模型训练评估", "优化控制仿真验证"]),
+            ("🎛", "风险管控优化决策", False, ["控制模型训练评估", "优化控制仿真验证", "虚假数据注入下的自适应控制仿真", "重放攻击下的自适应控制仿真"]),
             ("🛡", "SIS自主化检测", True, ["SDG-HAZOP"]),
             ("✅", "在线SIL验证", False, ["基于GSPN-MC模型的动态化SIL验证方法"]),
         ]
@@ -188,6 +190,7 @@ class MainWindow(QMainWindow):
         body = QFrame()
         body.setObjectName("contentBody")
         body_layout = QHBoxLayout(body)
+        self._module_body_layout = body_layout
         body_layout.setContentsMargins(0, 0, 0, 0)
         body_layout.setSpacing(0)
 
@@ -365,6 +368,8 @@ class MainWindow(QMainWindow):
             self._cdq_matching_content_widget,
             self._process_training_content_widget,
             self._process_mpc_content_widget,
+            self._fdi_content_widget,
+            self._replay_content_widget,
             self._sis_detection_content_widget,
             self._sil_validation_content_widget,
         ):
@@ -391,6 +396,18 @@ class MainWindow(QMainWindow):
             self._process_training_content_widget.show()
         elif submodule_title == "优化控制仿真验证":
             self._process_mpc_content_widget.show()
+        elif submodule_title == "虚假数据注入下的自适应控制仿真":
+            if self._fdi_content_widget is None:
+                from fdi_page import FdiWidget
+                self._fdi_content_widget = FdiWidget()
+                self._module_body_layout.addWidget(self._fdi_content_widget, 1)
+            self._fdi_content_widget.show()
+        elif submodule_title == "重放攻击下的自适应控制仿真":
+            if self._replay_content_widget is None:
+                from replay_page import ReplayWidget
+                self._replay_content_widget = ReplayWidget()
+                self._module_body_layout.addWidget(self._replay_content_widget, 1)
+            self._replay_content_widget.show()
         elif submodule_title == "SDG-HAZOP":
             self._sis_detection_content_widget.show()
             if not hasattr(self._sis_widget, '_signal_connected'):
@@ -414,6 +431,20 @@ class MainWindow(QMainWindow):
         self._position_dropdown()
 
     def closeEvent(self, event):
+        if self._replay_content_widget is not None and self._replay_content_widget.has_running_worker():
+            QMessageBox.warning(self, "后台任务运行中", "请等待重放仿真完成，或取消后再关闭。")
+            event.ignore()
+            return
+        if self._fdi_content_widget is not None and self._fdi_content_widget.has_running_worker():
+            QMessageBox.warning(self, "后台任务运行中", "请等待 FDI 仿真完成，或取消后再关闭。")
+            event.ignore()
+            return
+        if ProcessControlDnnMpcWidget is not None:
+            for widget in self.findChildren(ProcessControlDnnMpcWidget):
+                if widget.has_running_worker():
+                    QMessageBox.warning(self, "后台任务运行中", "请等待 DNN-MPC 任务完成后再关闭。")
+                    event.ignore()
+                    return
         for widget in (self._sis_widget, self._sil_widget):
             if widget is not None:
                 checker = getattr(widget, "has_running_worker", None)
