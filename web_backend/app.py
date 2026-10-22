@@ -22,7 +22,7 @@ if str(ROOT) not in sys.path:
 FRONTEND_DIST = ROOT / "web_frontend" / "dist"
 
 from web_backend.task_manager import TaskManager, TaskStateUnavailable
-from web_backend.services import anomaly, cdq, classification, fdi, replay, mpc, path_picker, scoring, sdg, sil, training
+from web_backend.services import anomaly, cdq, classification, fdi, replay, self_healing, mpc, path_picker, scoring, sdg, sil, training
 
 
 task_manager = TaskManager()
@@ -188,6 +188,17 @@ class ReplayTaskRequest(BaseModel):
     sim_time: float = Field(default=50., ge=.1, le=50., allow_inf_nan=False, strict=True)
 
 
+class SelfHealingTaskRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    config: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("config")
+    @classmethod
+    def validate_experiment(cls, value):
+        return self_healing.validate_config(value)
+
+
+
 class LocalPathSelectRequest(BaseModel):
     kind: Literal["directory", "open-mat", "save-mat", "open-npz", "save-npz"]
     initial_path: str = ""
@@ -268,6 +279,7 @@ def modules() -> list[dict[str, str]]:
         {"id": "dnn-mpc", "name": "风险场景下智能模型优化控制算法", "status": "available"},
         {"id": "fdi", "name": "虚假数据注入下的自适应控制仿真", "status": "available"},
         {"id": "replay", "name": "重放攻击下的自适应控制仿真", "status": "available"},
+        {"id": "self-healing", "name": "多变量过程自愈控制仿真", "status": "available"},
     ]
 
 
@@ -595,6 +607,57 @@ def replay_task_image(task_id: str, image_name: str):
 @app.get("/api/replay/tasks/{task_id}/files/{file_name}")
 def replay_artifact(task_id: str, file_name: str):
     path = _replay_artifact_path(task_id, file_name)
+    return FileResponse(path, filename=path.name)
+
+
+@app.get("/api/self-healing/defaults")
+def self_healing_defaults():
+    return self_healing.default_config()
+
+
+@app.post("/api/self-healing/tasks")
+def create_self_healing_task(request: SelfHealingTaskRequest):
+    config = self_healing.validate_config(request.config)
+    directory = self_healing.new_run_dir()
+    cancelled = Event()
+    task = task_manager.submit("多变量过程自愈控制仿真",
+                               lambda log: self_healing.run(config, log, run_dir=directory, cancelled=cancelled.is_set),
+                               artifact_dir=directory, progress_path=directory / "progress.json", cancel_event=cancelled)
+    return {"task_id": task.id, "status": task.status}
+
+
+def _self_healing_artifact_path(task_id, name, *, preview=False):
+    if not self_healing.is_artifact(name):
+        raise HTTPException(status_code=404, detail="自愈控制结果文件不存在。")
+    task = task_manager.get(task_id)
+    directory = task_manager.artifact_dir(task_id)
+    if task is None or directory is None:
+        raise HTTPException(status_code=404, detail="自愈控制任务不存在，请重新运行。")
+    if task["status"] != "succeeded":
+        progress = task.get("progress") or {}
+        if not (preview and name.endswith(".svg") and progress.get("module") == "self_healing"
+                and progress.get("outputs", {}).get(Path(name).stem)):
+            raise HTTPException(status_code=409, detail="仿真尚未成功完成。")
+    elif (task.get("result") or {}).get("module") != "self_healing":
+        raise HTTPException(status_code=404, detail="该任务没有自愈控制结果。")
+    try:
+        return self_healing.artifact_path(directory, name)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/api/self-healing/tasks/{task_id}/images/{image_name}")
+def self_healing_task_image(task_id: str, image_name: str):
+    if not image_name.endswith((".svg", ".png")):
+        raise HTTPException(status_code=404, detail="自愈控制图片不存在。")
+    path = _self_healing_artifact_path(task_id, image_name, preview=True)
+    return Response(path.read_bytes(), media_type="image/svg+xml" if path.suffix == ".svg" else "image/png",
+                    headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/self-healing/tasks/{task_id}/files/{file_name}")
+def self_healing_artifact(task_id: str, file_name: str):
+    path = _self_healing_artifact_path(task_id, file_name)
     return FileResponse(path, filename=path.name)
 
 
