@@ -18,9 +18,9 @@ Framework.py -> main_interface.py -> 各功能 QWidget 页面
 | 潜在安全威胁识别与自动分类 | `error_classification.py` |
 | 多评估准则融合的风险学习分析 | `auto_score.py` |
 | 风险场景动态匹配与适配方案生成算法 | `cdq_risk_matching.py` |
-| 控制模型训练评估、优化控制仿真验证 | `process_control_dnn_mpc.py` |
-| 虚假数据注入下的自适应控制 | `fdi_page.py` |
-| 重放攻击下的自适应控制 | `replay_page.py` |
+| 控制模型训练评估、优化控制仿真验证 | `desktop/risk_control/process_control_dnn_mpc.py` |
+| 虚假数据注入下的自适应控制 | `desktop/risk_control/fdi_page.py` |
+| 重放攻击下的自适应控制 | `desktop/risk_control/replay_page.py` |
 | SDG-HAZOP | `sdg_hazop.py` |
 | 基于 GSPN-MC 模型的动态化 SIL 验证方法 | `sil_validation.py` |
 
@@ -60,6 +60,8 @@ BS 启动入口是：
 
 ### 1.3 共享层和运行生成物
 
+风险管控计算代码位于 `platform_core/risk_control/`，桌面页面及共用 Qt 控件位于 `desktop/risk_control/`。桌面与 Web 复用计算层；计算层不依赖界面。
+
 - `platform_core/`：保存不依赖 PySide6、React 或 FastAPI 的公共算法逻辑。CS 和 BS 都需要使用的纯 Python 数学逻辑优先放在这里。
 - `input_data/`：CSV、Excel、MAT 等输入数据。当前模块依赖的文件名和相对路径是接口约定，不要随意重命名或移动。
 - `output_figures/`：通用算法生成的图片和结果。
@@ -88,10 +90,10 @@ BS 启动入口是：
 | 潜在安全威胁识别与自动分类 | `error_classification.py` | `ClassificationPage` | `web_backend/services/classification.py`；`/api/classification/*` | `input_data/error_classification_*.csv` |
 | 多评估准则融合的风险学习分析 | `auto_score.py` | `ScorePage` | `platform_core/scoring.py`、`web_backend/services/scoring.py`；`/api/score/*` | 公共评分逻辑 |
 | 风险场景动态匹配与适配方案生成算法 | `cdq_risk_matching.py` | `CdqPageReplica` | `web_backend/services/cdq.py`；`/api/cdq/*` | `input_data/cdq_data.xlsx` |
-| 控制模型训练评估 | `process_control_dnn_mpc.py` 的 `page_mode="training"` | `DnnMpcPage.tsx` | `web_backend/services/training.py`；`/api/training/*` | `platform_core/dnn_mpc`、DNN 训练输出 |
-| 优化控制仿真验证 | `process_control_dnn_mpc.py` 的 `page_mode="mpc"` | `DnnMpcPage.tsx` | `web_backend/services/mpc.py`；`/api/mpc/*` | `platform_core/dnn_mpc`、MPC 输出 |
-| 虚假数据注入下的自适应控制 | `fdi_page.py` | `FdiPage.tsx` | `web_backend/services/fdi.py`；`/api/fdi/*` | `platform_core/fdi` |
-| 重放攻击下的自适应控制 | `replay_page.py` | `ReplayPage.tsx` | `web_backend/services/replay.py`；`/api/replay/*` | `platform_core/replay` |
+| 控制模型训练评估 | `desktop/risk_control/process_control_dnn_mpc.py` 的 `page_mode="training"` | `DnnMpcPage.tsx` | `web_backend/services/training.py`；`/api/training/*` | `platform_core/risk_control/dnn_mpc`、DNN 训练输出 |
+| 优化控制仿真验证 | `desktop/risk_control/process_control_dnn_mpc.py` 的 `page_mode="mpc"` | `DnnMpcPage.tsx` | `web_backend/services/mpc.py`；`/api/mpc/*` | `platform_core/risk_control/dnn_mpc`、MPC 输出 |
+| 虚假数据注入下的自适应控制 | `desktop/risk_control/fdi_page.py` | `FdiPage.tsx` | `web_backend/services/fdi.py`；`/api/fdi/*` | `platform_core/risk_control/fdi` |
+| 重放攻击下的自适应控制 | `desktop/risk_control/replay_page.py` | `ReplayPage.tsx` | `web_backend/services/replay.py`；`/api/replay/*` | `platform_core/risk_control/replay` |
 | SDG-HAZOP | `sdg_hazop.py` | `SdgPage` | `web_backend/services/sdg.py`；`/api/sdg/*` | SDG 示例/分析数据 |
 | 基于 GSPN-MC 模型的动态化 SIL 验证方法 | `sil_validation.py` | `SilPage` | `web_backend/services/sil.py`；`/api/sil/*` | GSPN-MC 仿真参数和结果 |
 

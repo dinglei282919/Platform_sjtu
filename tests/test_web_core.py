@@ -626,7 +626,7 @@ def check_running_control_images(test, mode, *, cancel=False):
     from threading import Event
     from xml.etree import ElementTree
     ready, release = Event(), Event()
-    runner = import_module(f"platform_core.{mode}.runner")
+    runner = import_module(f"platform_core.risk_control.{mode}.runner")
 
     original_run = runner.run
 
@@ -720,7 +720,7 @@ class FdiApiTests(unittest.TestCase):
         from web_backend.app import app
         self.folder = TemporaryDirectory()
         self.manager = TaskManager(Path(self.folder.name) / "tasks")
-        self.output_patch = patch("platform_core.fdi.runner.DEFAULT_OUTPUT_DIR", Path(self.folder.name) / "outputs")
+        self.output_patch = patch("platform_core.risk_control.fdi.runner.DEFAULT_OUTPUT_DIR", Path(self.folder.name) / "outputs")
         self.output_patch.start()
         manager_patch = patch("web_backend.app.task_manager", self.manager)
         manager_patch.start()
@@ -772,7 +772,7 @@ class FdiApiTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
             self.assertIn("attachment", response.headers["content-disposition"])
         self.assertEqual(self.client.get(f"/api/fdi/tasks/{task_id}/files/fdi_config.json").status_code, 404)
-        with patch("platform_core.fdi.runner.run", side_effect=RuntimeError("expected FDI failure")):
+        with patch("platform_core.risk_control.fdi.runner.run", side_effect=RuntimeError("expected FDI failure")):
             failed_id = self.client.post("/api/fdi/tasks", json={}).json()["task_id"]
             failed = self.wait_task(failed_id)
         self.assertEqual(failed["status"], "failed")
@@ -794,7 +794,7 @@ class ReplayApiTests(unittest.TestCase):
         from web_backend.app import app
         self.folder = TemporaryDirectory()
         self.manager = TaskManager(Path(self.folder.name) / "tasks")
-        self.output_patch = patch("platform_core.replay.runner.DEFAULT_OUTPUT_DIR", Path(self.folder.name) / "outputs")
+        self.output_patch = patch("platform_core.risk_control.replay.runner.DEFAULT_OUTPUT_DIR", Path(self.folder.name) / "outputs")
         self.output_patch.start()
         manager_patch = patch("web_backend.app.task_manager", self.manager)
         manager_patch.start()
@@ -846,7 +846,7 @@ class ReplayApiTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
             self.assertIn("attachment", response.headers["content-disposition"])
         self.assertEqual(self.client.get(f"/api/replay/tasks/{task_id}/files/replay_config.json").status_code, 404)
-        with patch("platform_core.replay.runner.run", side_effect=RuntimeError("expected replay failure")):
+        with patch("platform_core.risk_control.replay.runner.run", side_effect=RuntimeError("expected replay failure")):
             failed_id = self.client.post("/api/replay/tasks", json={}).json()["task_id"]
             failed = self.wait_task(failed_id)
         self.assertEqual(failed["status"], "failed")

@@ -159,7 +159,7 @@ class TrainingTaskRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_python_config(self):
-        from platform_core.dnn_mpc.config import validate_config
+        from platform_core.risk_control.dnn_mpc.config import validate_config
         normalized = validate_config("training", self.model_dump())
         for key, value in normalized.items():
             setattr(self, key, value)
@@ -175,7 +175,7 @@ class MpcTaskRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_python_config(self):
-        from platform_core.dnn_mpc.config import validate_config
+        from platform_core.risk_control.dnn_mpc.config import validate_config
         validate_config("mpc", self.model_dump())
         return self
 
@@ -356,7 +356,7 @@ def training_defaults() -> dict[str, Any]:
 @app.post("/api/training/tasks")
 def create_training_task(request: TrainingTaskRequest) -> dict[str, str]:
     config = request.model_dump()
-    from platform_core.dnn_mpc.runner import new_run_dir
+    from platform_core.risk_control.dnn_mpc.runner import new_run_dir
     output_dir = new_run_dir(config)
     task = task_manager.submit(
         "风险场景下控制系统智能模型训练算法 · DNNTrain",
@@ -395,7 +395,7 @@ def mpc_defaults() -> dict[str, Any]:
 
 @app.post("/api/mpc/model-info")
 def mpc_model_info(request: DnnModelInfoRequest) -> dict[str, Any]:
-    from platform_core.dnn_mpc.config import model_info
+    from platform_core.risk_control.dnn_mpc.config import model_info
     try:
         return model_info(request.model_path)
     except (ValueError, OSError) as exc:
@@ -405,7 +405,7 @@ def mpc_model_info(request: DnnModelInfoRequest) -> dict[str, Any]:
 @app.post("/api/mpc/tasks")
 def create_mpc_task(request: MpcTaskRequest) -> dict[str, str]:
     config = request.model_dump()
-    from platform_core.dnn_mpc.runner import new_run_dir
+    from platform_core.risk_control.dnn_mpc.runner import new_run_dir
     output_dir = new_run_dir(config)
     task = task_manager.submit(
         "风险场景下智能模型优化控制算法 · MPC simulation",
@@ -439,7 +439,7 @@ def mpc_task_image(task_id: str, image_name: str) -> FileResponse:
 
 @app.get("/api/dnn/{mode}/tasks/{task_id}/files/{file_name}")
 def dnn_artifact(mode: Literal["training", "mpc"], task_id: str, file_name: str) -> FileResponse:
-    from platform_core.dnn_mpc.runner import artifact_path
+    from platform_core.risk_control.dnn_mpc.runner import artifact_path
     directory = task_manager.artifact_dir(task_id)
     if directory is None:
         raise HTTPException(status_code=404, detail="任务不存在或任务记录已被移除")

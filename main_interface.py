@@ -32,7 +32,7 @@ try:
 except ImportError:
     CDQMatchingWidget = None
 try:
-    from process_control_dnn_mpc import ProcessControlDnnMpcWidget
+    from desktop.risk_control.process_control_dnn_mpc import ProcessControlDnnMpcWidget
 except ImportError:
     ProcessControlDnnMpcWidget = None
 
@@ -398,13 +398,13 @@ class MainWindow(QMainWindow):
             self._process_mpc_content_widget.show()
         elif submodule_title == "虚假数据注入下的自适应控制仿真":
             if self._fdi_content_widget is None:
-                from fdi_page import FdiWidget
+                from desktop.risk_control.fdi_page import FdiWidget
                 self._fdi_content_widget = FdiWidget()
                 self._module_body_layout.addWidget(self._fdi_content_widget, 1)
             self._fdi_content_widget.show()
         elif submodule_title == "重放攻击下的自适应控制仿真":
             if self._replay_content_widget is None:
-                from replay_page import ReplayWidget
+                from desktop.risk_control.replay_page import ReplayWidget
                 self._replay_content_widget = ReplayWidget()
                 self._module_body_layout.addWidget(self._replay_content_widget, 1)
             self._replay_content_widget.show()

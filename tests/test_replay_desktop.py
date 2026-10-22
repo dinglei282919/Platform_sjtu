@@ -12,9 +12,9 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import QApplication
 
-from replay_page import ReplayWidget
-from platform_core.replay.runner import ARTIFACT_NAMES
-from platform_core.replay.simulation import SimulationCancelled
+from desktop.risk_control.replay_page import ReplayWidget
+from platform_core.risk_control.replay.runner import ARTIFACT_NAMES
+from platform_core.risk_control.replay.simulation import SimulationCancelled
 
 
 class ReplayDesktopTests(unittest.TestCase):
@@ -25,7 +25,7 @@ class ReplayDesktopTests(unittest.TestCase):
     def setUp(self):
         self.temporary = TemporaryDirectory()
         self.root = Path(self.temporary.name)
-        self.output_patch = patch("platform_core.replay.runner.DEFAULT_OUTPUT_DIR", self.root / "runs")
+        self.output_patch = patch("platform_core.risk_control.replay.runner.DEFAULT_OUTPUT_DIR", self.root / "runs")
         self.output_patch.start()
         self.widget = ReplayWidget()
 
@@ -71,7 +71,7 @@ class ReplayDesktopTests(unittest.TestCase):
         self.assertTrue(self.widget.run_button.isEnabled())
         self.widget.show()
         self.assertTrue(self.widget.export_button.isEnabled())
-        with patch("replay_page.QFileDialog.getExistingDirectory", return_value=str(self.root)):
+        with patch("desktop.risk_control.replay_page.QFileDialog.getExistingDirectory", return_value=str(self.root)):
             self.widget.export()
         destination, = self.root.glob("replay-*")
         self.assertEqual({p.name for p in destination.iterdir()}, ARTIFACT_NAMES)
@@ -79,7 +79,7 @@ class ReplayDesktopTests(unittest.TestCase):
             self.assertEqual((destination / name).read_bytes(), (self.widget._run_dir / name).read_bytes())
 
     def test_live_plot_is_visible_before_completion_and_preserves_zoom(self):
-        from platform_core.replay.runner import run as actual_run
+        from platform_core.risk_control.replay.runner import run as actual_run
         release = Event()
 
         def gated_run(*args, progress, **kwargs):
@@ -94,7 +94,7 @@ class ReplayDesktopTests(unittest.TestCase):
         self.widget.duration.setValue(1.)
         self.widget.show()
         try:
-            with patch("platform_core.replay.runner.run", side_effect=gated_run):
+            with patch("platform_core.risk_control.replay.runner.run", side_effect=gated_run):
                 self.widget.start()
                 self.pump_until(lambda: all(view.renderer().isValid() for view in self.widget.views.values()))
                 self.assertTrue(self.widget.has_running_worker())
@@ -120,14 +120,14 @@ class ReplayDesktopTests(unittest.TestCase):
                 time.sleep(.01)
             raise SimulationCancelled("仿真已取消。")
 
-        with patch("platform_core.replay.runner.run", side_effect=cancellable_run):
+        with patch("platform_core.risk_control.replay.runner.run", side_effect=cancellable_run):
             self.widget.start()
             self.pump_until(lambda: self.widget.progress.value() == 20)
             original_thread = self.widget._thread
             self.widget.start()
             self.assertIs(self.widget._thread, original_thread)
             event = QCloseEvent()
-            with patch("replay_page.QMessageBox.warning") as warning:
+            with patch("desktop.risk_control.replay_page.QMessageBox.warning") as warning:
                 self.widget.closeEvent(event)
             self.assertFalse(event.isAccepted())
             warning.assert_called_once()
@@ -144,7 +144,7 @@ class ReplayDesktopTests(unittest.TestCase):
     def test_worker_failure_is_reported_and_allows_retry(self):
         self.widget.metrics.set_values({"tracking_rmse": .02, "disturbance_rmse": 0.})
         self.assertEqual([value.text() for value in self.widget.metrics.values.values()], ["0.02000", "0.000"])
-        with patch("platform_core.replay.runner.run", side_effect=RuntimeError("测试求解失败")):
+        with patch("platform_core.risk_control.replay.runner.run", side_effect=RuntimeError("测试求解失败")):
             self.widget.start()
             self.assertTrue(self.widget.metrics.isHidden())
             self.assertTrue(all(not value.text() for value in self.widget.metrics.values.values()))

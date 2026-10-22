@@ -24,14 +24,14 @@ from PySide6.QtCore import QEventLoop, QPoint, QPointF, QTimer, Qt
 from PySide6.QtGui import QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
-from dnn_mpc_plot_view import DnnMpcPlotView, format_rmse
+from desktop.risk_control.dnn_mpc_plot_view import DnnMpcPlotView, format_rmse
 
-from platform_core.dnn_mpc import config, runner
-from platform_core.dnn_mpc.data import load_dataset
-from platform_core.dnn_mpc.generation import generate_dataset, plant_step
-from platform_core.dnn_mpc.model import deserialize
-from platform_core.dnn_mpc.simulation import INITIAL, REFERENCE, Q, R, ArrayPredictor, cost_gradient, simulate, terminal_weight
-from platform_core.dnn_mpc.plots import simulation_figure, vector_bytes
+from platform_core.risk_control.dnn_mpc import config, runner
+from platform_core.risk_control.dnn_mpc.data import load_dataset
+from platform_core.risk_control.dnn_mpc.generation import generate_dataset, plant_step
+from platform_core.risk_control.dnn_mpc.model import deserialize
+from platform_core.risk_control.dnn_mpc.simulation import INITIAL, REFERENCE, Q, R, ArrayPredictor, cost_gradient, simulate, terminal_weight
+from platform_core.risk_control.dnn_mpc.plots import simulation_figure, vector_bytes
 from web_backend.task_manager import TaskManager
 
 # App import constructs a session-only manager. Keep test collection away from
@@ -84,9 +84,9 @@ class DnnMpcTests(unittest.TestCase):
         self.assertEqual(config.validate_config("mpc", {"output_dir": custom})["output_dir"], custom)
 
     def test_adaptive_modules_share_the_output_namespace(self):
-        from platform_core.control_paths import CONTROL_OUTPUT_ROOT, module_output_dir
-        from platform_core.fdi import runner as fdi_runner
-        from platform_core.replay import runner as replay_runner
+        from platform_core.risk_control.control_paths import CONTROL_OUTPUT_ROOT, module_output_dir
+        from platform_core.risk_control.fdi import runner as fdi_runner
+        from platform_core.risk_control.replay import runner as replay_runner
         for module, adapter in (("fdi", fdi_runner), ("replay", replay_runner)):
             self.assertEqual(adapter.DEFAULT_OUTPUT_DIR, CONTROL_OUTPUT_ROOT / module)
             directory = module_output_dir(module, root=self.root)
@@ -97,7 +97,7 @@ class DnnMpcTests(unittest.TestCase):
             self.assertTrue(first.is_dir() and second.is_dir())
 
     def test_invalid_latest_state_falls_back_in_core_api_and_desktop(self):
-        from process_control_dnn_mpc import ProcessControlDnnMpcWidget
+        from desktop.risk_control.process_control_dnn_mpc import ProcessControlDnnMpcWidget
         app = QApplication.instance() or QApplication([])
         state_path = config.LATEST_TRAINING_STATE_PATH
         state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -232,7 +232,7 @@ class DnnMpcTests(unittest.TestCase):
             self.assertEqual(completed["result"]["result"]["model_sha256"], hashlib.sha256(model.read_bytes()).hexdigest())
 
     def test_desktop_training_export_failure_restores_controls_and_retries(self):
-        from process_control_dnn_mpc import ProcessControlDnnMpcWidget
+        from desktop.risk_control.process_control_dnn_mpc import ProcessControlDnnMpcWidget
         app = QApplication.instance() or QApplication([])
         cfg = self.training_config() | dict(epochs=1)
         runner.run("training", cfg)
@@ -279,7 +279,7 @@ class DnnMpcTests(unittest.TestCase):
                 previous_indexes = {path: path.read_bytes() for path in protected}
                 with self.subTest(attempt=attempt), \
                         patch.object(runner, "atomic_write", side_effect=fail_export), \
-                        patch("process_control_dnn_mpc.QMessageBox.warning") as warning:
+                        patch("desktop.risk_control.process_control_dnn_mpc.QMessageBox.warning") as warning:
                     QTest.mouseClick(widget._run_btn, Qt.LeftButton)
                     wait_for_worker()
                     warning.assert_called_once()
@@ -301,7 +301,7 @@ class DnnMpcTests(unittest.TestCase):
             widget.close()
 
     def test_desktop_result_layout_stays_stable_across_status_and_size_changes(self):
-        from process_control_dnn_mpc import ProcessControlDnnMpcWidget
+        from desktop.risk_control.process_control_dnn_mpc import ProcessControlDnnMpcWidget
         app = QApplication.instance() or QApplication([])
 
         def settle(widget):
@@ -505,8 +505,8 @@ class DnnMpcTests(unittest.TestCase):
         expected_control = float((-gain @ (initial - REFERENCE))[0])
         model = SimpleNamespace(metadata={"dt": .02})
         for horizon in (1, 5):
-            with self.subTest(horizon=horizon), patch("platform_core.dnn_mpc.simulation.ArrayPredictor", return_value=predictor), \
-                    patch("platform_core.dnn_mpc.simulation.INITIAL", initial):
+            with self.subTest(horizon=horizon), patch("platform_core.risk_control.dnn_mpc.simulation.ArrayPredictor", return_value=predictor), \
+                    patch("platform_core.risk_control.dnn_mpc.simulation.INITIAL", initial):
                 result = simulate(model, duration=10., horizon=horizon)
             # SLSQP is approximate; compare both the action and value with analytic LQR.
             self.assertAlmostEqual(result["controls"][0], expected_control, delta=1e-3)
@@ -519,7 +519,7 @@ class DnnMpcTests(unittest.TestCase):
         predictor = SimpleNamespace(step=lambda state, force: (
             state.copy(), np.column_stack((np.eye(4)*1.1, np.zeros(4)))))
         model = SimpleNamespace(metadata={"dt": .02})
-        with patch("platform_core.dnn_mpc.simulation.ArrayPredictor", return_value=predictor):
+        with patch("platform_core.risk_control.dnn_mpc.simulation.ArrayPredictor", return_value=predictor):
             with self.assertRaisesRegex(ValueError, "终端权重"):
                 simulate(model, duration=.2, horizon=5)
 
@@ -561,7 +561,7 @@ class DnnMpcTests(unittest.TestCase):
                             if not resume.wait(20):
                                 raise TimeoutError("Preview inspection did not resume MPC")
                     return simulate(*args, on_step=observe, **kwargs)
-                with patch("platform_core.dnn_mpc.simulation.simulate", pause_after_first_step):
+                with patch("platform_core.risk_control.dnn_mpc.simulation.simulate", pause_after_first_step):
                     try:
                         created = client.post("/api/mpc/tasks", json=mpc_cfg).json()
                         mpc_id = created["task_id"]
@@ -814,7 +814,7 @@ class DnnPlotViewTests(unittest.TestCase):
             qInstallMessageHandler(previous)
 
     def test_svg_compatibility_preserves_real_outlines_and_unrelated_invalid_paths(self):
-        from dnn_mpc_plot_view import _svg_for_qt
+        from desktop.risk_control.dnn_mpc_plot_view import _svg_for_qt
         raw = (b'<svg xmlns="http://www.w3.org/2000/svg"><defs>'
                b'<path id="Custom-20" d="M 0 0 L 10 10"/>'
                b'<path id="invalid-outline" d=""/></defs></svg>')
@@ -863,10 +863,10 @@ class DnnPlotViewTests(unittest.TestCase):
         self.assertTrue(all(button.isEnabled() for button in self.view._tool_buttons))
 
     def test_mpc_tabs_preserve_zoom_and_select_export(self):
-        from process_control_dnn_mpc import ProcessControlDnnMpcWidget
+        from desktop.risk_control.process_control_dnn_mpc import ProcessControlDnnMpcWidget
         defaults = dict(output_dir=self.temp.name, model_path=str(self.path.with_suffix('.npz')),
                         sim_time=.2, prediction_horizon=3)
-        with patch('process_control_dnn_mpc.mpc_defaults', return_value=defaults):
+        with patch('desktop.risk_control.process_control_dnn_mpc.mpc_defaults', return_value=defaults):
             widget = ProcessControlDnnMpcWidget(page_mode='mpc')
             try:
                 widget.resize(1400, 850)

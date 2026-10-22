@@ -8,9 +8,9 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, Q
     QLineEdit, QSpinBox, QDoubleSpinBox, QPushButton, QLabel,
     QSplitter, QFileDialog, QMessageBox, QSizePolicy, QTabWidget)
 
-from platform_core.dnn_mpc.config import training_defaults, mpc_defaults, validate_config, model_info, MPC_PLOT_GROUPS
-from platform_core.dnn_mpc.runner import new_run_dir, run
-from dnn_mpc_plot_view import DnnMpcPlotView, ControlPanel, ControlRunLog, ControlScrollArea, ControlTaskStatus, control_page_style
+from platform_core.risk_control.dnn_mpc.config import training_defaults, mpc_defaults, validate_config, model_info, MPC_PLOT_GROUPS
+from platform_core.risk_control.dnn_mpc.runner import new_run_dir, run
+from desktop.risk_control.dnn_mpc_plot_view import DnnMpcPlotView, ControlPanel, ControlRunLog, ControlScrollArea, ControlTaskStatus, control_page_style
 
 
 MPC_PLOT_DESCRIPTIONS = {
