@@ -1,5 +1,7 @@
 # gridattackpkg 新环境使用教程
 
+> 路径约定：`C:\path\to\...` 是示例占位路径，执行命令前请替换为实际项目、环境或 Runtime 安装目录。
+
 本文面向“全新环境从零开始使用 `gridattackpkg` 宏包”的场景，基于当前项目已经验证通过的 `R2024b` 导出包整理。
 
 ## 1. 适用范围
@@ -42,7 +44,7 @@ build_python/
 例如:
 
 ```text
-D:\temp_save\APPdesign1\build_python
+C:\path\to\Platform_sjtu\build_python
 ```
 
 ## 3. 创建一个全新的 Python 环境
@@ -50,13 +52,13 @@ D:\temp_save\APPdesign1\build_python
 推荐用 `venv`。
 
 ```powershell
-python -m venv D:\venvs\gridattackpkg_env
+python -m venv C:\path\to\venvs\gridattackpkg_env
 ```
 
 激活环境:
 
 ```powershell
-D:\venvs\gridattackpkg_env\Scripts\Activate.ps1
+C:\path\to\venvs\gridattackpkg_env\Scripts\Activate.ps1
 ```
 
 升级基础打包工具:
@@ -72,13 +74,13 @@ python -m pip install --upgrade pip setuptools wheel
 例如:
 
 ```text
-E:\MATLAB2024
+C:\path\to\MATLAB_Runtime\R2024b
 ```
 
 你需要确认下面这个 DLL 存在:
 
 ```text
-E:\MATLAB2024\runtime\win64\mclmcrrt24_2.dll
+C:\path\to\MATLAB_Runtime\R2024b\runtime\win64\mclmcrrt24_2.dll
 ```
 
 ### 方案 B: 只安装 MATLAB Runtime R2024b
@@ -135,7 +137,7 @@ python -m pip show gridattackpkg-R2024b
 import os
 from pathlib import Path
 
-MCR_ROOT = Path(r"E:\MATLAB2024")
+MCR_ROOT = Path(r"C:\path\to\MATLAB_Runtime\R2024b")
 
 runtime_dir = MCR_ROOT / "runtime" / "win64"
 bin_dir = MCR_ROOT / "bin" / "win64"
@@ -183,7 +185,7 @@ python .\test_gridattackpkg.py
 如果你还不想执行完整算法，只想验证环境是否通了，可以先跑最小初始化测试:
 
 ```powershell
-$env:PATH = "E:\MATLAB2024\runtime\win64;E:\MATLAB2024\bin\win64;E:\MATLAB2024\extern\bin\win64;$env:PATH"
+$env:PATH = "C:\path\to\MATLAB_Runtime\R2024b\runtime\win64;C:\path\to\MATLAB_Runtime\R2024b\bin\win64;C:\path\to\MATLAB_Runtime\R2024b\extern\bin\win64;$env:PATH"
 python -c "import gridattackpkg, matlab; h=gridattackpkg.initialize(); print('ok'); h.terminate()"
 ```
 
@@ -312,23 +314,23 @@ Remove-Item -Recurse -Force "$env:LOCALAPPDATA\MathWorks\MatlabRuntimeCache\R202
 
 假设:
 
-- Python 环境: `D:\venvs\gridattackpkg_env`
-- 导出目录: `D:\temp_save\APPdesign1\build_python`
-- MATLAB 根目录: `E:\MATLAB2024`
+- Python 环境: `C:\path\to\venvs\gridattackpkg_env`
+- 导出目录: `C:\path\to\Platform_sjtu\build_python`
+- MATLAB 根目录: `C:\path\to\MATLAB_Runtime\R2024b`
 
 那么命令可以直接写成:
 
 ```powershell
-python -m venv D:\venvs\gridattackpkg_env
+python -m venv C:\path\to\venvs\gridattackpkg_env
 
-D:\venvs\gridattackpkg_env\Scripts\Activate.ps1
+C:\path\to\venvs\gridattackpkg_env\Scripts\Activate.ps1
 
 python -m pip install --upgrade pip setuptools wheel
 
-cd D:\temp_save\APPdesign1\build_python
+cd C:\path\to\Platform_sjtu\build_python
 python -m pip install --upgrade --force-reinstall --no-build-isolation .
 
-$env:PATH = "E:\MATLAB2024\runtime\win64;E:\MATLAB2024\bin\win64;E:\MATLAB2024\extern\bin\win64;$env:PATH"
+$env:PATH = "C:\path\to\MATLAB_Runtime\R2024b\runtime\win64;C:\path\to\MATLAB_Runtime\R2024b\bin\win64;C:\path\to\MATLAB_Runtime\R2024b\extern\bin\win64;$env:PATH"
 python -c "import gridattackpkg, matlab; h=gridattackpkg.initialize(); print('ok'); h.terminate()"
 ```
 

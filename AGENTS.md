@@ -1,6 +1,8 @@
 # 项目 BS/CS 架构与开发指南
 
-本文档是本项目给 Codex 和开发者使用的结构说明。第一次进入项目时，先阅读本文，再根据任务范围选择 BS 或 CS 代码。不要把一个架构的页面修改方式套用到另一个架构。
+> 路径约定：`C:\path\to\...` 是示例占位路径，执行命令前请替换为实际项目、环境或 Runtime 安装目录。
+
+本文档说明项目的 BS/CS 架构、模块职责与开发约定。修改功能时应区分浏览器端与桌面端，遵循各自的页面结构和共享计算层接口。
 
 ## 1. 项目边界
 
@@ -137,13 +139,13 @@ cd ..
 要跑通依赖 MATLAB 的完整功能，需要 MATLAB Runtime R2024b。典型安装根目录为：
 
 ```text
-E:\MATLAB2024
+C:\path\to\MATLAB_Runtime\R2024b
 ```
 
 必须确认以下 DLL 存在：
 
 ```text
-E:\MATLAB2024\runtime\win64\mclmcrrt24_2.dll
+C:\path\to\MATLAB_Runtime\R2024b\runtime\win64\mclmcrrt24_2.dll
 ```
 
 在同一个 `Platform` Python 环境中安装两个本地导出包：
@@ -159,7 +161,7 @@ python -m pip check
 运行时可在当前 PowerShell 会话配置：
 
 ```powershell
-$env:MCR_ROOT = 'E:\MATLAB2024'
+$env:MCR_ROOT = 'C:\path\to\MATLAB_Runtime\R2024b'
 $env:Path = "$env:MCR_ROOT\runtime\win64;$env:MCR_ROOT\bin\win64;$env:MCR_ROOT\extern\bin\win64;$env:Path"
 ```
 
@@ -185,19 +187,7 @@ $env:Path = "$env:MCR_ROOT\runtime\win64;$env:MCR_ROOT\bin\win64;$env:MCR_ROOT\e
 
 ### 3.5 本机启动脚本的环境路径
 
-当前 `scripts/run_web_local.ps1` 内部固定使用：
-
-```text
-D:\ana3\envs\Platform\python.exe
-```
-
-并默认查找：
-
-```text
-C:\Program Files\nodejs\npm.cmd
-```
-
-换机器或 Conda 环境路径不同，必须修改该脚本中的 `$python`/`$npm`，或直接使用当前环境手动启动：
+`scripts/run_web_local.ps1` 依次从 `-PythonExe` 参数或 `PLATFORM_PYTHON` 环境变量、已激活的 Conda 环境、系统 PATH 选择 Python，并从 PATH 查找 `npm.cmd`。无需修改脚本中的机器路径；也可激活环境后手动启动：
 
 ```powershell
 conda activate Platform
