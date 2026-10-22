@@ -8,9 +8,9 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, Q
     QLineEdit, QSpinBox, QDoubleSpinBox, QPushButton, QLabel,
     QSplitter, QFileDialog, QMessageBox, QSizePolicy, QTabWidget)
 
-from platform_core.dnn_mpc.config import training_defaults, mpc_defaults, validate_config, model_info, MPC_PLOT_GROUPS
-from platform_core.dnn_mpc.runner import new_run_dir, run
-from dnn_mpc_plot_view import DnnMpcPlotView, ControlPanel, ControlRunLog, ControlScrollArea, ControlTaskStatus, control_page_style
+from platform_core.risk_control.dnn_mpc.config import training_defaults, mpc_defaults, validate_config, model_info, MPC_PLOT_GROUPS
+from platform_core.risk_control.dnn_mpc.runner import new_run_dir, run
+from desktop.risk_control.dnn_mpc_plot_view import DnnMpcPlotView, ControlPanel, ControlRunLog, ControlScrollArea, ControlTaskStatus, control_page_style
 
 
 MPC_PLOT_DESCRIPTIONS = {
@@ -488,3 +488,31 @@ class ProcessControlDnnMpcWidget(QWidget):
                 shutil.copyfile(source, destination)
             except OSError as exc:
                 QMessageBox.warning(self, "导出失败", str(exc))
+
+
+class DnnMpcWorkflowWidget(QTabWidget):
+    """One module with persistent training and simulation stages."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAccessibleName("DNN/MPC 控制训练与优化")
+        self.training_page = ProcessControlDnnMpcWidget("training")
+        self.mpc_page = ProcessControlDnnMpcWidget("mpc")
+        self.addTab(self.training_page, "1. 模型训练")
+        self.addTab(self.mpc_page, "2. MPC 仿真")
+        self.tabBar().setExpanding(True)
+        self.currentChanged.connect(self._stage_changed)
+
+    def _stage_changed(self, index):
+        if index == 1:
+            self.mpc_page._apply_latest_training_defaults()
+
+    def has_running_worker(self):
+        return self.training_page.has_running_worker() or self.mpc_page.has_running_worker()
+
+    def closeEvent(self, event):
+        if self.has_running_worker():
+            QMessageBox.warning(self, "任务运行中", "请等待 DNN-MPC 任务完成后关闭。")
+            event.ignore()
+        else:
+            super().closeEvent(event)

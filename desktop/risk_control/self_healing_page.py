@@ -1,23 +1,22 @@
-"""Desktop adapter for the shared FDI simulator; constructed lazily by the menu."""
+"""Desktop adapter for the shared 自愈控制 simulator; constructed lazily by the menu."""
 from pathlib import Path
 import shutil
+import html
 from threading import Event
 from PySide6.QtCore import QObject, QThread, Signal, Slot, Qt
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-                               QPushButton, QDoubleSpinBox, QTabWidget,
+                               QPushButton, QDoubleSpinBox, QSpinBox, QComboBox, QTabBar, QTabWidget,
                                QFrame, QFileDialog, QMessageBox, QLayout)
-from dnn_mpc_plot_view import DnnMpcPlotView, ControlPlotRefresh, ControlRmseMetrics, ControlRunLog, ControlScrollArea, ControlTaskStatus, control_page_style
-from platform_core.fdi.config import PLOT_GROUPS, defaults
+from desktop.risk_control.dnn_mpc_plot_view import DnnMpcPlotView, ControlPlotRefresh, ControlRunLog, ControlScrollArea, ControlTaskStatus, control_page_style
+from platform_core.risk_control.self_healing.config import PLOT_GROUPS, SCENARIOS, PARAMETERS, NOTICE, defaults, validate_config
 
 PLOT_DESCRIPTIONS = {
-    "tracking": "参考轨迹、系统输出与性能边界",
-    "disturbance": "失配扰动、估计值与估计误差",
-    "state_control": "系统状态、控制输入与饱和输入",
-    "gain_switching": "动态高增益与系统模式",
+    "outputs": "NORMAL 为正常工况，FAULT 为故障下仅底层控制；SCSC、CCSC 为两种独立自愈对照。竖虚线表示故障起点。",
+    "inputs": "四组对照实际施加的输入设定值；修正在下一批生效。",
 }
 
 
-class FdiWorker(QObject):
+class SelfHealingWorker(QObject):
     succeeded = Signal(dict)
     failed = Signal(str)
     progress = Signal(int, str)
@@ -31,7 +30,7 @@ class FdiWorker(QObject):
     @Slot()
     def run(self):
         try:
-            from platform_core.fdi.runner import run
+            from platform_core.risk_control.self_healing.runner import run
             result = run(self.config, self.logged.emit, run_dir=self.run_dir, progress=self.progress.emit,
                          cancelled=self.cancel_event.is_set)
             self.succeeded.emit(result)
@@ -41,38 +40,58 @@ class FdiWorker(QObject):
             self.done.emit()
 
 
-class FdiWidget(QWidget):
+class SelfHealingWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setObjectName("fdiPage")
+        self.setObjectName("self_healingPage")
         self._thread = None
         self._worker = None
         self._cancel = Event()
         self._run_dir = None
         self._result = None
         self.views = {}
-        root = QHBoxLayout(self)
+        root = QVBoxLayout(self)
         root.setContentsMargins(14, 14, 14, 14)
         root.setSpacing(18)
+        self.scenario_tabs = QTabBar()
+        self.scenario_tabs.setAccessibleName("自愈控制场景")
+        self.scenario_tabs.setExpanding(True)
+        for key, label in SCENARIOS.items():
+            index = self.scenario_tabs.addTab(label)
+            self.scenario_tabs.setTabData(index, key)
+        root.addWidget(self.scenario_tabs)
+        body = QHBoxLayout()
+        body.setSpacing(18)
+        root.addLayout(body, 1)
         controls = QFrame()
-        controls.setObjectName("fdiControls")
+        controls.setObjectName("self_healingControls")
         controls.setProperty("controlPanel", True)
         left = QVBoxLayout(controls)
         left.setContentsMargins(20, 20, 20, 20)
         left.setSpacing(12)
         heading = QLabel("仿真设置")
-        heading.setObjectName("fdiHeading")
+        heading.setObjectName("self_healingHeading")
         heading.setProperty("controlHeading", True)
         left.addWidget(heading)
-        left.addWidget(QLabel("仿真时长（秒）"))
-        self.duration = QDoubleSpinBox()
-        self.duration.setAccessibleName("FDI 仿真时长")
-        self.duration.setRange(.1, 10.)
-        self.duration.setDecimals(1)
-        self.duration.setSingleStep(.1)
-        self.duration.setValue(defaults()["sim_time"])
-        left.addWidget(self.duration)
-        self.run_button = QPushButton("开始 FDI 仿真")
+        self.fields = {}
+        for parameter in PARAMETERS:
+            key = parameter["key"]
+            left.addWidget(QLabel(parameter["label"]))
+            if "choices" in parameter:
+                field = QComboBox()
+                for value, label in parameter["choices"].items():
+                    field.addItem(label, value)
+            else:
+                field = QSpinBox() if parameter.get("integer") else QDoubleSpinBox()
+                if isinstance(field, QDoubleSpinBox):
+                    field.setDecimals(6)
+                field.setRange(parameter["min"], parameter["max"])
+                field.setSingleStep(parameter["step"])
+            field.setAccessibleName(parameter["label"])
+            self.fields[key] = field
+            left.addWidget(field)
+        self._reset_config()
+        self.run_button = QPushButton("开始自愈控制仿真")
         self.run_button.setProperty("controlPrimary", True)
         self.run_button.clicked.connect(self.start)
         left.addWidget(self.run_button)
@@ -80,38 +99,36 @@ class FdiWidget(QWidget):
         self.cancel_button.setEnabled(False)
         self.cancel_button.clicked.connect(self.cancel)
         left.addWidget(self.cancel_button)
-        description = QLabel("初始状态\nx₁ = −0.5，x₂ = 0\n\n参考轨迹\nyᵈ = sin(0.75t)\n\n执行器限幅\n−30 ～ 35\n\n攻击场景\n两种模式下的执行器虚假数据注入")
+        description = QLabel(NOTICE)
         description.setWordWrap(True)
         left.addWidget(description)
-        note = QLabel("沿用原实验的控制器与切换设置。先运行仿真，再查看右侧四组曲线。")
-        note.setWordWrap(True)
-        note.setProperty("controlHint", True)
-        left.addWidget(note)
-        self.metrics = ControlRmseMetrics(columns=2)
+        self.metrics = QLabel()
+        self.metrics.setWordWrap(True)
+        self.metrics.setTextFormat(Qt.RichText)
         left.addWidget(self.metrics)
-        self.export_button = QPushButton("导出四组图与数据")
+        self.export_button = QPushButton("导出对比图与数据")
         self.export_button.setEnabled(False)
         self.export_button.clicked.connect(self.export)
         left.addWidget(self.export_button)
         left.addStretch()
-        self._config_scroll = ControlScrollArea(controls, width=340)
-        root.addWidget(self._config_scroll)
+        self._config_scroll = ControlScrollArea(controls, width=380)
+        body.addWidget(self._config_scroll)
         right = QVBoxLayout()
         output = QFrame()
-        output.setObjectName("fdiOutput")
+        output.setObjectName("self_healingOutput")
         output.setProperty("controlPanel", True)
         output_layout = QVBoxLayout(output)
         output_layout.setContentsMargins(20, 20, 20, 20)
         output_heading = QLabel("结果图示")
-        output_heading.setObjectName("fdiHeading")
+        output_heading.setObjectName("self_healingHeading")
         output_heading.setProperty("controlHeading", True)
         output_layout.addWidget(output_heading)
-        self.task_status = ControlTaskStatus("FDI 仿真")
+        self.task_status = ControlTaskStatus("自愈控制仿真")
         self.status = self.task_status.message
         self.progress = self.task_status.progress
         output_layout.addWidget(self.task_status)
         self.plot_tabs = QTabWidget()
-        self.plot_tabs.setObjectName("fdiPlotTabs")
+        self.plot_tabs.setObjectName("self_healingPlotTabs")
         self.plot_tabs.setAccessibleName("选择输出图像")
         self.plot_tabs.tabBar().setExpanding(True)
         for name, title in PLOT_GROUPS:
@@ -119,18 +136,17 @@ class FdiWidget(QWidget):
             card_layout = QVBoxLayout(card)
             card_layout.setContentsMargins(0, 14, 0, 0)
             plot_heading = QLabel(title)
-            plot_heading.setObjectName("fdiPlotHeading")
+            plot_heading.setObjectName("self_healingPlotHeading")
             plot_heading.setProperty("controlPlotHeading", True)
             card_layout.addWidget(plot_heading)
             description = QLabel(PLOT_DESCRIPTIONS[name])
             description.setProperty("controlHint", True)
             description.setWordWrap(True)
             card_layout.addWidget(description)
-            view = DnnMpcPlotView(aspect_ratio=12 / 4.6)
+            view = DnnMpcPlotView(aspect_ratio=11 / 7.5)
             view.set_placeholder("运行仿真后显示结果图")
             view.setAccessibleName(title + "曲线")
-            card_layout.addWidget(view)
-            card_layout.addStretch(1)
+            card_layout.addWidget(view, 1)
             self.views[name] = view
             self.plot_tabs.addTab(card, title)
         output_layout.addWidget(self.plot_tabs, 1)
@@ -145,19 +161,51 @@ class FdiWidget(QWidget):
         right.setSizeConstraint(QLayout.SetMinimumSize)
         content.setLayout(right)
         self._result_scroll = ControlScrollArea(content)
-        root.addWidget(self._result_scroll, 1)
-        self.setStyleSheet(control_page_style("fdiPage"))
+        body.addWidget(self._result_scroll, 1)
+        self.setStyleSheet(control_page_style("self_healingPage"))
         self._plot_refresh = ControlPlotRefresh(self.views, self)
+        self.scenario_tabs.currentChanged.connect(self._change_scenario)
+
+    def _change_scenario(self):
+        self._reset_config()
+        self._result = None
+        self._run_dir = None
+        self.metrics.clear()
+        self.logs.clear()
+        for view in self.views.values():
+            view.clear()
+            view.set_placeholder("运行仿真后显示结果图")
+        self.export_button.setEnabled(False)
+        self.task_status.set_status("idle", "设置参数后开始运行", 0)
+
+    def _reset_config(self):
+        values = defaults(self.scenario_tabs.tabData(self.scenario_tabs.currentIndex()))
+        for key, field in self.fields.items():
+            if isinstance(field, QComboBox):
+                field.setCurrentIndex(field.findData(values[key]))
+            else:
+                field.setValue(values[key])
+
+    def config(self):
+        values = {key: field.currentData() if isinstance(field, QComboBox) else field.value()
+                  for key, field in self.fields.items()}
+        return validate_config({"scenario": self.scenario_tabs.tabData(self.scenario_tabs.currentIndex()), **values})
+
+    def _set_controls_enabled(self, enabled):
+        self.scenario_tabs.setEnabled(enabled)
+        for field in self.fields.values():
+            field.setEnabled(enabled)
 
     @Slot()
     def start(self):
         if self.has_running_worker():
             return
-        from platform_core.fdi.runner import new_run_dir
+        from platform_core.risk_control.self_healing.runner import new_run_dir
         try:
+            config = self.config()
             self._run_dir = new_run_dir()
-        except OSError as exc:
-            self.task_status.set_status("failed", f"无法创建结果目录：{exc}", 0)
+        except (ValueError, OSError) as exc:
+            self.task_status.set_status("failed", str(exc), 0)
             return
         self._result = None
         self.logs.clear()
@@ -167,12 +215,12 @@ class FdiWidget(QWidget):
             view.clear()
         self.export_button.setEnabled(False)
         self.run_button.setEnabled(False)
-        self.duration.setEnabled(False)
+        self._set_controls_enabled(False)
         self.cancel_button.setEnabled(True)
         self.task_status.set_status("running", "正在初始化仿真", 0)
         self._cancel = Event()
         self._thread = QThread(self)
-        self._worker = FdiWorker({"sim_time": self.duration.value()}, self._run_dir, self._cancel)
+        self._worker = SelfHealingWorker(config, self._run_dir, self._cancel)
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
         self._worker.progress.connect(self._on_progress)
@@ -208,8 +256,13 @@ class FdiWidget(QWidget):
             self._on_failure("结果图加载失败：" + str(exc))
             return
         self._result = result
-        self.task_status.set_status("succeeded", f"仿真完成 · {result['config']['sim_time']:g} 秒场景 · 用时 {result['elapsed_seconds']:.2f} 秒")
-        self.metrics.set_values(result)
+        self.task_status.set_status("succeeded", f"仿真完成 · {SCENARIOS[result['config']['scenario']]} · {result['config']['duration']:g} 模型时间 · 用时 {result['elapsed_seconds']:.2f} 秒")
+        methods = ("normal", "fault", "scsc", "ccsc")
+        rows = ["<tr><th>输出</th>" + "".join(f"<th>{m.upper()}</th>" for m in methods) + "</tr>"]
+        for j, label in enumerate(result["output_names"]):
+            rows.append("<tr><td>" + html.escape(label) + "</td>" + "".join(
+                f"<td>{result['metrics'][m]['tail_20_percent']['rmse'][j]:.4g}</td>" for m in methods) + "</tr>")
+        self.metrics.setText("<p>最后 20% 时域 RMSE（各输出自身单位）</p><table cellspacing='5'>" + "".join(rows) + "</table>")
         self.export_button.setEnabled(True)
         self.logs.append("任务完成。")
 
@@ -226,7 +279,7 @@ class FdiWidget(QWidget):
         self._worker = None
         self._thread = None
         self.run_button.setEnabled(True)
-        self.duration.setEnabled(True)
+        self._set_controls_enabled(True)
         self.cancel_button.setEnabled(False)
 
     def has_running_worker(self):
@@ -236,12 +289,12 @@ class FdiWidget(QWidget):
     def export(self):
         if not self._result:
             return
-        selected = QFileDialog.getExistingDirectory(self, "选择 FDI 结果导出目录")
+        selected = QFileDialog.getExistingDirectory(self, "选择 自愈控制结果导出目录")
         if not selected:
             return
-        from platform_core.fdi.runner import ARTIFACT_NAMES, artifact_path
+        from platform_core.risk_control.self_healing.runner import ARTIFACT_NAMES, artifact_path
         from uuid import uuid4
-        target = Path(selected) / ("fdi-" + uuid4().hex[:10])
+        target = Path(selected) / ("self_healing-" + uuid4().hex[:10])
         try:
             target.mkdir(exist_ok=False)
             for name in ARTIFACT_NAMES:
@@ -252,7 +305,7 @@ class FdiWidget(QWidget):
 
     def closeEvent(self, event):
         if self.has_running_worker():
-            QMessageBox.warning(self, "后台任务运行中", "请等待 FDI 仿真完成，或取消后再关闭。")
+            QMessageBox.warning(self, "后台任务运行中", "请等待 自愈控制仿真完成，或取消后再关闭。")
             event.ignore()
         else:
             super().closeEvent(event)

@@ -1,4 +1,4 @@
-"""Desktop adapter for the shared 重放攻击 simulator; constructed lazily by the menu."""
+"""Desktop adapter for the shared FDI simulator; constructed lazily by the menu."""
 from pathlib import Path
 import shutil
 from threading import Event
@@ -6,18 +6,18 @@ from PySide6.QtCore import QObject, QThread, Signal, Slot, Qt
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                                QPushButton, QDoubleSpinBox, QTabWidget,
                                QFrame, QFileDialog, QMessageBox, QLayout)
-from dnn_mpc_plot_view import DnnMpcPlotView, ControlPlotRefresh, ControlRmseMetrics, ControlRunLog, ControlScrollArea, ControlTaskStatus, control_page_style
-from platform_core.replay.config import PLOT_GROUPS, defaults
+from desktop.risk_control.dnn_mpc_plot_view import DnnMpcPlotView, ControlPlotRefresh, ControlRmseMetrics, ControlRunLog, ControlScrollArea, ControlTaskStatus, control_page_style
+from platform_core.risk_control.fdi.config import PLOT_GROUPS, defaults
 
 PLOT_DESCRIPTIONS = {
-    "tracking": "参考轨迹、系统输出与跟踪误差",
-    "disturbance": "失配扰动与估计误差；绿色阴影为恢复窗口，虚线为 1.8627 秒恢复时限",
-    "state_control": "系统状态与控制输入；阴影表示重放时段",
-    "switching_replay": "上方分别显示两路切换函数，下方对比实时状态与重放信号",
+    "tracking": "参考轨迹、系统输出与性能边界",
+    "disturbance": "失配扰动、估计值与估计误差",
+    "state_control": "系统状态、控制输入与饱和输入",
+    "gain_switching": "动态高增益与系统模式",
 }
 
 
-class ReplayWorker(QObject):
+class FdiWorker(QObject):
     succeeded = Signal(dict)
     failed = Signal(str)
     progress = Signal(int, str)
@@ -31,7 +31,7 @@ class ReplayWorker(QObject):
     @Slot()
     def run(self):
         try:
-            from platform_core.replay.runner import run
+            from platform_core.risk_control.fdi.runner import run
             result = run(self.config, self.logged.emit, run_dir=self.run_dir, progress=self.progress.emit,
                          cancelled=self.cancel_event.is_set)
             self.succeeded.emit(result)
@@ -41,10 +41,10 @@ class ReplayWorker(QObject):
             self.done.emit()
 
 
-class ReplayWidget(QWidget):
+class FdiWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setObjectName("replayPage")
+        self.setObjectName("fdiPage")
         self._thread = None
         self._worker = None
         self._cancel = Event()
@@ -55,24 +55,24 @@ class ReplayWidget(QWidget):
         root.setContentsMargins(14, 14, 14, 14)
         root.setSpacing(18)
         controls = QFrame()
-        controls.setObjectName("replayControls")
+        controls.setObjectName("fdiControls")
         controls.setProperty("controlPanel", True)
         left = QVBoxLayout(controls)
         left.setContentsMargins(20, 20, 20, 20)
         left.setSpacing(12)
         heading = QLabel("仿真设置")
-        heading.setObjectName("replayHeading")
+        heading.setObjectName("fdiHeading")
         heading.setProperty("controlHeading", True)
         left.addWidget(heading)
         left.addWidget(QLabel("仿真时长（秒）"))
         self.duration = QDoubleSpinBox()
-        self.duration.setAccessibleName("重放攻击仿真时长")
-        self.duration.setRange(.1, 50.)
+        self.duration.setAccessibleName("FDI 仿真时长")
+        self.duration.setRange(.1, 10.)
         self.duration.setDecimals(1)
         self.duration.setSingleStep(.1)
         self.duration.setValue(defaults()["sim_time"])
         left.addWidget(self.duration)
-        self.run_button = QPushButton("开始重放攻击仿真")
+        self.run_button = QPushButton("开始 FDI 仿真")
         self.run_button.setProperty("controlPrimary", True)
         self.run_button.clicked.connect(self.start)
         left.addWidget(self.run_button)
@@ -80,9 +80,13 @@ class ReplayWidget(QWidget):
         self.cancel_button.setEnabled(False)
         self.cancel_button.clicked.connect(self.cancel)
         left.addWidget(self.cancel_button)
-        description = QLabel("初始状态\nx₁ = 0，x₂ = 0\n\n参考轨迹\nyᵈ = sin(0.5t) + 0.5sin(t)\n\n重放时段 / 回放延迟（秒）\n5–9 / 4.8\n12–14 / 2.5\n18–21 / 3.5\n27–32 / 5.5\n36–39 / 3.7\n42–45 / 3.0\n\n橙色阴影表示重放攻击时段；扰动误差图的绿色阴影表示恢复窗口。")
+        description = QLabel("初始状态\nx₁ = −0.5，x₂ = 0\n\n参考轨迹\nyᵈ = sin(0.75t)\n\n执行器限幅\n−30 ～ 35\n\n攻击场景\n两种模式下的执行器虚假数据注入")
         description.setWordWrap(True)
         left.addWidget(description)
+        note = QLabel("沿用原实验的控制器与切换设置。先运行仿真，再查看右侧四组曲线。")
+        note.setWordWrap(True)
+        note.setProperty("controlHint", True)
+        left.addWidget(note)
         self.metrics = ControlRmseMetrics(columns=2)
         left.addWidget(self.metrics)
         self.export_button = QPushButton("导出四组图与数据")
@@ -94,20 +98,20 @@ class ReplayWidget(QWidget):
         root.addWidget(self._config_scroll)
         right = QVBoxLayout()
         output = QFrame()
-        output.setObjectName("replayOutput")
+        output.setObjectName("fdiOutput")
         output.setProperty("controlPanel", True)
         output_layout = QVBoxLayout(output)
         output_layout.setContentsMargins(20, 20, 20, 20)
         output_heading = QLabel("结果图示")
-        output_heading.setObjectName("replayHeading")
+        output_heading.setObjectName("fdiHeading")
         output_heading.setProperty("controlHeading", True)
         output_layout.addWidget(output_heading)
-        self.task_status = ControlTaskStatus("重放攻击仿真")
+        self.task_status = ControlTaskStatus("FDI 仿真")
         self.status = self.task_status.message
         self.progress = self.task_status.progress
         output_layout.addWidget(self.task_status)
         self.plot_tabs = QTabWidget()
-        self.plot_tabs.setObjectName("replayPlotTabs")
+        self.plot_tabs.setObjectName("fdiPlotTabs")
         self.plot_tabs.setAccessibleName("选择输出图像")
         self.plot_tabs.tabBar().setExpanding(True)
         for name, title in PLOT_GROUPS:
@@ -115,17 +119,18 @@ class ReplayWidget(QWidget):
             card_layout = QVBoxLayout(card)
             card_layout.setContentsMargins(0, 14, 0, 0)
             plot_heading = QLabel(title)
-            plot_heading.setObjectName("replayPlotHeading")
+            plot_heading.setObjectName("fdiPlotHeading")
             plot_heading.setProperty("controlPlotHeading", True)
             card_layout.addWidget(plot_heading)
             description = QLabel(PLOT_DESCRIPTIONS[name])
             description.setProperty("controlHint", True)
             description.setWordWrap(True)
             card_layout.addWidget(description)
-            view = DnnMpcPlotView(aspect_ratio=8.6 / 6.2)
+            view = DnnMpcPlotView(aspect_ratio=12 / 4.6)
             view.set_placeholder("运行仿真后显示结果图")
             view.setAccessibleName(title + "曲线")
-            card_layout.addWidget(view, 1)
+            card_layout.addWidget(view)
+            card_layout.addStretch(1)
             self.views[name] = view
             self.plot_tabs.addTab(card, title)
         output_layout.addWidget(self.plot_tabs, 1)
@@ -141,14 +146,14 @@ class ReplayWidget(QWidget):
         content.setLayout(right)
         self._result_scroll = ControlScrollArea(content)
         root.addWidget(self._result_scroll, 1)
-        self.setStyleSheet(control_page_style("replayPage"))
+        self.setStyleSheet(control_page_style("fdiPage"))
         self._plot_refresh = ControlPlotRefresh(self.views, self)
 
     @Slot()
     def start(self):
         if self.has_running_worker():
             return
-        from platform_core.replay.runner import new_run_dir
+        from platform_core.risk_control.fdi.runner import new_run_dir
         try:
             self._run_dir = new_run_dir()
         except OSError as exc:
@@ -167,7 +172,7 @@ class ReplayWidget(QWidget):
         self.task_status.set_status("running", "正在初始化仿真", 0)
         self._cancel = Event()
         self._thread = QThread(self)
-        self._worker = ReplayWorker({"sim_time": self.duration.value()}, self._run_dir, self._cancel)
+        self._worker = FdiWorker({"sim_time": self.duration.value()}, self._run_dir, self._cancel)
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
         self._worker.progress.connect(self._on_progress)
@@ -231,12 +236,12 @@ class ReplayWidget(QWidget):
     def export(self):
         if not self._result:
             return
-        selected = QFileDialog.getExistingDirectory(self, "选择 重放攻击结果导出目录")
+        selected = QFileDialog.getExistingDirectory(self, "选择 FDI 结果导出目录")
         if not selected:
             return
-        from platform_core.replay.runner import ARTIFACT_NAMES, artifact_path
+        from platform_core.risk_control.fdi.runner import ARTIFACT_NAMES, artifact_path
         from uuid import uuid4
-        target = Path(selected) / ("replay-" + uuid4().hex[:10])
+        target = Path(selected) / ("fdi-" + uuid4().hex[:10])
         try:
             target.mkdir(exist_ok=False)
             for name in ARTIFACT_NAMES:
@@ -247,7 +252,7 @@ class ReplayWidget(QWidget):
 
     def closeEvent(self, event):
         if self.has_running_worker():
-            QMessageBox.warning(self, "后台任务运行中", "请等待 重放攻击仿真完成，或取消后再关闭。")
+            QMessageBox.warning(self, "后台任务运行中", "请等待 FDI 仿真完成，或取消后再关闭。")
             event.ignore()
         else:
             super().closeEvent(event)

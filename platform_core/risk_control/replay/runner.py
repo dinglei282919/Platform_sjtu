@@ -6,12 +6,12 @@ from pathlib import Path
 import time
 from uuid import uuid4
 import numpy as np
-from platform_core.control_paths import module_output_dir
-from platform_core.control_plots import SimulationPlotPublisher
+from platform_core.risk_control.control_paths import module_output_dir
+from platform_core.risk_control.control_plots import SimulationPlotPublisher
 from .config import PLOT_GROUPS, validate_config
 from .simulation import simulate, SOLVER_SETTINGS, SimulationCancelled
 
-DEFAULT_OUTPUT_DIR = module_output_dir("fdi")
+DEFAULT_OUTPUT_DIR = module_output_dir("replay")
 DATA_FILES = ("signals.npz", "signals.csv", "result.json")
 ARTIFACT_NAMES = frozenset(DATA_FILES + tuple(f"{key}.{ext}" for key, _ in PLOT_GROUPS for ext in ("svg", "png")))
 
@@ -41,18 +41,18 @@ def write_json(path, value):
         try:
             temporary.unlink(missing_ok=True)
         except OSError as exc:
-            logging.getLogger(__name__).warning("无法删除 FDI 临时文件 %s：%s", temporary, exc)
+            logging.getLogger(__name__).warning("无法删除 重放 临时文件 %s：%s", temporary, exc)
 
 
 def artifact_path(directory, name):
     if name not in ARTIFACT_NAMES:
-        raise FileNotFoundError("FDI 结果文件不存在。")
+        raise FileNotFoundError("重放 结果文件不存在。")
     directory = Path(directory)
-    if not (directory / "fdi_config.json").is_file():
-        raise FileNotFoundError("该任务没有 FDI 结果。")
+    if not (directory / "replay_config.json").is_file():
+        raise FileNotFoundError("该任务没有 重放 结果。")
     path = directory / name
     if not path.is_file() or path.resolve().parent != directory.resolve():
-        raise FileNotFoundError("FDI 结果文件不存在。")
+        raise FileNotFoundError("重放 结果文件不存在。")
     return path
 
 
@@ -60,12 +60,12 @@ def run(config=None, log=None, *, run_dir=None, progress=None, cancelled=None):
     config = validate_config(config or {})
     directory = Path(run_dir) if run_dir is not None else new_run_dir()
     directory.mkdir(parents=True, exist_ok=True)
-    write_json(directory / "fdi_config.json", config)
+    write_json(directory / "replay_config.json", config)
     log = log or (lambda message: None)
     start = time.perf_counter()
 
     def update(percent, message):
-        write_json(directory / "progress.json", {"percent": percent, "message": message, "module": "fdi",
+        write_json(directory / "progress.json", {"percent": percent, "message": message, "module": "replay",
                                                 "outputs": publisher.outputs, "image_revision": publisher.image_revision})
         if progress is not None:
             progress(percent, message)
@@ -78,7 +78,7 @@ def run(config=None, log=None, *, run_dir=None, progress=None, cancelled=None):
     publisher = SimulationPlotPublisher(directory, figures, config["sim_time"], check_cancelled)
 
     try:
-        log("开始 FDI 闭环仿真。")
+        log("开始 重放 闭环仿真。")
         update(0, "正在初始化仿真")
         result = simulate(config, progress=lambda t, end: update(int(85*t/end), f"仿真时间 {t:.2f} / {end:g} 秒"),
                           cancelled=cancelled, on_snapshot=publisher.preview)
@@ -88,19 +88,19 @@ def run(config=None, log=None, *, run_dir=None, progress=None, cancelled=None):
                           on_plot=lambda index: update(89 + index * 2, f"已生成 {index+1} / 4 组结果图"))
         check_cancelled()
         np.savez_compressed(directory / "signals.npz", **result)
-        columns = ("t", "yd", "x1", "e", "DF", "w1", "ew1", "ew_error", "x2", "ut", "sut", "L1", "sig", "fdi")
+        columns = ("t", "yd", "x1", "e", "w1", "ew1", "ew_error", "x2", "ut", "xr1", "xr2", "K1", "K2", "attack", "delay")
         np.savetxt(directory / "signals.csv", np.column_stack([result[name] for name in columns]),
                    delimiter=",", header=",".join(columns), comments="", fmt="%.12g")
         t = result["t"]
-        summary = {"module": "fdi", "config": config, "solver": {"name": "SciPy BDF", **SOLVER_SETTINGS},
+        summary = {"module": "replay", "config": config, "solver": {"name": "SciPy BDF / method of steps", **SOLVER_SETTINGS},
                    "elapsed_seconds": time.perf_counter()-start, "samples": len(t),
                    "tracking_rmse": float(np.sqrt(np.trapezoid(result["e"]**2, t)/t[-1])),
                    "disturbance_rmse": float(np.sqrt(np.trapezoid(result["ew_error"]**2, t)/t[-1])),
                    "plots": [{"name": name, "title": title} for name, title in PLOT_GROUPS],
-                   "initial_performance_bound": "infinite", "output_dir": str(directory)}
+                   "output_dir": str(directory)}
         write_json(directory / "result.json", summary)
         update(100, "仿真完成，四组结果图已生成")
-        log(f"FDI 仿真完成，共 {len(t)} 个采样点。")
+        log(f"重放 仿真完成，共 {len(t)} 个采样点。")
         return summary
     except Exception as exc:
         try:

@@ -3,7 +3,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import time
 import unittest
 
-from reactor_page import ReactorWidget as ReactorWindow, create_application
+from desktop.risk_control.reactor_page import ReactorWidget as ReactorWindow, create_application
 
 
 class DesktopTests(unittest.TestCase):
@@ -49,7 +49,7 @@ class DesktopTests(unittest.TestCase):
         self.assertLessEqual(d.pixmap().height(),d.height())
 
     def test_first_movie_frame_is_fitted_before_display(self):
-        from reactor_page import Diagram
+        from desktop.risk_control.reactor_page import Diagram
         from PySide6.QtCore import QEventLoop, QTimer
         diagram = Diagram()
         try:
@@ -119,7 +119,7 @@ class DesktopTests(unittest.TestCase):
         from PySide6.QtCore import QPoint, QPointF, Qt
         from PySide6.QtGui import QWheelEvent
         from PySide6.QtTest import QTest
-        from platform_core.reactor import Config, simulate
+        from platform_core.risk_control.reactor import Config, simulate
         w = self.window
         w.accept_result(simulate(Config(duration=.3, prescribed_time=.2)))
         w.tabs.setCurrentIndex(1)
@@ -147,12 +147,42 @@ class DesktopTests(unittest.TestCase):
 
     def test_worker_exception_recovers_controls(self):
         from unittest.mock import patch
-        with patch("reactor_page.simulate",side_effect=FloatingPointError("test overflow")):
+        with patch("desktop.risk_control.reactor_page.simulate",side_effect=FloatingPointError("test overflow")):
             self.window.start_run()
             self.wait_until(lambda: self.window.worker is None)
         self.assertIn("test overflow",self.window.status.text())
         self.assertFalse(self.window.export_button.isEnabled())
         self.assertTrue(self.window.run_button.isEnabled())
+
+    def test_platform_pages_coexist_after_directory_merge(self):
+        from unittest.mock import patch
+        from PySide6.QtGui import QCloseEvent
+        from main_interface import MainWindow
+        window = MainWindow()
+        window.show()
+        try:
+            window._on_submodule_clicked("风险管控优化决策", "化学反应器自适应控制仿真")
+            reactor = window._reactor_content_widget
+            self.assertTrue(reactor.isVisible())
+            self.assertTrue(reactor.diagram.animation.isValid())
+            window._on_submodule_clicked("风险管控优化决策", "多变量过程自愈控制仿真")
+            healing = window._self_healing_content_widget
+            self.assertTrue(healing.isVisible())
+            self.assertFalse(reactor.isVisible())
+            window._on_submodule_clicked("风险管控优化决策", "DNN/MPC 控制训练与优化")
+            self.assertTrue(window._process_mpc_content_widget.isVisible())
+            self.assertFalse(healing.isVisible())
+            for page in (reactor, healing):
+                with patch.object(page, "has_running_worker", return_value=True), patch("main_interface.QMessageBox.warning"):
+                    event = QCloseEvent()
+                    window.closeEvent(event)
+                    self.assertFalse(event.isAccepted())
+            window._on_submodule_clicked("风险管控优化决策", "化学反应器自适应控制仿真")
+            self.assertIs(window._reactor_content_widget, reactor)
+            self.assertFalse(healing.isVisible())
+        finally:
+            window.close()
+            self.app.processEvents()
 
 
 if __name__ == "__main__":

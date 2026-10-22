@@ -14,7 +14,7 @@ sys.path.insert(0, str(ROOT))
 from PySide6.QtWidgets import QApplication
 from PySide6.QtGui import QFont, QFontDatabase, QPalette, QColor
 from main_interface import MainWindow
-from platform_core.reactor.reporting import export_result
+from platform_core.risk_control.reactor.reporting import export_result
 
 app = QApplication.instance() or QApplication([])
 app.setQuitOnLastWindowClosed(False)

@@ -826,3 +826,22 @@ main { min-width: 0; padding: 16px; }
 .reactor-page .fdi-downloads a { color: #bce5ff; background: #203b60; border: 1px solid #456181; border-radius: 5px; padding: 6px 9px; text-decoration: none; overflow-wrap: anywhere; }
 .reactor-page .fdi-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 0 0 18px; }
 .reactor-page .fdi-tabs button[aria-pressed="true"] { background: linear-gradient(135deg, #438fc3, #2f689b); border-color: #85cef6; }
+
+/* Self-healing controls and variable-size benchmark plots; scoped to this page. */
+.self-healing-page .self-healing-scenarios { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 18px; }
+.self-healing-page .self-healing-scenarios button { white-space: normal; overflow-wrap: anywhere; }
+.self-healing-page .fdi-controls { position: static; }
+.self-healing-page .fdi-controls select { width: 100%; margin-bottom: 12px; }
+.self-healing-page .fdi-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.self-healing-page .self-healing-metrics { padding: 20px; margin-bottom: 18px; }
+.self-healing-table { overflow-x: auto; }
+.self-healing-page table { width: 100%; border-collapse: collapse; }
+.self-healing-page th, .self-healing-page td { padding: 8px; text-align: left; white-space: nowrap; }
+.self-healing-downloads { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 12px; }
+
+.dnn-workflow { min-width: 0; width: 100%; }
+.dnn-stage-tabs { margin: 16px 16px 8px; }
+.dnn-workflow-hint { margin: 0 16px; color: #bcd8f6; }
+
+.dnn-stage-tabs { display: flex; gap: 8px; }
+.dnn-stage-tabs button[aria-selected="true"] { background: #397ba7; border-color: #83badb; color: white; }

@@ -1,8 +1,12 @@
 # 本机 Web 版（B/S）
 
+> 路径约定：`C:\path\to\...` 是示例占位路径，执行命令前请替换为实际项目、环境或 Runtime 安装目录。
+
 桌面端（CS）和本机 Web 端（BS）并行保留。本机 Web 版只绑定 `127.0.0.1:8000`，不向局域网开放。
 
 项目架构、源码边界、BS/CS 模块映射和新增模块规范以根目录 [`AGENTS.md`](AGENTS.md) 为权威说明；本文保留面向人工使用的安装、启动和 CS 模块教程。
+
+控制模型训练、MPC、FDI、重放与自愈控制的实现和操作统一见 [风险管控算法实现与使用手册](RISK_CONTROL_MANUAL.md)。这四个模块无需 MATLAB Runtime；下文 Runtime 步骤用于其他依赖编译包的功能或历史工程。
 
 首次启动前安装 Node.js LTS，并在项目根目录执行：
 
@@ -27,16 +31,16 @@ http://127.0.0.1:8000
 - Windows 系统
 - 已安装 Conda
 - 已安装 MATLAB R2024b 与 MATLAB Runtime R2024b
-- 本机 Runtime 根路径：
+- Runtime 安装路径示例：
 
 ```text
-E:\MATLAB2024
+C:\path\to\MATLAB_Runtime\R2024b
 ```
 
 确认关键 DLL 存在：
 
 ```cmd
-dir E:\MATLAB2024\runtime\win64\mclmcrrt24_2.dll
+dir C:\path\to\MATLAB_Runtime\R2024b\runtime\win64\mclmcrrt24_2.dll
 ```
 
 ## 2. 创建 Python 环境
@@ -44,7 +48,7 @@ dir E:\MATLAB2024\runtime\win64\mclmcrrt24_2.dll
 在 `cmd` 中进入项目目录：
 
 ```cmd
-cd /d D:\ADRL\Platform_sjtu
+cd /d C:\path\to\Platform_sjtu
 ```
 
 创建并激活环境：
@@ -94,7 +98,7 @@ python -m pip show gridattackpkg-R2024b dnnmpcpkg-R2024b
 临时配置当前 `cmd` 会话的 MATLAB Runtime 路径：
 
 ```cmd
-set MCR_ROOT=E:\MATLAB2024
+set MCR_ROOT=C:\path\to\MATLAB_Runtime\R2024b
 set PATH=%MCR_ROOT%\runtime\win64;%MCR_ROOT%\bin\win64;%MCR_ROOT%\extern\bin\win64;%PATH%
 ```
 
@@ -116,7 +120,7 @@ python -c "import dnnmpcpkg; h=dnnmpcpkg.initialize(); print('dnnmpcpkg ok'); h.
 
 ```cmd
 conda activate Platform
-cd /d D:\ADRL\Platform_sjtu
+cd /d C:\path\to\Platform_sjtu
 ```
 
 启动程序：
@@ -130,7 +134,7 @@ python Framework.py
 - 异常行为检测模块的 MATLAB Runtime 路径应填写：
 
 ```text
-E:\MATLAB2024
+C:\path\to\MATLAB_Runtime\R2024b
 ```
 
 ### 异常检测的流程工业参数
@@ -141,13 +145,13 @@ E:\MATLAB2024
 - 两项参数的可设范围均为 `1%–30%`。
 - 当前实现是对既有 `gridattackpkg` 的兼容映射：测量噪声和过程扰动的百分比均除以 10 后传入 Runtime。该映射不改变已编译 MATLAB 包的底层数学模型。
 
-- DNN-MPC 模块的 `MCR_ROOT` 也应填写：
+- 历史 DNN-MPC 编译包的 `MCR_ROOT` 应填写实际安装目录；当前 Python 页面不需要该配置。路径示例：
 
 ```text
-E:\MATLAB2024
+C:\path\to\MATLAB_Runtime\R2024b
 ```
 
-- 如果界面仍显示旧路径，说明运行的不是当前项目副本，或源码没有改到实际运行目录。
+- 如果界面路径与安装位置不符，请更新 Runtime 配置后重新运行。
 - 如果提示缺少 `numpy`、`PySide6`、`torch` 等包，说明安装依赖和运行程序使用的不是同一个 Python 环境。
 
 确认当前 Python 路径：
@@ -165,7 +169,7 @@ python -c "import sys; print(sys.executable)"
 检查 `MCR_ROOT` 是否正确：
 
 ```cmd
-dir E:\MATLAB2024\runtime\win64\mclmcrrt24_2.dll
+dir C:\path\to\MATLAB_Runtime\R2024b\runtime\win64\mclmcrrt24_2.dll
 ```
 
 如果不存在，说明 Runtime 路径不对或安装的不是 R2024b。
@@ -178,13 +182,7 @@ dir E:\MATLAB2024\runtime\win64\mclmcrrt24_2.dll
 cd
 ```
 
-确认源码中的默认路径：
-
-```cmd
-powershell -NoProfile -Command "Select-String -SimpleMatch -Path 'anomaly_detection.py','process_control_dnn_mpc.py' -Pattern 'E:\MATLAB2024','D:\MATLAB','mclmcrrt24_2.dll','mclmcrrt9_14.dll'"
-```
-
-期望只看到 `E:\MATLAB2024` 和 `mclmcrrt24_2.dll`。
+检查页面中的 Runtime 路径、`MCR_ROOT` 与 PATH 是否均指向实际安装的 R2024b 目录。默认值不代表目标机器的安装位置，应按部署环境配置。
 
 ### Python 包安装到错误环境
 
@@ -321,7 +319,7 @@ python -m py_compile new_module.py main_interface.py
 
 ```cmd
 conda activate Platform
-cd /d D:\ADRL\Platform_sjtu
+cd /d C:\path\to\Platform_sjtu
 python Framework.py
 ```
 
@@ -345,7 +343,7 @@ requirements.txt
 
 ```cmd
 conda activate Platform
-cd /d D:\ADRL\Platform_sjtu
+cd /d C:\path\to\Platform_sjtu
 python -m pip install -r requirements.txt
 ```
 

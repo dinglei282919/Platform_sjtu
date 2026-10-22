@@ -1,6 +1,6 @@
 # 化学反应器模块
 
-分支：feat/chemical-reactor。起点：2026-10-22 成功 fetch 后的 origin/main（0728dde）。本分支不包含 self-healing 模块，原工作目录保持独立。
+分支：feat/chemical-reactor。起点：2026-10-22 成功 fetch 后的 origin/main（0728dde）。当前工作树已整合 feat/self-healing-control 的目录重构与功能；原 self-healing 工作目录保持独立。
 
 ## 启动与检查
 
@@ -31,16 +31,16 @@ $env:PLATFORM_WEB_PORT = '8012'
 
 ## 文件与依赖
 
-- platform_core/reactor/core.py：从 I 盘原样迁入的 37 维模型、参数校验与批量 Jacobian。
-- platform_core/reactor/reporting.py：同一套六图绘制及 CSV/NPZ/JSON/PNG 导出。
-- reactor_page.py：QWidget 页面、QThread、取消、框图和回放。
+- platform_core/risk_control/reactor/core.py：37 维共享模型、参数校验与批量 Jacobian；编译方程位于同目录 kernel.py。
+- platform_core/risk_control/reactor/reporting.py：同一套六图绘制及 CSV/NPZ/JSON/PNG 导出。
+- desktop/risk_control/reactor_page.py：QWidget 页面、QThread、取消、框图和回放。
 - web_backend/services/reactor.py：TaskManager 服务适配、进度和结果。
 - web_backend/app.py：参数请求、任务、受控下载与框图 API。
 - web_frontend/src/ReactorPage.tsx：Web 界面和任务恢复。
 - assets/reactor：共享原始框图资源。
 - tests/fixtures/reactor_jacobian.npz：从 I 盘默认结果提取的 t=0、0.2、1.5、2.3 四个状态，仅用于 Jacobian 回归，不是运行缓存。
 
-无需 MATLAB Runtime；使用 NumPy、SciPy、Matplotlib、PySide6，并新增 Numba 0.68.0（已写入 requirements.txt）。现有环境需运行 `python -m pip install numba==0.68.0`。页面路径按当前 main 的结构放置；后续合入已重构目录的主线时，按新目录移动入口并调整引用。
+无需 MATLAB Runtime；使用 NumPy、SciPy、Matplotlib、PySide6，并新增 Numba 0.68.0（已写入 requirements.txt）。现有环境需运行 `python -m pip install numba==0.68.0`。共享核心位于 platform_core/risk_control/reactor，桌面入口位于 desktop/risk_control/reactor_page.py，Web 服务继续放在 web_backend/services。
 
 ## 验证
 
@@ -77,7 +77,7 @@ python -B scripts/check_reactor_integration.py
 | 打开时自动加载 I 盘示例 | 有附带示例时加载 | 不依赖研究目录或附带预计算结果 | 不依赖研究目录或附带预计算结果 |
 | 命令行研究实验、严格容差对照 | 研究脚本 | 保留在 I 盘，不作为平台界面功能 | 同左 |
 
-结构遵循本分支 main 起点的 AGENTS.md：桌面 QWidget 在根目录、数学与报告在 platform_core/reactor、Web 适配器在 web_backend/services、路由在 app.py、页面在既有 web_frontend/src，复用 TaskManager、ControlTaskStatus、DnnPlotViewer 和 taskSession。不提前搬入 self-healing 分支尚未合并的目录重构。
+结构遵循整合后的 AGENTS.md：桌面 QWidget 在 desktop/risk_control、数学与报告在 platform_core/risk_control/reactor、Web 适配器在 web_backend/services、路由在 app.py、页面在既有 web_frontend/src，复用公共图表控件、TaskManager、ControlTaskStatus、DnnPlotViewer 和 taskSession。
 
 运行输出统一为 dnn_mpc/python_output/reactor；Web 每次计算在 runs/唯一编号 下保存，桌面导出对话框默认定位此处（目录尚未生成时定位项目根目录），仍允许用户选择导出位置。web_runtime/tasks 仅保留平台任务元数据。历史验证用的 web_runtime/reactor 是旧适配器目录，复核后删除测试生成物。
 
@@ -89,7 +89,7 @@ python -B scripts/check_reactor_integration.py
 
 Web 复用 `control-module` 样式，桌面复用 `control_page_style`、`ControlScrollArea`、`ControlTaskStatus`。参数栏、结果面板、按钮、字号和进度区与 FDI/replay 页面一致，去掉页面内重复标题，保留窄窗口纵向布局及所有原有参数、回放、取消和导出功能。
 
-默认 BDF 完整 3 秒计算从 220.031 秒降至 95.343 秒（约 2.31 倍）；两次测试均为实际求解，环境负载会影响时间。新增 `platform_core/reactor/kernel.py`，只编译高频方程求值，不开启 fastmath、不更改模型、求解器和容差、不裁剪 Nussbaum 函数。原 NumPy `derivatives` 和 Jacobian 保留；研究对照可用 `simulate(compiled=False)`。
+默认 BDF 完整 3 秒计算从 220.031 秒降至 95.343 秒（约 2.31 倍）；两次测试均为实际求解，环境负载会影响时间。新增 `platform_core/risk_control/reactor/kernel.py`，只编译高频方程求值，不开启 fastmath、不更改模型、求解器和容差、不裁剪 Nussbaum 函数。原 NumPy `derivatives` 和 Jacobian 保留；研究对照可用 `simulate(compiled=False)`。
 
 编译计算与原版不是逐位相等：默认整段 x1/x2 最大绝对差为 8.42e-10 / 3.00e-6，观测状态最大差为 3.16e-6，控制输入最大绝对差约 0.292，采样控制峰值均为 131.4456333。37 维状态相对 L2 差约 0.001414；高增益阶段的内部变量差异详见 `performance_validation.json`。这项优化未解决既有的严格容差收敛和 MATLAB 逐点复现边界。LSODA/Radau 在原容差下的采样峰值有明显差异，因此未替换默认 BDF。
 

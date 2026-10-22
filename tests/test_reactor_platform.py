@@ -84,7 +84,7 @@ class ReactorApiTests(unittest.TestCase):
 
     def test_default_configuration_matches_shared_core(self):
         from dataclasses import asdict
-        from platform_core.reactor.core import Config
+        from platform_core.risk_control.reactor.core import Config
         expected = asdict(Config())
         exposed = self.client.get("/api/reactor/defaults").json()
         self.assertEqual(exposed, {key: expected[key] for key in exposed})
@@ -92,7 +92,7 @@ class ReactorApiTests(unittest.TestCase):
                                        "x1", "x2", "observer1", "observer2"})
 
     def test_output_directory_uses_platform_convention(self):
-        from platform_core.control_paths import module_output_dir
+        from platform_core.risk_control.control_paths import module_output_dir
         with patch.object(server.reactor, "module_output_dir", return_value=Path(self.temp.name)/"reactor") as output:
             directory = self.original_new_dir()
         output.assert_called_once_with("reactor")

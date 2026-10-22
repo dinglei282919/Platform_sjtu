@@ -4,9 +4,9 @@ from dataclasses import asdict
 from pathlib import Path
 from uuid import uuid4
 import json
-from platform_core.control_paths import module_output_dir
-from platform_core.reactor.core import Config, SimulationCancelled, simulate
-from platform_core.reactor.reporting import export_result, load_result
+from platform_core.risk_control.control_paths import module_output_dir
+from platform_core.risk_control.reactor.core import Config, SimulationCancelled, simulate
+from platform_core.risk_control.reactor.reporting import export_result, load_result
 
 ROOT = Path(__file__).resolve().parents[2]
 ARTIFACTS = frozenset(("trajectory.csv", "trajectory.npz", "summary.json", "results.png"))

@@ -3,9 +3,9 @@ from pathlib import Path
 import json
 import math
 import hashlib
-from platform_core.control_paths import CONTROL_OUTPUT_ROOT, module_output_dir
+from platform_core.risk_control.control_paths import CONTROL_OUTPUT_ROOT, module_output_dir
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 # Stable shared location for the published model, task lock and latest-result pointers.
 DEFAULT_OUTPUT_DIR = CONTROL_OUTPUT_ROOT
 DEFAULT_DATASET = ROOT / "input_data" / "dnn_mpc" / "cartpole_dataset.mat"

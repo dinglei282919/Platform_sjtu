@@ -255,7 +255,7 @@ class LocalApiTests(unittest.TestCase):
 
     @patch("web_backend.app.path_picker.choose_local_path")
     def test_local_path_dialog_returns_absolute_path(self, choose_mock) -> None:
-        selected_path = r"H:\repository\Platform_sjtu\dnn_mpc\python_output"
+        selected_path = r"C:\example\Platform_sjtu\dnn_mpc\python_output"
         choose_mock.return_value = selected_path
         response = self.client.post(
             "/api/local-paths/select",
@@ -357,7 +357,7 @@ class LocalApiTests(unittest.TestCase):
 
     def test_python_dnn_defaults_and_image_whitelist(self) -> None:
         modules = self.client.get("/api/modules").json()
-        self.assertEqual(next(x for x in modules if x["id"] == "training")["status"], "available")
+        self.assertEqual(next(x for x in modules if x["id"] == "dnn-mpc")["status"], "available")
         defaults = self.client.get("/api/training/defaults").json()
         self.assertEqual(defaults["hidden_layers"], "64,64")
         self.assertEqual(defaults["epochs"], 200)
@@ -422,7 +422,7 @@ class LocalApiTests(unittest.TestCase):
             {"package_dir": r"unused\package"},
             {"mcr_root": r"relative\runtime"},
             {"output_dir": r"relative\output"},
-            {"model_path": r"H:\repository\Platform_sjtu\dnn_mpc\python_output\model.txt"},
+            {"model_path": r"C:\example\Platform_sjtu\dnn_mpc\python_output\model.txt"},
             {"dataset_path": r"relative\dataset.mat"},
         ]
         for payload in invalid_payloads:
@@ -458,7 +458,7 @@ class LocalApiTests(unittest.TestCase):
             {"package_name": "dnn-mpc"},
             {"mcr_root": r"relative\runtime"},
             {"output_dir": r"relative\output"},
-            {"model_path": r"H:\repository\Platform_sjtu\dnn_mpc\python_output\model.txt"},
+            {"model_path": r"C:\example\Platform_sjtu\dnn_mpc\python_output\model.txt"},
         ]
         for payload in invalid_payloads:
             with self.subTest(payload=payload):
@@ -626,7 +626,7 @@ def check_running_control_images(test, mode, *, cancel=False):
     from threading import Event
     from xml.etree import ElementTree
     ready, release = Event(), Event()
-    runner = import_module(f"platform_core.{mode}.runner")
+    runner = import_module(f"platform_core.risk_control.{mode}.runner")
 
     original_run = runner.run
 
@@ -720,7 +720,7 @@ class FdiApiTests(unittest.TestCase):
         from web_backend.app import app
         self.folder = TemporaryDirectory()
         self.manager = TaskManager(Path(self.folder.name) / "tasks")
-        self.output_patch = patch("platform_core.fdi.runner.DEFAULT_OUTPUT_DIR", Path(self.folder.name) / "outputs")
+        self.output_patch = patch("platform_core.risk_control.fdi.runner.DEFAULT_OUTPUT_DIR", Path(self.folder.name) / "outputs")
         self.output_patch.start()
         manager_patch = patch("web_backend.app.task_manager", self.manager)
         manager_patch.start()
@@ -772,7 +772,7 @@ class FdiApiTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
             self.assertIn("attachment", response.headers["content-disposition"])
         self.assertEqual(self.client.get(f"/api/fdi/tasks/{task_id}/files/fdi_config.json").status_code, 404)
-        with patch("platform_core.fdi.runner.run", side_effect=RuntimeError("expected FDI failure")):
+        with patch("platform_core.risk_control.fdi.runner.run", side_effect=RuntimeError("expected FDI failure")):
             failed_id = self.client.post("/api/fdi/tasks", json={}).json()["task_id"]
             failed = self.wait_task(failed_id)
         self.assertEqual(failed["status"], "failed")
@@ -794,7 +794,7 @@ class ReplayApiTests(unittest.TestCase):
         from web_backend.app import app
         self.folder = TemporaryDirectory()
         self.manager = TaskManager(Path(self.folder.name) / "tasks")
-        self.output_patch = patch("platform_core.replay.runner.DEFAULT_OUTPUT_DIR", Path(self.folder.name) / "outputs")
+        self.output_patch = patch("platform_core.risk_control.replay.runner.DEFAULT_OUTPUT_DIR", Path(self.folder.name) / "outputs")
         self.output_patch.start()
         manager_patch = patch("web_backend.app.task_manager", self.manager)
         manager_patch.start()
@@ -846,12 +846,107 @@ class ReplayApiTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
             self.assertIn("attachment", response.headers["content-disposition"])
         self.assertEqual(self.client.get(f"/api/replay/tasks/{task_id}/files/replay_config.json").status_code, 404)
-        with patch("platform_core.replay.runner.run", side_effect=RuntimeError("expected replay failure")):
+        with patch("platform_core.risk_control.replay.runner.run", side_effect=RuntimeError("expected replay failure")):
             failed_id = self.client.post("/api/replay/tasks", json={}).json()["task_id"]
             failed = self.wait_task(failed_id)
         self.assertEqual(failed["status"], "failed")
         self.assertIn("expected replay failure", failed["error"])
         self.assertEqual(self.client.get(f"/api/replay/tasks/{failed_id}/images/tracking.svg").status_code, 409)
+
+
+
+
+class SelfHealingApiTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.manager = TaskManager(self.root / "tasks")
+        self.manager_patch = patch("web_backend.app.task_manager", self.manager)
+        self.output_patch = patch("platform_core.risk_control.self_healing.runner.DEFAULT_OUTPUT_DIR", self.root / "outputs")
+        self.manager_patch.start(); self.output_patch.start()
+        self.client = TestClient(app)
+
+    def tearDown(self):
+        self.manager.shutdown()
+        self.manager._executor.shutdown(wait=True)
+        self.manager_patch.stop(); self.output_patch.stop()
+        self.client.close()
+        self.temp.cleanup()
+
+    def wait_task(self, task_id):
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            response = self.client.get(f"/api/tasks/{task_id}")
+            self.assertEqual(response.status_code, 200)
+            task = response.json()
+            if task["status"] in {"succeeded", "failed", "cancelled"}:
+                return task
+            time.sleep(.02)
+        self.fail("Self-healing task did not terminate")
+
+    def config(self):
+        from platform_core.risk_control.self_healing.config import defaults
+        return {**defaults(), "duration": 1., "fault_start": .3, "training_batches": 8, "training_hold": .2}
+
+    def test_defaults_validation_and_module_isolation(self):
+        from platform_core.risk_control.self_healing.config import catalog
+        self.assertEqual(self.client.get("/api/self-healing/defaults").json(), catalog())
+        modules = self.client.get("/api/modules").json()
+        self.assertTrue(any(module["id"] == "self-healing" for module in modules))
+        for config in ({"duration": True}, {"training_batches": 1}, {"fault_start": 1000},
+                       {"dt": .003}, {"bad": 1}, {"scenario": "missing"}, {"seed": 10**400}):
+            with self.subTest(config=config):
+                response = self.client.post("/api/self-healing/tasks", json={"config": config})
+                self.assertEqual(response.status_code, 422, response.text)
+        self.assertFalse((self.root / "outputs").exists())
+        for path in ("files/summary.json", "images/outputs.svg", "files/self_healing_config.json"):
+            self.assertEqual(self.client.get("/api/self-healing/tasks/missing/" + path).status_code, 404)
+
+    def test_result_downloads_progress_restart_and_cross_module_denial(self):
+        from platform_core.risk_control.self_healing.runner import ARTIFACT_NAMES
+        created = self.client.post("/api/self-healing/tasks", json={"config": self.config()})
+        self.assertEqual(created.status_code, 200, created.text)
+        task_id = created.json()["task_id"]
+        task = self.wait_task(task_id)
+        self.assertEqual(task["status"], "succeeded", task)
+        self.assertEqual(task["progress"]["percent"], 100)
+        for name in ARTIFACT_NAMES:
+            response = self.client.get(f"/api/self-healing/tasks/{task_id}/files/{name}")
+            self.assertEqual(response.status_code, 200, name)
+        for name in ("outputs.svg", "inputs.png"):
+            self.assertEqual(self.client.get(f"/api/self-healing/tasks/{task_id}/images/{name}").status_code, 200)
+        self.assertEqual(self.client.get(f"/api/replay/tasks/{task_id}/files/result.json").status_code, 404)
+        recovered = TaskManager(self.root / "tasks")
+        try:
+            with patch("web_backend.app.task_manager", recovered):
+                response = self.client.get(f"/api/self-healing/tasks/{task_id}/files/result.json")
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.json()["config"], self.config())
+        finally:
+            recovered.shutdown(); recovered._executor.shutdown(wait=True)
+
+    def test_worker_failure_and_cancellation_allow_retry(self):
+        with patch("platform_core.risk_control.self_healing.runner.run_experiment", side_effect=RuntimeError("test solver failure")):
+            task_id = self.client.post("/api/self-healing/tasks", json={"config": self.config()}).json()["task_id"]
+            task = self.wait_task(task_id)
+        self.assertEqual(task["status"], "failed")
+        self.assertIn("test solver failure", task["error"])
+        self.assertEqual(self.client.get(f"/api/self-healing/tasks/{task_id}/files/result.json").status_code, 409)
+        from platform_core.risk_control.self_healing.simulation import SimulationCancelled
+        ready = Event()
+        def cancellable(*args, cancelled, **kwargs):
+            ready.set()
+            deadline = time.monotonic() + 5
+            while not cancelled() and time.monotonic() < deadline:
+                time.sleep(.01)
+            raise SimulationCancelled("cancelled")
+        with patch("platform_core.risk_control.self_healing.runner.run_experiment", side_effect=cancellable):
+            task_id = self.client.post("/api/self-healing/tasks", json={"config": self.config()}).json()["task_id"]
+            self.assertTrue(ready.wait(5))
+            self.assertEqual(self.client.post(f"/api/tasks/{task_id}/cancel").status_code, 200)
+            self.assertEqual(self.wait_task(task_id)["status"], "cancelled")
+        task_id = self.client.post("/api/self-healing/tasks", json={"config": self.config()}).json()["task_id"]
+        self.assertEqual(self.wait_task(task_id)["status"], "succeeded")
 
 
 if __name__ == "__main__":

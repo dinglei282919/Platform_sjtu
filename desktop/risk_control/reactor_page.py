@@ -10,13 +10,13 @@ from PySide6.QtWidgets import (QApplication, QWidget, QLabel, QPushButton,
     QTabWidget, QFileDialog, QMessageBox, QSlider, QFrame, QSizePolicy)
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_agg import FigureCanvasAgg
-from dnn_mpc_plot_view import DnnMpcPlotView, ControlScrollArea, ControlTaskStatus, control_page_style
+from desktop.risk_control.dnn_mpc_plot_view import DnnMpcPlotView, ControlScrollArea, ControlTaskStatus, control_page_style
 
-from platform_core.control_paths import module_output_dir
-from platform_core.reactor.core import Config, SimulationCancelled, simulate
-from platform_core.reactor.reporting import export_result, load_result, populate_figure
+from platform_core.risk_control.control_paths import module_output_dir
+from platform_core.risk_control.reactor.core import Config, SimulationCancelled, simulate
+from platform_core.risk_control.reactor.reporting import export_result, load_result, populate_figure
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[2]
 DIAGRAM = ROOT / "assets" / "reactor"
 OUTPUT = module_output_dir("reactor")
 

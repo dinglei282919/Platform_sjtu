@@ -7,10 +7,10 @@ from threading import Event, Thread
 import unittest
 from unittest.mock import patch
 import numpy as np
-from platform_core.fdi.config import validate_config
-from platform_core.fdi.simulation import simulate, SimulationCancelled
-from platform_core.fdi.runner import run, artifact_path, ARTIFACT_NAMES
-from platform_core.fdi import runner
+from platform_core.risk_control.fdi.config import validate_config
+from platform_core.risk_control.fdi.simulation import simulate, SimulationCancelled
+from platform_core.risk_control.fdi.runner import run, artifact_path, ARTIFACT_NAMES
+from platform_core.risk_control.fdi import runner
 
 
 class FdiContractTests(unittest.TestCase):
@@ -54,7 +54,7 @@ class FdiContractTests(unittest.TestCase):
 
     def test_failed_simulation_does_not_publish_success(self):
         with TemporaryDirectory() as folder:
-            with patch("platform_core.fdi.runner.simulate", side_effect=RuntimeError("test failure")):
+            with patch("platform_core.risk_control.fdi.runner.simulate", side_effect=RuntimeError("test failure")):
                 with self.assertRaisesRegex(RuntimeError, "test failure"):
                     run(run_dir=folder)
             self.assertFalse((Path(folder) / "result.json").exists())

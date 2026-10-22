@@ -10,7 +10,7 @@ from xml.etree import ElementTree
 
 import numpy as np
 from matplotlib.backends.backend_agg import FigureCanvasAgg
-from platform_core.control_plots import _SvgPreview, SimulationPlotPublisher
+from platform_core.risk_control.control_plots import _SvgPreview, SimulationPlotPublisher
 
 
 def signal_paths(svg):
@@ -38,7 +38,7 @@ class LiveSvgTests(unittest.TestCase):
     def test_legends_are_inside_canvas_and_outside_every_signal_axes(self):
         for mode, horizon in (("fdi", 10.), ("replay", 50.)):
             data = self.plot_data(horizon)
-            factory = import_module(f"platform_core.{mode}.plots").figures
+            factory = import_module(f"platform_core.risk_control.{mode}.plots").figures
             for preview in (False, True):
                 plots = factory({key: value[:3] for key, value in data.items()} if preview else data,
                                 duration=horizon)
@@ -61,7 +61,7 @@ class LiveSvgTests(unittest.TestCase):
                         figure.clear()
 
     def test_replay_keeps_switching_signals_separate_and_measurements_available(self):
-        from platform_core.replay.plots import figures
+        from platform_core.risk_control.replay.plots import figures
         plots = figures(self.plot_data(50.))
         try:
             axes = plots["switching_replay"].axes
@@ -78,8 +78,8 @@ class LiveSvgTests(unittest.TestCase):
                 figure.clear()
 
     def test_recovery_windows_and_limits_respect_the_display_horizon(self):
-        from platform_core.replay.config import ATTACKS
-        from platform_core.replay.plots import figures
+        from platform_core.risk_control.replay.config import ATTACKS
+        from platform_core.risk_control.replay.plots import figures
         for horizon in (4., 8., 10., 50.):
             plots = figures(self.plot_data(horizon), duration=horizon)
             try:
@@ -101,12 +101,12 @@ class LiveSvgTests(unittest.TestCase):
 
     def test_cached_paths_match_full_redraw_for_every_plot(self):
         for mode in ("fdi", "replay"):
-            data = import_module(f"platform_core.{mode}.simulation").simulate({"sim_time": 1.})
+            data = import_module(f"platform_core.risk_control.{mode}.simulation").simulate({"sim_time": 1.})
             # Cover step changes, infinities and NaN gaps; clipping is checked below.
             if mode == "fdi":
                 data["sig"] = np.where(data["t"] < .5, 1., 2.)
                 data["DF"][5] = np.nan
-            factory = import_module(f"platform_core.{mode}.plots").figures
+            factory = import_module(f"platform_core.risk_control.{mode}.plots").figures
             plots = factory({key: value[:3] for key, value in data.items()}, duration=1.)
             try:
                 for name, figure in plots.items():
@@ -171,11 +171,11 @@ class LiveSvgTests(unittest.TestCase):
             figure.clear()
 
     def test_preview_reuses_figures_and_closes_cache(self):
-        from platform_core.fdi.plots import figures
-        from platform_core.fdi.simulation import simulate
+        from platform_core.risk_control.fdi.plots import figures
+        from platform_core.risk_control.fdi.simulation import simulate
         data = simulate({"sim_time": .2})
-        with TemporaryDirectory() as directory, patch("platform_core.control_plots.time.monotonic", return_value=1.):
-            with patch("platform_core.fdi.plots.figures", wraps=figures) as factory:
+        with TemporaryDirectory() as directory, patch("platform_core.risk_control.control_plots.time.monotonic", return_value=1.):
+            with patch("platform_core.risk_control.fdi.plots.figures", wraps=figures) as factory:
                 publisher = SimulationPlotPublisher(directory, factory, .2, lambda: None)
                 publisher.publish(data)
                 publisher.publish(data)

@@ -5,10 +5,10 @@ import unittest
 
 import numpy as np
 
-from platform_core.reactor import Config, SimulationCancelled, simulate
-from platform_core.reactor.core import (CENTERS2, basis2, derivatives, gamma, initial_state,
+from platform_core.risk_control.reactor import Config, SimulationCancelled, simulate
+from platform_core.risk_control.reactor.core import (CENTERS2, basis2, derivatives, gamma, initial_state,
                           jacobian, nussbaum, signals, switching_mode)
-from platform_core.reactor.reporting import export_result, load_result
+from platform_core.risk_control.reactor.reporting import export_result, load_result
 
 
 class CoreTests(unittest.TestCase):
@@ -82,7 +82,7 @@ class CoreTests(unittest.TestCase):
 
     def test_batched_jacobian_matches_column_reference(self):
         from unittest.mock import patch
-        from platform_core.reactor import core
+        from platform_core.risk_control.reactor import core
         c = Config()
         with np.load(Path(__file__).resolve().parent/"fixtures/reactor_jacobian.npz") as saved:
             for t in (0., .2, 1.5, 2.3):
@@ -103,7 +103,7 @@ class CoreTests(unittest.TestCase):
             simulate(cancelled=lambda: True)
 
     def test_compiled_rhs_matches_reference_across_modes_and_gain(self):
-        from platform_core.reactor.kernel import derivatives_compiled
+        from platform_core.risk_control.reactor.kernel import derivatives_compiled
         c = Config()
         with np.load(Path(__file__).resolve().parent/"fixtures/reactor_jacobian.npz") as saved:
             for t in (0., .2, 1.5, 2.3):
