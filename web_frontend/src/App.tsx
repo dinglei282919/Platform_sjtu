@@ -1,3 +1,4 @@
+import { ReactorPage } from './ReactorPage'
 import { useCallback, useEffect, useMemo, useRef, useState, type FocusEvent, type ReactNode } from 'react'
 import * as echarts from 'echarts'
 import { api, post } from './api'
@@ -8,7 +9,7 @@ import { SelfHealingPage } from './SelfHealingPage'
 import { useTask } from './useTask'
 import { useStoredState } from './taskSession'
 
-type ModuleId = 'governance' | 'score' | 'classification' | 'cdq' | 'sdg' | 'sil' | 'anomaly' | 'dnn-mpc' | 'fdi' | 'replay' | 'self-healing'
+type ModuleId = 'governance' | 'score' | 'classification' | 'cdq' | 'sdg' | 'sil' | 'anomaly' | 'dnn-mpc' | 'fdi' | 'replay' | 'self-healing' | 'reactor'
 type TaskProgress = { percent?: number; message?: string; module?: string; timestamp?: string; revision?: number; outputs?: Record<string, unknown> }
 type Task = { id: string; title: string; status: string; logs: string[]; result?: Record<string, unknown>; error?: string; progress?: TaskProgress }
 type Recommendation = { node_id: string; node_name: string; frequency: number; severity: number; rrf: number; target_sil: number }
@@ -233,8 +234,9 @@ const navigationGroups: NavigationGroup[] = [
   },
   {
     id: 'risk-control', icon: '🎛', name: '风险管控优化决策', items: [
-      { id: 'dnn-mpc', name: 'DNN/MPC 控制训练与优化' },
+      { id: 'dnn-mpc', name: '深度神经网络优化控制' },
       { id: 'fdi', name: '虚假数据注入下的自适应控制仿真' },
+      { id: 'reactor', name: '化学反应器自适应控制仿真' },
       { id: 'replay', name: '重放攻击下的自适应控制仿真' },
       { id: 'self-healing', name: '多变量过程自愈控制仿真' },
     ],
@@ -1591,7 +1593,7 @@ function App() {
       document.body.classList.remove('anomaly-page-locked')
     }
   }, [active])
-  const content = active === 'self-healing' ? <SelfHealingPage/> : active === 'replay' ? <ReplayPage/> : active === 'fdi' ? <FdiPage/> : active === 'score' ? <ScorePage/> : active === 'anomaly' ? <AnomalyPage/> : active === 'dnn-mpc' ? <DnnMpcPage/> : active === 'sdg' ? <SdgPage onRecommend={value => { setRecommendation(value); selectModule('sil') }}/> : active === 'sil' ? <SilPage recommendation={recommendation}/> : active === 'cdq' ? <CdqPageReplica/> : active === 'classification' ? <ClassificationPage/> : active === 'governance' ? <Page title="异构数据治理" subtitle="该一级导航已保留，当前暂无可用子模块。"><Empty text="暂无可用子模块，后续可在此扩展异构数据接入、清洗和治理能力。"/></Page> : <Page title={activeItem?.name ?? ''} subtitle="该模块仍可在桌面端使用。"><div className="deferred"><h3>桌面端可用，Web版后续迁移</h3><p>此模块依赖 MATLAB Runtime。首期本机 Web 版不会调用或重新编译 Runtime 包，以避免影响当前桌面端。</p></div></Page>
+  const content = active === 'reactor' ? <ReactorPage/> : active === 'self-healing' ? <SelfHealingPage/> : active === 'replay' ? <ReplayPage/> : active === 'fdi' ? <FdiPage/> : active === 'score' ? <ScorePage/> : active === 'anomaly' ? <AnomalyPage/> : active === 'dnn-mpc' ? <DnnMpcPage/> : active === 'sdg' ? <SdgPage onRecommend={value => { setRecommendation(value); selectModule('sil') }}/> : active === 'sil' ? <SilPage recommendation={recommendation}/> : active === 'cdq' ? <CdqPageReplica/> : active === 'classification' ? <ClassificationPage/> : active === 'governance' ? <Page title="异构数据治理" subtitle="该一级导航已保留，当前暂无可用子模块。"><Empty text="暂无可用子模块，后续可在此扩展异构数据接入、清洗和治理能力。"/></Page> : <Page title={activeItem?.name ?? ''} subtitle="该模块仍可在桌面端使用。"><div className="deferred"><h3>桌面端可用，Web版后续迁移</h3><p>此模块依赖 MATLAB Runtime。首期本机 Web 版不会调用或重新编译 Runtime 包，以避免影响当前桌面端。</p></div></Page>
   return <div className={`desktop-shell ${active === 'anomaly' ? 'anomaly-shell' : ''} ${active === 'dnn-mpc' ? 'mpc-shell' : ''}`}><header className="platform-header"><div className="platform-brand"><span className="logo-block">◈</span><h1>流程行业动态风险管控工具集平台</h1></div><div className="header-actions" aria-label="平台工具"><button type="button" title="用户">👤</button><button type="button" title="设置">⚙</button><button type="button" title="退出">⏻</button></div></header><nav className="function-bar" aria-label="功能导航"><div className="function-bar-scroll">{navigationGroups.map(group => { const selected = activeGroup?.id === group.id; const isOpen = openMenu === group.id; const hasMenu = group.items.length > 0; return <div className="nav-menu" key={group.id}><button type="button" className={`top-nav-button ${selected ? 'active' : ''}`} aria-expanded={hasMenu ? isOpen : undefined} onClick={() => { if (!hasMenu) { selectModule('governance'); return } setOpenMenu(isOpen ? null : group.id) }}><span>{group.icon}</span>{group.name}{hasMenu && <b>⌄</b>}</button>{hasMenu && isOpen && <div className="nav-dropdown">{group.items.map(item => <button type="button" key={item.id} className={active === item.id ? 'drop-active' : ''} onClick={() => selectModule(item.id)}>{item.name}{item.deferred && <em>桌面端</em>}</button>)}</div>}</div> })}</div></nav><section className="content-shell"><header className={`content-title-bar ${active === 'sil' ? 'sil-content-title-bar' : active === 'anomaly' ? 'anomaly-content-title-bar' : active === 'dnn-mpc' ? 'training-content-title-bar' : ''}`}><h2>{contentTitle}</h2></header><div className={`content-body ${active === 'classification' ? 'classification-content-body' : active === 'cdq' ? 'cdq-content-body' : active === 'sdg' ? 'sdg-content-body' : active === 'sil' ? 'sil-content-body' : active === 'anomaly' ? 'anomaly-content-body' : active === 'dnn-mpc' ? 'training-content-body' : ''}`}>{content}</div></section></div>
 }
 

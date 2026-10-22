@@ -22,7 +22,7 @@ if str(ROOT) not in sys.path:
 FRONTEND_DIST = ROOT / "web_frontend" / "dist"
 
 from web_backend.task_manager import TaskManager, TaskStateUnavailable
-from web_backend.services import anomaly, cdq, classification, fdi, replay, self_healing, mpc, path_picker, scoring, sdg, sil, training
+from web_backend.services import reactor, anomaly, cdq, classification, fdi, replay, self_healing, mpc, path_picker, scoring, sdg, sil, training
 
 
 task_manager = TaskManager()
@@ -183,6 +183,23 @@ class FdiTaskRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     sim_time: float = Field(default=10., ge=.1, le=10., allow_inf_nan=False, strict=True)
 
+class ReactorTaskRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    duration: float = Field(default=3., ge=.1, le=3., allow_inf_nan=False, strict=True)
+    sample_dt: float = Field(default=.002, ge=.0001, le=.1, allow_inf_nan=False, strict=True)
+    prescribed_time: float = Field(default=1.5, ge=.1, le=3., allow_inf_nan=False, strict=True)
+    ell: float = Field(default=.15, ge=.01, le=1., allow_inf_nan=False, strict=True)
+    x1: float = Field(default=.5, ge=-1., le=1., allow_inf_nan=False, strict=True)
+    x2: float = Field(default=.5, ge=-1., le=1., allow_inf_nan=False, strict=True)
+    observer1: float = Field(default=0., ge=-1., le=1., allow_inf_nan=False, strict=True)
+    observer2: float = Field(default=.5, ge=-1., le=1., allow_inf_nan=False, strict=True)
+
+    @model_validator(mode="after")
+    def validate_reactor(self):
+        from platform_core.risk_control.reactor.core import Config
+        Config(**self.model_dump()).validate()
+        return self
+
 class ReplayTaskRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     sim_time: float = Field(default=50., ge=.1, le=50., allow_inf_nan=False, strict=True)
@@ -275,8 +292,9 @@ def modules() -> list[dict[str, str]]:
         {"id": "sdg", "name": "SIS自主化检测 · SDG-HAZOP", "status": "available"},
         {"id": "sil", "name": "在线SIL验证", "status": "available"},
         {"id": "anomaly", "name": "异常行为检测", "status": "available"},
-        {"id": "dnn-mpc", "name": "DNN/MPC 控制训练与优化", "status": "available"},
+        {"id": "dnn-mpc", "name": "深度神经网络优化控制", "status": "available"},
         {"id": "fdi", "name": "虚假数据注入下的自适应控制仿真", "status": "available"},
+        {"id": "reactor", "name": "化学反应器自适应控制仿真", "status": "available"},
         {"id": "replay", "name": "重放攻击下的自适应控制仿真", "status": "available"},
         {"id": "self-healing", "name": "多变量过程自愈控制仿真", "status": "available"},
     ]
@@ -606,6 +624,55 @@ def replay_task_image(task_id: str, image_name: str):
 @app.get("/api/replay/tasks/{task_id}/files/{file_name}")
 def replay_artifact(task_id: str, file_name: str):
     path = _replay_artifact_path(task_id, file_name)
+    return FileResponse(path, filename=path.name)
+
+
+@app.get("/api/reactor/defaults")
+def reactor_defaults():
+    return ReactorTaskRequest().model_dump()
+
+
+@app.get("/api/reactor/diagram/{name}")
+def reactor_diagram(name: str):
+    if name not in {"reactor_dual_feed.png", "reactor_dual_feed.gif"}:
+        raise HTTPException(status_code=404, detail="框图不存在")
+    return FileResponse(reactor.ROOT / "assets" / "reactor" / name)
+
+
+@app.post("/api/reactor/tasks")
+def create_reactor_task(request: ReactorTaskRequest):
+    directory = reactor.new_run_dir()
+    cancelled = Event()
+    task = task_manager.submit("化学反应器自适应控制仿真",
+        lambda log: reactor.run(request.model_dump(), log, run_dir=directory, cancelled=cancelled.is_set),
+        artifact_dir=directory, progress_path=directory / "progress.json", cancel_event=cancelled)
+    return {"task_id": task.id, "status": task.status}
+
+
+def _reactor_directory(task_id):
+    task = task_manager.get(task_id)
+    directory = task_manager.artifact_dir(task_id)
+    if task is None or directory is None:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if task["status"] != "succeeded":
+        raise HTTPException(status_code=409, detail="仿真尚未成功完成")
+    if (task.get("result") or {}).get("module") != "reactor":
+        raise HTTPException(status_code=404, detail="该任务没有化学反应器结果")
+    return directory
+
+
+@app.get("/api/reactor/tasks/{task_id}/trajectory")
+def reactor_trajectory(task_id: str):
+    return reactor.trajectory(_reactor_directory(task_id))
+
+
+@app.get("/api/reactor/tasks/{task_id}/files/{name}")
+def reactor_file(task_id: str, name: str):
+    directory = _reactor_directory(task_id)
+    try:
+        path = reactor.artifact_path(directory, name)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     return FileResponse(path, filename=path.name)
 
 

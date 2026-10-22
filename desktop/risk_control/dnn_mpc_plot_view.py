@@ -65,10 +65,13 @@ class SvgPlotCanvas(QGraphicsView):
                              max(1, self.viewport().height()-16) / max(1, bounds.height())))
 
     def load(self, filename):
+        # Close the file before rendering so live preview replacement is not held up.
+        self.load_svg(Path(filename).read_bytes())
+
+    def load_svg(self, data):
         center = self.mapToScene(self.viewport().rect().center())
         first = not self._loaded
-        # Close the file before rendering so live preview replacement is not held up.
-        if not self.svg_renderer.load(QByteArray(_svg_for_qt(Path(filename).read_bytes()))):
+        if not self.svg_renderer.load(QByteArray(_svg_for_qt(data))):
             raise ValueError("无法加载 SVG 图表。")
         self._item.setSharedRenderer(self.svg_renderer)
         bounds = self._item.boundingRect()
@@ -196,6 +199,9 @@ class DnnMpcPlotView(QWidget):
 
     def load(self, filename):
         self.canvas.load(filename)
+
+    def load_svg(self, data):
+        self.canvas.load_svg(data)
 
     def clear(self):
         self.canvas.clear()

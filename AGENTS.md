@@ -20,10 +20,11 @@ Framework.py -> main_interface.py -> 各功能 QWidget 页面
 | 潜在安全威胁识别与自动分类 | `error_classification.py` |
 | 多评估准则融合的风险学习分析 | `auto_score.py` |
 | 风险场景动态匹配与适配方案生成算法 | `cdq_risk_matching.py` |
-| DNN/MPC 控制训练与优化 | `desktop/risk_control/process_control_dnn_mpc.py` |
+| 深度神经网络优化控制 | `desktop/risk_control/process_control_dnn_mpc.py` |
 | 虚假数据注入下的自适应控制 | `desktop/risk_control/fdi_page.py` |
 | 重放攻击下的自适应控制 | `desktop/risk_control/replay_page.py` |
 | 多变量过程自愈控制仿真 | `desktop/risk_control/self_healing_page.py` |
+| 化学反应器自适应控制仿真 | `desktop/risk_control/reactor_page.py` |
 | SDG-HAZOP | `sdg_hazop.py` |
 | 基于 GSPN-MC 模型的动态化 SIL 验证方法 | `sil_validation.py` |
 
@@ -64,7 +65,7 @@ BS 启动入口是：
 ### 1.3 共享层和运行生成物
 
 - `platform_core/`：保存不依赖 PySide6、React 或 FastAPI 的公共算法逻辑。CS 和 BS 都需要使用的纯 Python 数学逻辑优先放在这里。
-- `platform_core/risk_control/`：DNN/MPC、FDI、重放、自愈控制及其共用路径与绘图；各子模块保持独立，桌面和 Web 复用此计算层。
+- `platform_core/risk_control/`：DNN/MPC、FDI、重放、自愈控制、化学反应器及其共用路径与绘图；各子模块保持独立，桌面和 Web 复用此计算层。
 - `input_data/`：CSV、Excel、MAT 等输入数据。当前模块依赖的文件名和相对路径是接口约定，不要随意重命名或移动。
 - `output_figures/`：通用算法生成的图片和结果。
 - `gridattackpkg_core_output/`：异常检测 Runtime 相关输出。
@@ -92,10 +93,11 @@ BS 启动入口是：
 | 潜在安全威胁识别与自动分类 | `error_classification.py` | `ClassificationPage` | `web_backend/services/classification.py`；`/api/classification/*` | `input_data/error_classification_*.csv` |
 | 多评估准则融合的风险学习分析 | `auto_score.py` | `ScorePage` | `platform_core/scoring.py`、`web_backend/services/scoring.py`；`/api/score/*` | 公共评分逻辑 |
 | 风险场景动态匹配与适配方案生成算法 | `cdq_risk_matching.py` | `CdqPageReplica` | `web_backend/services/cdq.py`；`/api/cdq/*` | `input_data/cdq_data.xlsx` |
-| DNN/MPC 控制训练与优化 | `desktop/risk_control/process_control_dnn_mpc.py` 的 `DnnMpcWorkflowWidget` | `DnnMpcPage.tsx` | `web_backend/services/training.py`、`mpc.py`；`/api/training/*`、`/api/mpc/*` | `platform_core/risk_control/dnn_mpc`、NPZ 模型与仿真输出 |
+| 深度神经网络优化控制 | `desktop/risk_control/process_control_dnn_mpc.py` 的 `DnnMpcWorkflowWidget` | `DnnMpcPage.tsx` | `web_backend/services/training.py`、`mpc.py`；`/api/training/*`、`/api/mpc/*` | `platform_core/risk_control/dnn_mpc`、NPZ 模型与仿真输出 |
 | 虚假数据注入下的自适应控制 | `desktop/risk_control/fdi_page.py` | `FdiPage.tsx` | `web_backend/services/fdi.py`；`/api/fdi/*` | `platform_core/risk_control/fdi` |
 | 重放攻击下的自适应控制 | `desktop/risk_control/replay_page.py` | `ReplayPage.tsx` | `web_backend/services/replay.py`；`/api/replay/*` | `platform_core/risk_control/replay` |
 | 多变量过程自愈控制仿真 | `desktop/risk_control/self_healing_page.py` | `SelfHealingPage.tsx` | `web_backend/services/self_healing.py`；`/api/self-healing/*` | `platform_core/risk_control/self_healing`；见 `RISK_CONTROL_MANUAL.md` |
+| 化学反应器自适应控制仿真 | `desktop/risk_control/reactor_page.py` | `ReactorPage.tsx` | `web_backend/services/reactor.py`；`/api/reactor/*` | `platform_core/risk_control/reactor` |
 | SDG-HAZOP | `sdg_hazop.py` | `SdgPage` | `web_backend/services/sdg.py`；`/api/sdg/*` | SDG 示例/分析数据 |
 | 基于 GSPN-MC 模型的动态化 SIL 验证方法 | `sil_validation.py` | `SilPage` | `web_backend/services/sil.py`；`/api/sil/*` | GSPN-MC 仿真参数和结果 |
 
@@ -336,3 +338,9 @@ python -c "import dnnmpcpkg; h=dnnmpcpkg.initialize(); print('dnnmpcpkg ok'); h.
 - 涉及训练、仿真或 Runtime 的改动，必须同时检查进度、结果图、结果 JSON 和错误状态。
 - 不要删除或覆盖用户已有的运行结果、输入数据和未相关改动。
 - 修改完成后至少运行与改动范围匹配的语法检查、前端构建和测试；涉及 Runtime 时再执行对应初始化检查。
+
+## 化学反应器模块
+
+新增化学反应器自适应控制仿真：共享核心 platform_core/risk_control/reactor，桌面 desktop/risk_control/reactor_page.py，Web ReactorPage.tsx 与 web_backend/services/reactor.py。两端使用 assets/reactor 的 GIF/PNG，并保留后台计算、取消、回放和结果导出。输出遵循 dnn_mpc/python_output/reactor 约定。
+
+模型、参数、页面操作、结果格式与数值验证边界统一维护在 [风险管控手册第 7 节](RISK_CONTROL_MANUAL.md#reactor)，不再依赖独立的 `docs/reactor` 目录或文档生成脚本。

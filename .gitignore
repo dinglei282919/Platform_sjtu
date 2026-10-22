@@ -19,6 +19,12 @@ web_frontend/node_modules/
 web_frontend/dist/
 web_runtime/
 
+# Local dependencies and disposable intermediates
+node_modules/
+/tmp/
+.pytest_cache/
+.ruff_cache/
+
 #history files
 .history
 
