@@ -819,3 +819,10 @@ main { min-width: 0; padding: 16px; }
 .self-healing-page table { width: 100%; border-collapse: collapse; }
 .self-healing-page th, .self-healing-page td { padding: 8px; text-align: left; white-space: nowrap; }
 .self-healing-downloads { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 12px; }
+
+.dnn-workflow { min-width: 0; width: 100%; }
+.dnn-stage-tabs { margin: 16px 16px 8px; }
+.dnn-workflow-hint { margin: 0 16px; color: #bcd8f6; }
+
+.dnn-stage-tabs { display: flex; gap: 8px; }
+.dnn-stage-tabs button[aria-selected="true"] { background: #397ba7; border-color: #83badb; color: white; }

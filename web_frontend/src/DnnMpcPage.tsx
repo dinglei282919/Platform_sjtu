@@ -41,7 +41,7 @@ function validate(mode: Mode, form: Form): string | null {
   return null
 }
 
-export function DnnMpcPage({ mode }: { mode: Mode }) {
+function DnnMpcStage({ mode }: { mode: Mode }) {
   const [form, setForm] = useState<Form>(sessions[mode]?.form ?? initial)
   const [taskId, setTaskId] = useState<string | null>(sessions[mode]?.taskId ?? null)
   const [task, setTask] = useState<Task | null>(null)
@@ -90,12 +90,6 @@ export function DnnMpcPage({ mode }: { mode: Mode }) {
         if (!active) return
         setTask(value)
         setError('')
-        if (value.status === 'succeeded' && training && sessions.mpc &&
-            (!sessions.mpc.manualModel || sessions.mpc.form.model_path === value.result?.model_path)) {
-          sessions.mpc.taskId = null
-          if (!sessions.mpc.manualModel) sessions.mpc.form.model_path = value.result!.model_path
-          writeSession('mpc.session', sessions.mpc)
-        }
         if (['succeeded', 'failed', 'cancelled'].includes(value.status)) return
       } catch (e) {
         if (!active) return
@@ -280,4 +274,30 @@ export function DnnMpcPage({ mode }: { mode: Mode }) {
     </div>
     {(error || task?.error) && <div role="alert" className="error-box">{error || task?.error}</div>}
   </main>
+}
+
+
+export function DnnMpcPage() {
+  const [mode, setMode] = useState<Mode>(() => readSession<Mode>('dnn-mpc.stage', 'training') === 'mpc' ? 'mpc' : 'training')
+  function selectMode(next: Mode) {
+    setMode(next)
+    writeSession('dnn-mpc.stage', next)
+  }
+  return <section className="dnn-workflow" aria-label="DNN/MPC 控制训练与优化">
+    <div className="mpc-plot-tabs dnn-stage-tabs" role="tablist" aria-label="DNN/MPC 工作流程">
+      {(['training', 'mpc'] as const).map((stage, index) => <button type="button" key={stage}
+        role="tab" id={`dnn-stage-${stage}`} aria-controls="dnn-stage-panel" aria-selected={mode === stage}
+        tabIndex={mode === stage ? 0 : -1} onClick={() => selectMode(stage)} onKeyDown={event => {
+          if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+          event.preventDefault()
+          const next = event.key === 'Home' ? 'training' : event.key === 'End' ? 'mpc' : stage === 'training' ? 'mpc' : 'training'
+          selectMode(next)
+          document.getElementById(`dnn-stage-${next}`)?.focus()
+        }}>{index + 1}. {stage === 'training' ? '模型训练' : 'MPC 仿真'}</button>)}
+    </div>
+    <p className="dnn-workflow-hint">训练模型后进入 MPC 仿真，也可直接选择已有模型。切换阶段保留参数与任务记录。</p>
+    <div id="dnn-stage-panel" role="tabpanel" aria-labelledby={`dnn-stage-${mode}`}>
+      <DnnMpcStage key={mode} mode={mode}/>
+    </div>
+  </section>
 }

@@ -131,6 +131,35 @@ class DnnMpcTests(unittest.TestCase):
                     self.assertEqual(state_path.read_text(encoding="utf-8"), raw)
         self.assertEqual(existing.read_bytes(), b"existing model must remain unchanged")
 
+    def test_combined_workflow_preserves_parameters_and_hands_off_trained_model(self):
+        from desktop.risk_control.process_control_dnn_mpc import DnnMpcWorkflowWidget
+        app = QApplication.instance() or QApplication([])
+        widget = DnnMpcWorkflowWidget()
+        try:
+            widget.show()
+            widget.training_page._epochs_input.setValue(3)
+            widget.mpc_page._horizon_input.setValue(7)
+            payload = runner.run("training", self.training_config() | dict(epochs=1))
+            widget.setCurrentIndex(1)
+            app.processEvents()
+            self.assertEqual(widget.mpc_page._model_path_input.text(), payload["model_path"])
+            self.assertEqual(widget.mpc_page._horizon_input.value(), 7)
+            widget.setCurrentIndex(0)
+            app.processEvents()
+            self.assertEqual(widget.training_page._epochs_input.value(), 3)
+            manual = str(self.root / "manual.npz")
+            widget.mpc_page._model_path_input.setText(manual)
+            widget.mpc_page._model_path_user_selected = True
+            widget.setCurrentIndex(1)
+            app.processEvents()
+            self.assertEqual(widget.mpc_page._model_path_input.text(), manual)
+            with patch.object(widget.training_page, "has_running_worker", return_value=True):
+                self.assertTrue(widget.has_running_worker())
+            with patch.object(widget.mpc_page, "has_running_worker", return_value=True):
+                self.assertTrue(widget.has_running_worker())
+        finally:
+            widget.close()
+
     def test_late_training_failures_preserve_publication_and_previous_results(self):
         cfg = self.training_config() | dict(epochs=1)
         successful = runner.run("training", cfg)

@@ -357,7 +357,7 @@ class LocalApiTests(unittest.TestCase):
 
     def test_python_dnn_defaults_and_image_whitelist(self) -> None:
         modules = self.client.get("/api/modules").json()
-        self.assertEqual(next(x for x in modules if x["id"] == "training")["status"], "available")
+        self.assertEqual(next(x for x in modules if x["id"] == "dnn-mpc")["status"], "available")
         defaults = self.client.get("/api/training/defaults").json()
         self.assertEqual(defaults["hidden_layers"], "64,64")
         self.assertEqual(defaults["epochs"], 200)
