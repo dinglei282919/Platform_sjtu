@@ -292,7 +292,7 @@ def modules() -> list[dict[str, str]]:
         {"id": "sdg", "name": "SIS自主化检测 · SDG-HAZOP", "status": "available"},
         {"id": "sil", "name": "在线SIL验证", "status": "available"},
         {"id": "anomaly", "name": "异常行为检测", "status": "available"},
-        {"id": "dnn-mpc", "name": "DNN/MPC 控制训练与优化", "status": "available"},
+        {"id": "dnn-mpc", "name": "深度神经网络优化控制", "status": "available"},
         {"id": "fdi", "name": "虚假数据注入下的自适应控制仿真", "status": "available"},
         {"id": "reactor", "name": "化学反应器自适应控制仿真", "status": "available"},
         {"id": "replay", "name": "重放攻击下的自适应控制仿真", "status": "available"},

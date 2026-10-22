@@ -495,7 +495,7 @@ class DnnMpcWorkflowWidget(QTabWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setAccessibleName("DNN/MPC 控制训练与优化")
+        self.setAccessibleName("深度神经网络优化控制")
         self.training_page = ProcessControlDnnMpcWidget("training")
         self.mpc_page = ProcessControlDnnMpcWidget("mpc")
         self.addTab(self.training_page, "1. 模型训练")

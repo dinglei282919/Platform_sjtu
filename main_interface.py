@@ -141,7 +141,7 @@ class MainWindow(QMainWindow):
              ["潜在安全威胁识别与自动分类",
               "多评估准则融合的风险学习分析",
               "风险场景动态匹配与适配方案生成算法"]),
-            ("🎛", "风险管控优化决策", False, ["DNN/MPC 控制训练与优化", "虚假数据注入下的自适应控制仿真", "重放攻击下的自适应控制仿真", "多变量过程自愈控制仿真", "化学反应器自适应控制仿真"]),
+            ("🎛", "风险管控优化决策", False, ["深度神经网络优化控制", "虚假数据注入下的自适应控制仿真", "重放攻击下的自适应控制仿真", "多变量过程自愈控制仿真", "化学反应器自适应控制仿真"]),
             ("🛡", "SIS自主化检测", True, ["SDG-HAZOP"]),
             ("✅", "在线SIL验证", False, ["基于GSPN-MC模型的动态化SIL验证方法"]),
         ]
@@ -380,7 +380,7 @@ class MainWindow(QMainWindow):
             self._auto_score_content_widget.show()
         elif submodule_title == "风险场景动态匹配与适配方案生成算法":
             self._cdq_matching_content_widget.show()
-        elif submodule_title == "DNN/MPC 控制训练与优化":
+        elif submodule_title == "深度神经网络优化控制":
             self._process_mpc_content_widget.show()
         elif submodule_title == "虚假数据注入下的自适应控制仿真":
             if self._fdi_content_widget is None:

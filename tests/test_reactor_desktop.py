@@ -169,7 +169,7 @@ class DesktopTests(unittest.TestCase):
             healing = window._self_healing_content_widget
             self.assertTrue(healing.isVisible())
             self.assertFalse(reactor.isVisible())
-            window._on_submodule_clicked("风险管控优化决策", "DNN/MPC 控制训练与优化")
+            window._on_submodule_clicked("风险管控优化决策", "深度神经网络优化控制")
             self.assertTrue(window._process_mpc_content_widget.isVisible())
             self.assertFalse(healing.isVisible())
             for page in (reactor, healing):

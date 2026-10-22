@@ -234,7 +234,7 @@ const navigationGroups: NavigationGroup[] = [
   },
   {
     id: 'risk-control', icon: '🎛', name: '风险管控优化决策', items: [
-      { id: 'dnn-mpc', name: 'DNN/MPC 控制训练与优化' },
+      { id: 'dnn-mpc', name: '深度神经网络优化控制' },
       { id: 'fdi', name: '虚假数据注入下的自适应控制仿真' },
       { id: 'reactor', name: '化学反应器自适应控制仿真' },
       { id: 'replay', name: '重放攻击下的自适应控制仿真' },

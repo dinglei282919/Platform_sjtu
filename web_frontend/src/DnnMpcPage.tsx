@@ -283,8 +283,8 @@ export function DnnMpcPage() {
     setMode(next)
     writeSession('dnn-mpc.stage', next)
   }
-  return <section className="dnn-workflow" aria-label="DNN/MPC 控制训练与优化">
-    <div className="mpc-plot-tabs dnn-stage-tabs" role="tablist" aria-label="DNN/MPC 工作流程">
+  return <section className="dnn-workflow" aria-label="深度神经网络优化控制">
+    <div className="mpc-plot-tabs dnn-stage-tabs" role="tablist" aria-label="深度神经网络优化控制工作流程">
       {(['training', 'mpc'] as const).map((stage, index) => <button type="button" key={stage}
         role="tab" id={`dnn-stage-${stage}`} aria-controls="dnn-stage-panel" aria-selected={mode === stage}
         tabIndex={mode === stage ? 0 : -1} onClick={() => selectMode(stage)} onKeyDown={event => {
