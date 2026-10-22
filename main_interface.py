@@ -64,6 +64,7 @@ class MainWindow(QMainWindow):
         self._process_mpc_content_widget = None
         self._fdi_content_widget = None
         self._replay_content_widget = None
+        self._reactor_content_widget = None
         self._sis_detection_content_widget = None
         self._sil_validation_content_widget = None
 
@@ -140,7 +141,7 @@ class MainWindow(QMainWindow):
              ["潜在安全威胁识别与自动分类",
               "多评估准则融合的风险学习分析",
               "风险场景动态匹配与适配方案生成算法"]),
-            ("🎛", "风险管控优化决策", False, ["控制模型训练评估", "优化控制仿真验证", "虚假数据注入下的自适应控制仿真", "重放攻击下的自适应控制仿真"]),
+            ("🎛", "风险管控优化决策", False, ["控制模型训练评估", "优化控制仿真验证", "虚假数据注入下的自适应控制仿真", "重放攻击下的自适应控制仿真", "化学反应器自适应控制仿真"]),
             ("🛡", "SIS自主化检测", True, ["SDG-HAZOP"]),
             ("✅", "在线SIL验证", False, ["基于GSPN-MC模型的动态化SIL验证方法"]),
         ]
@@ -370,6 +371,7 @@ class MainWindow(QMainWindow):
             self._process_mpc_content_widget,
             self._fdi_content_widget,
             self._replay_content_widget,
+            self._reactor_content_widget,
             self._sis_detection_content_widget,
             self._sil_validation_content_widget,
         ):
@@ -408,6 +410,12 @@ class MainWindow(QMainWindow):
                 self._replay_content_widget = ReplayWidget()
                 self._module_body_layout.addWidget(self._replay_content_widget, 1)
             self._replay_content_widget.show()
+        elif submodule_title == "化学反应器自适应控制仿真":
+            if self._reactor_content_widget is None:
+                from reactor_page import ReactorWidget
+                self._reactor_content_widget = ReactorWidget()
+                self._module_body_layout.addWidget(self._reactor_content_widget, 1)
+            self._reactor_content_widget.show()
         elif submodule_title == "SDG-HAZOP":
             self._sis_detection_content_widget.show()
             if not hasattr(self._sis_widget, '_signal_connected'):
@@ -431,6 +439,10 @@ class MainWindow(QMainWindow):
         self._position_dropdown()
 
     def closeEvent(self, event):
+        if self._reactor_content_widget is not None and self._reactor_content_widget.has_running_worker():
+            QMessageBox.warning(self, "后台任务运行中", "请等待化学反应器仿真完成，或取消后再关闭。")
+            event.ignore()
+            return
         if self._replay_content_widget is not None and self._replay_content_widget.has_running_worker():
             QMessageBox.warning(self, "后台任务运行中", "请等待重放仿真完成，或取消后再关闭。")
             event.ignore()

@@ -807,3 +807,22 @@ main { min-width: 0; padding: 16px; }
 .fdi-wide-page .fdi-tabs { margin-bottom: 18px; }
 .fdi-wide-page .fdi-plot-panel header { align-items: center; }
 .fdi-wide-page .fdi-plot-panel header a { flex-shrink: 0; }
+
+.reactor-page { min-width: 0; --control-plot-aspect: 13 / 7; }
+.reactor-layout { display: grid; grid-template-columns: clamp(320px, 25vw, 380px) minmax(0, 1fr); gap: 18px; align-items: start; }
+.reactor-page .reactor-controls, .reactor-page .reactor-view { padding: 20px; }
+.reactor-controls { display: grid; gap: 12px; position: sticky; top: 12px; min-width: 0; }
+.reactor-controls label { display: grid; grid-template-columns: minmax(0, 1fr) 110px; align-items: center; gap: 8px; margin: 0; }
+.reactor-controls input { width: 100%; min-width: 0; }
+.reactor-view { min-width: 0; }
+.reactor-diagram { display: block; width: 100%; height: auto; aspect-ratio: 1600 / 895; object-fit: contain; background: white; }
+.reactor-playback { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.reactor-playback input { flex: 1; min-width: 140px; }
+.reactor-readout { background: var(--control-inset); border: 1px solid var(--control-border); border-radius: 6px; padding: 12px; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.reactor-view pre { white-space: pre-wrap; }
+@media(max-width: 1000px) { .reactor-layout { grid-template-columns: 1fr; } .reactor-controls { position: static; } }
+@media(max-width: 760px) { .reactor-page .reactor-controls, .reactor-page .reactor-view { padding: 16px; } }
+.reactor-page .fdi-downloads { display: flex; flex-wrap: wrap; gap: 8px; }
+.reactor-page .fdi-downloads a { color: #bce5ff; background: #203b60; border: 1px solid #456181; border-radius: 5px; padding: 6px 9px; text-decoration: none; overflow-wrap: anywhere; }
+.reactor-page .fdi-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 0 0 18px; }
+.reactor-page .fdi-tabs button[aria-pressed="true"] { background: linear-gradient(135deg, #438fc3, #2f689b); border-color: #85cef6; }

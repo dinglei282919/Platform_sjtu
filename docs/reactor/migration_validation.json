@@ -1,0 +1,93 @@
+{
+  "date": "2026-10-22",
+  "base": "0728dde",
+  "branch": "feat/chemical-reactor",
+  "python_suite_passed": 109,
+  "reactor_suite_after_plot_layout_change_passed": 21,
+  "frontend_build": "passed",
+  "web_default_metrics": {
+    "final_x_norm": 8.06245712700344e-07,
+    "final_observer_error": 0.005154228130037607,
+    "peak_abs_u_sampled": 131.445633320044,
+    "nfev": 2396762,
+    "samples": 1504,
+    "elapsed_seconds": 202.96899999999914
+  },
+  "desktop_platform_default_metrics": {
+    "final_x_norm": 8.06245712700344e-07,
+    "final_observer_error": 0.005154228130037607,
+    "peak_abs_u_sampled": 131.445633320044,
+    "nfev": 2396762,
+    "samples": 1504,
+    "elapsed_seconds": 208.23500000000058
+  },
+  "core_bytes_equal_to_I_drive": true,
+  "web_vs_I_max_abs_per_signal": {
+    "t": 0.0,
+    "x1": 0.0,
+    "x2": 0.0,
+    "observer1": 0.0,
+    "observer2": 0.0,
+    "error1": 0.0,
+    "error2": 0.0,
+    "u": 0.0,
+    "gamma": 0.0,
+    "k": 0.0,
+    "mode": 0.0,
+    "v1": 0.0,
+    "v2": 0.0,
+    "alpha1": 0.0,
+    "alpha2": 0.0,
+    "theta1_norm": 0.0,
+    "theta2_norm": 0.0
+  },
+  "desktop_vs_I_max_abs_internal_state": 0.0,
+  "browser_verified": [
+    "navigation",
+    "default_full_run",
+    "refresh_recovery",
+    "plots",
+    "playback",
+    "rerun_clears_old_result",
+    "cancellation"
+  ],
+  "native_desktop_verified": [
+    "platform_launch",
+    "menu",
+    "reactor_diagram"
+  ],
+  "desktop_offscreen_verified": [
+    "module_switch",
+    "default_full_button_run",
+    "animation_pause_restore",
+    "export",
+    "plots"
+  ],
+  "limits": [
+    "No MATLAB trajectory parity established",
+    "Control peak not tolerance-converged",
+    "Diagram is illustrative"
+  ],
+  "structure_review": {
+    "date": "2026-10-22",
+    "python_suite_passed": 111,
+    "frontend_build": "passed",
+    "source_hash_parity": {
+      "core.py": true,
+      "reactor_dual_feed.gif": true,
+      "reactor_dual_feed.png": true
+    },
+    "output_convention": "dnn_mpc/python_output/reactor",
+    "fixes": [
+      "shared output path convention",
+      "persist task ID when navigating away during submission",
+      "repair documentation command paths",
+      "remove unused standalone application entry"
+    ],
+    "intentional_differences": [
+      "desktop imports local result directories; Web restores server tasks, no local NPZ upload",
+      "I-drive precomputed examples are not platform startup dependencies"
+    ],
+    "cleanup": "test runtime directories and caches removed; dependencies, runnable build, source and verification records retained"
+  }
+}

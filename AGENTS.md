@@ -344,3 +344,7 @@ python -c "import dnnmpcpkg; h=dnnmpcpkg.initialize(); print('dnnmpcpkg ok'); h.
 - 涉及训练、仿真或 Runtime 的改动，必须同时检查进度、结果图、结果 JSON 和错误状态。
 - 不要删除或覆盖用户已有的运行结果、输入数据和未相关改动。
 - 修改完成后至少运行与改动范围匹配的语法检查、前端构建和测试；涉及 Runtime 时再执行对应初始化检查。
+
+## 化学反应器模块
+
+新增化学反应器自适应控制仿真：共享核心 platform_core/reactor，桌面 reactor_page.py，Web ReactorPage.tsx 与 web_backend/services/reactor.py。两端使用 assets/reactor 的 GIF/PNG，并保留后台计算、取消、回放和结果导出。操作和数值边界见 docs/reactor/README.md。

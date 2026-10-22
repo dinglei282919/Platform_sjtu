@@ -3,7 +3,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CONTROL_OUTPUT_ROOT = ROOT / "dnn_mpc" / "python_output"
-MODULES = ("training", "mpc", "fdi", "replay")
+MODULES = ("training", "mpc", "fdi", "replay", "reactor")
 
 
 def module_output_dir(module, *, root=CONTROL_OUTPUT_ROOT):
