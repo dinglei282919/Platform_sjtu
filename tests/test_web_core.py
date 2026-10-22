@@ -255,7 +255,7 @@ class LocalApiTests(unittest.TestCase):
 
     @patch("web_backend.app.path_picker.choose_local_path")
     def test_local_path_dialog_returns_absolute_path(self, choose_mock) -> None:
-        selected_path = r"H:\repository\Platform_sjtu\dnn_mpc\python_output"
+        selected_path = r"C:\example\Platform_sjtu\dnn_mpc\python_output"
         choose_mock.return_value = selected_path
         response = self.client.post(
             "/api/local-paths/select",
@@ -422,7 +422,7 @@ class LocalApiTests(unittest.TestCase):
             {"package_dir": r"unused\package"},
             {"mcr_root": r"relative\runtime"},
             {"output_dir": r"relative\output"},
-            {"model_path": r"H:\repository\Platform_sjtu\dnn_mpc\python_output\model.txt"},
+            {"model_path": r"C:\example\Platform_sjtu\dnn_mpc\python_output\model.txt"},
             {"dataset_path": r"relative\dataset.mat"},
         ]
         for payload in invalid_payloads:
@@ -458,7 +458,7 @@ class LocalApiTests(unittest.TestCase):
             {"package_name": "dnn-mpc"},
             {"mcr_root": r"relative\runtime"},
             {"output_dir": r"relative\output"},
-            {"model_path": r"H:\repository\Platform_sjtu\dnn_mpc\python_output\model.txt"},
+            {"model_path": r"C:\example\Platform_sjtu\dnn_mpc\python_output\model.txt"},
         ]
         for payload in invalid_payloads:
             with self.subTest(payload=payload):

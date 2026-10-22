@@ -1,8 +1,10 @@
 # 化工控制过程 DNN-MPC MATLAB Python Package 使用说明
 
-> 历史编译包说明。当前风险管控页面不再调用本包；Python 部署与输出结构见 [README](README.md)。
+> 路径约定：`C:\path\to\...` 是示例占位路径，执行命令前请替换为实际项目、环境或 Runtime 安装目录。
 
-本模块参照 `gridattackpkg`，通过 MATLAB Compiler SDK 导出为 Python Package，再由 platform 在 MATLAB Runtime R2024b 下调用。默认 Python 导入模块名为 `dnnmpcpkg`，默认导出目录为 `dnn_mpc/build_python`，pip 包名为 `dnnmpcpkg-R2024b`。
+> 本文仅适用于历史编译包。当前四个风险管控页面使用 Python 共享核心；实现、部署与输出结构见 [风险管控算法实现与使用手册](../RISK_CONTROL_MANUAL.md)。
+
+历史 DNN-MPC 算法通过 MATLAB Compiler SDK 导出为 Python Package，可由独立 Python 脚本在 MATLAB Runtime R2024b 下调用。当前平台的 DNN/MPC 页面使用 Python 共享核心，不调用该编译包。默认 Python 导入模块名为 `dnnmpcpkg`，默认导出目录为 `dnn_mpc/build_python`，pip 包名为 `dnnmpcpkg-R2024b`。
 
 ## 1. 环境要求
 
@@ -42,7 +44,7 @@ which fmincon -all
 在 MATLAB R2024b 命令行中运行：
 
 ```matlab
-cd("H:\repository\Platform_sjtu\dnn_mpc\matlab")
+cd("C:\path\to\Platform_sjtu\dnn_mpc\matlab")
 build_dnnmpcpkg_python_package()
 ```
 
@@ -50,7 +52,7 @@ build_dnnmpcpkg_python_package()
 
 ```matlab
 build_dnnmpcpkg_python_package( ...
-    "H:\repository\Platform_sjtu\dnn_mpc\build_python", ...
+    "C:\path\to\Platform_sjtu\dnn_mpc\build_python", ...
     "dnnmpcpkg")
 ```
 
@@ -79,12 +81,12 @@ dnn_mpc/build_python/
 
 ```powershell
 conda activate platform
-cd H:\repository\Platform_sjtu\dnn_mpc\build_python
+cd C:\path\to\Platform_sjtu\dnn_mpc\build_python
 python -m pip install --upgrade --force-reinstall --no-cache-dir --no-build-isolation .
 python -m pip show dnnmpcpkg-R2024b
 ```
 
-如果 platform 页面里 `Python包目录` 填写的是 `H:\repository\Platform_sjtu\dnn_mpc\build_python`，平台也会优先从该导出目录加载包；但仍建议执行上面的 pip 安装，便于目标机部署和排查。
+独立脚本应使用安装了该导出包的 Python 环境；用 `python -m pip show dnnmpcpkg-R2024b` 检查实际安装位置。
 
 如果重编译后仍看到旧错误，先关闭所有 Python/platform 进程，再清理 MATLAB Runtime 的 CTF 解包缓存：
 
@@ -99,7 +101,7 @@ Remove-Item -Recurse -Force "$env:LOCALAPPDATA\MathWorks\MatlabRuntimeCache\R202
 先配置当前 PowerShell 会话的 Runtime 路径：
 
 ```powershell
-$env:MCR_ROOT = "H:\software\matlab software\Matlab R2024b Runtime\R2024b"
+$env:MCR_ROOT = "C:\path\to\MATLAB_Runtime\R2024b"
 $env:PATH = "$env:MCR_ROOT\runtime\win64;$env:MCR_ROOT\bin\win64;$env:MCR_ROOT\extern\bin\win64;$env:PATH"
 ```
 
@@ -112,7 +114,7 @@ python -c "import dnnmpcpkg; print(dnnmpcpkg.__file__); h=dnnmpcpkg.initialize()
 验证 `DNNTrain` 对应的训练入口：
 
 ```powershell
-python -c "import dnnmpcpkg; h=dnnmpcpkg.initialize(); print(h.run_process_control_training(r'H:\repository\Platform_sjtu\dnn_mpc\output', 1000, 50, '64,64', '')); h.terminate()"
+python -c "import dnnmpcpkg; h=dnnmpcpkg.initialize(); print(h.run_process_control_training(r'C:\path\to\Platform_sjtu\dnn_mpc\output', 1000, 50, '64,64', '')); h.terminate()"
 ```
 
 训练成功后会生成：
@@ -127,7 +129,7 @@ dnn_mpc/output/prediction_error.png
 再验证 `MPC simulation` 对应的仿真入口：
 
 ```powershell
-python -c "import dnnmpcpkg; h=dnnmpcpkg.initialize(); print(h.run_process_control_mpc_validation(r'H:\repository\Platform_sjtu\dnn_mpc\output', r'H:\repository\Platform_sjtu\dnn_mpc\output\process_control_nn_model.mat', 5.0, 10)); h.terminate()"
+python -c "import dnnmpcpkg; h=dnnmpcpkg.initialize(); print(h.run_process_control_mpc_validation(r'C:\path\to\Platform_sjtu\dnn_mpc\output', r'C:\path\to\Platform_sjtu\dnn_mpc\output\process_control_nn_model.mat', 5.0, 10)); h.terminate()"
 ```
 
 仿真成功后会生成：
@@ -141,16 +143,71 @@ dnn_mpc/output/tracking_error.png
 dnn_mpc/output/cost_curve.png
 ```
 
-## 6. platform 页面配置
+## 6. 独立脚本完整调用示例
 
-进入 `化工控制过程 - DNNTrain` 或 `化工控制过程 - MPC simulation` 后设置：
+新建 `test_dnnmpcpkg.py`：
 
-- `Python包目录`: `H:\repository\Platform_sjtu\dnn_mpc\build_python`
-- `Python包名`: `dnnmpcpkg`
-- `MCR_ROOT`: MATLAB Runtime R2024b 根目录，例如 `H:\software\matlab software\Matlab R2024b Runtime\R2024b`
-- `输出目录`: `H:\repository\Platform_sjtu\dnn_mpc\output` 或自定义目录
-- `模型文件`: `MPC simulation` 页默认使用最近一次 `DNNTrain` 生成的 `process_control_nn_model.mat`
+```python
+import os
+from pathlib import Path
 
-`DNNTrain` 成功后，platform 会记录最近一次训练的模型路径；进入或运行 `MPC simulation` 时，如果用户没有手动指定其他模型，会自动填入该模型文件。
+MCR_ROOT = Path(r"<MCR_ROOT>")
+OUTPUT_DIR = Path(r"C:\path\to\Platform_sjtu\dnn_mpc\output")
 
-`Python包目录` 可以留空；留空时平台使用当前 Python 环境中已 pip 安装的 `dnnmpcpkg`。为便于排查，部署时建议填写 `dnn_mpc/build_python`。
+runtime_dir = MCR_ROOT / "runtime" / "win64"
+bin_dir = MCR_ROOT / "bin" / "win64"
+extern_dir = MCR_ROOT / "extern" / "bin" / "win64"
+dll_path = runtime_dir / "mclmcrrt24_2.dll"
+
+if not dll_path.exists():
+    raise FileNotFoundError(f"MATLAB Runtime DLL not found: {dll_path}")
+
+os.environ["PATH"] = os.pathsep.join([
+    str(runtime_dir),
+    str(bin_dir),
+    str(extern_dir),
+    os.environ.get("PATH", ""),
+])
+
+import dnnmpcpkg
+
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+handle = dnnmpcpkg.initialize()
+try:
+    result_json = handle.run_process_control_pipeline(
+        str(OUTPUT_DIR),
+        1000,
+        50,
+        1.0,
+        5,
+        "64,64",
+        "",
+    )
+    print(result_json)
+finally:
+    handle.terminate()
+```
+
+运行：
+
+```powershell
+python .\test_dnnmpcpkg.py
+```
+
+成功后输出目录会生成：
+
+```text
+process_control_dataset.mat
+process_control_nn_model.mat
+process_control_mpc_result.mat
+summary.json
+training_summary.json
+mpc_validation_summary.json
+training_performance.png
+prediction_error.png
+process_control_trajectory.png
+control_input.png
+tracking_error.png
+cost_curve.png
+progress.json
+```

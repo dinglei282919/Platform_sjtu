@@ -4,6 +4,8 @@
 
 项目架构、源码边界、BS/CS 模块映射和新增模块规范以根目录 [`AGENTS.md`](AGENTS.md) 为权威说明；本文保留面向人工使用的安装、启动和 CS 模块教程。
 
+控制模型训练、MPC、FDI、重放与自愈控制的实现和操作统一见 [风险管控算法实现与使用手册](RISK_CONTROL_MANUAL.md)。这四个模块无需 MATLAB Runtime；下文 Runtime 步骤用于其他依赖编译包的功能或历史工程。
+
 首次启动前安装 Node.js LTS，并在项目根目录执行：
 
 ```powershell
@@ -141,7 +143,7 @@ E:\MATLAB2024
 - 两项参数的可设范围均为 `1%–30%`。
 - 当前实现是对既有 `gridattackpkg` 的兼容映射：测量噪声和过程扰动的百分比均除以 10 后传入 Runtime。该映射不改变已编译 MATLAB 包的底层数学模型。
 
-- DNN-MPC 模块的 `MCR_ROOT` 也应填写：
+- 历史 DNN-MPC 编译包的 `MCR_ROOT` 应填写实际安装目录；当前 Python 页面不需要该配置：
 
 ```text
 E:\MATLAB2024
