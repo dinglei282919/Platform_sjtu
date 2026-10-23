@@ -1,6 +1,8 @@
 # 项目 BS/CS 架构与开发指南
 
-本文档是本项目给 Codex 和开发者使用的结构说明。第一次进入项目时，先阅读本文，再根据任务范围选择 BS 或 CS 代码。不要把一个架构的页面修改方式套用到另一个架构。
+> 路径约定：`C:\path\to\...` 是示例占位路径，执行命令前请替换为实际项目、环境或 Runtime 安装目录。
+
+本文档说明项目的 BS/CS 架构、模块职责与开发约定。修改功能时应区分浏览器端与桌面端，遵循各自的页面结构和共享计算层接口。
 
 ## 1. 项目边界
 
@@ -18,9 +20,11 @@ Framework.py -> main_interface.py -> 各功能 QWidget 页面
 | 潜在安全威胁识别与自动分类 | `error_classification.py` |
 | 多评估准则融合的风险学习分析 | `auto_score.py` |
 | 风险场景动态匹配与适配方案生成算法 | `cdq_risk_matching.py` |
-| 控制模型训练评估、优化控制仿真验证 | `process_control_dnn_mpc.py` |
-| 虚假数据注入下的自适应控制 | `fdi_page.py` |
-| 重放攻击下的自适应控制 | `replay_page.py` |
+| 深度神经网络优化控制 | `desktop/risk_control/process_control_dnn_mpc.py` |
+| 虚假数据注入下的自适应控制 | `desktop/risk_control/fdi_page.py` |
+| 重放攻击下的自适应控制 | `desktop/risk_control/replay_page.py` |
+| 多变量过程自愈控制仿真 | `desktop/risk_control/self_healing_page.py` |
+| 化学反应器自适应控制仿真 | `desktop/risk_control/reactor_page.py` |
 | SDG-HAZOP | `sdg_hazop.py` |
 | 基于 GSPN-MC 模型的动态化 SIL 验证方法 | `sil_validation.py` |
 
@@ -61,6 +65,7 @@ BS 启动入口是：
 ### 1.3 共享层和运行生成物
 
 - `platform_core/`：保存不依赖 PySide6、React 或 FastAPI 的公共算法逻辑。CS 和 BS 都需要使用的纯 Python 数学逻辑优先放在这里。
+- `platform_core/risk_control/`：DNN/MPC、FDI、重放、自愈控制、化学反应器及其共用路径与绘图；各子模块保持独立，桌面和 Web 复用此计算层。
 - `input_data/`：CSV、Excel、MAT 等输入数据。当前模块依赖的文件名和相对路径是接口约定，不要随意重命名或移动。
 - `output_figures/`：通用算法生成的图片和结果。
 - `gridattackpkg_core_output/`：异常检测 Runtime 相关输出。
@@ -74,7 +79,7 @@ BS 启动入口是：
 以下目录是 MATLAB 编译导出的 Python 包，不属于 BS 或 CS 页面源码：
 
 - `build_python/`：`gridattackpkg`，供异常行为检测使用。
-- `dnn_mpc/build_python/`：`dnnmpcpkg`，供 DNNTrain 和 MPC 使用。
+- `dnn_mpc/build_python/`：`dnnmpcpkg`，用于历史 DNN-MPC 算法的独立调用；当前 DNN/MPC 页面使用 Python 共享核心。
 
 不要直接修改这些目录中的生成文件，尤其是导出的 `__init__.py`、`.ctf` 和其他编译产物。需要改变底层 MATLAB 算法时，应修改 MATLAB 源工程并重新导出，再同步安装说明和版本信息。
 
@@ -88,10 +93,11 @@ BS 启动入口是：
 | 潜在安全威胁识别与自动分类 | `error_classification.py` | `ClassificationPage` | `web_backend/services/classification.py`；`/api/classification/*` | `input_data/error_classification_*.csv` |
 | 多评估准则融合的风险学习分析 | `auto_score.py` | `ScorePage` | `platform_core/scoring.py`、`web_backend/services/scoring.py`；`/api/score/*` | 公共评分逻辑 |
 | 风险场景动态匹配与适配方案生成算法 | `cdq_risk_matching.py` | `CdqPageReplica` | `web_backend/services/cdq.py`；`/api/cdq/*` | `input_data/cdq_data.xlsx` |
-| 控制模型训练评估 | `process_control_dnn_mpc.py` 的 `page_mode="training"` | `DnnMpcPage.tsx` | `web_backend/services/training.py`；`/api/training/*` | `platform_core/dnn_mpc`、DNN 训练输出 |
-| 优化控制仿真验证 | `process_control_dnn_mpc.py` 的 `page_mode="mpc"` | `DnnMpcPage.tsx` | `web_backend/services/mpc.py`；`/api/mpc/*` | `platform_core/dnn_mpc`、MPC 输出 |
-| 虚假数据注入下的自适应控制 | `fdi_page.py` | `FdiPage.tsx` | `web_backend/services/fdi.py`；`/api/fdi/*` | `platform_core/fdi` |
-| 重放攻击下的自适应控制 | `replay_page.py` | `ReplayPage.tsx` | `web_backend/services/replay.py`；`/api/replay/*` | `platform_core/replay` |
+| 深度神经网络优化控制 | `desktop/risk_control/process_control_dnn_mpc.py` 的 `DnnMpcWorkflowWidget` | `DnnMpcPage.tsx` | `web_backend/services/training.py`、`mpc.py`；`/api/training/*`、`/api/mpc/*` | `platform_core/risk_control/dnn_mpc`、NPZ 模型与仿真输出 |
+| 虚假数据注入下的自适应控制 | `desktop/risk_control/fdi_page.py` | `FdiPage.tsx` | `web_backend/services/fdi.py`；`/api/fdi/*` | `platform_core/risk_control/fdi` |
+| 重放攻击下的自适应控制 | `desktop/risk_control/replay_page.py` | `ReplayPage.tsx` | `web_backend/services/replay.py`；`/api/replay/*` | `platform_core/risk_control/replay` |
+| 多变量过程自愈控制仿真 | `desktop/risk_control/self_healing_page.py` | `SelfHealingPage.tsx` | `web_backend/services/self_healing.py`；`/api/self-healing/*` | `platform_core/risk_control/self_healing`；见 `RISK_CONTROL_MANUAL.md` |
+| 化学反应器自适应控制仿真 | `desktop/risk_control/reactor_page.py` | `ReactorPage.tsx` | `web_backend/services/reactor.py`；`/api/reactor/*` | `platform_core/risk_control/reactor` |
 | SDG-HAZOP | `sdg_hazop.py` | `SdgPage` | `web_backend/services/sdg.py`；`/api/sdg/*` | SDG 示例/分析数据 |
 | 基于 GSPN-MC 模型的动态化 SIL 验证方法 | `sil_validation.py` | `SilPage` | `web_backend/services/sil.py`；`/api/sil/*` | GSPN-MC 仿真参数和结果 |
 
@@ -135,13 +141,13 @@ cd ..
 要跑通依赖 MATLAB 的完整功能，需要 MATLAB Runtime R2024b。典型安装根目录为：
 
 ```text
-E:\MATLAB2024
+C:\path\to\MATLAB_Runtime\R2024b
 ```
 
 必须确认以下 DLL 存在：
 
 ```text
-E:\MATLAB2024\runtime\win64\mclmcrrt24_2.dll
+C:\path\to\MATLAB_Runtime\R2024b\runtime\win64\mclmcrrt24_2.dll
 ```
 
 在同一个 `Platform` Python 环境中安装两个本地导出包：
@@ -157,7 +163,7 @@ python -m pip check
 运行时可在当前 PowerShell 会话配置：
 
 ```powershell
-$env:MCR_ROOT = 'E:\MATLAB2024'
+$env:MCR_ROOT = 'C:\path\to\MATLAB_Runtime\R2024b'
 $env:Path = "$env:MCR_ROOT\runtime\win64;$env:MCR_ROOT\bin\win64;$env:MCR_ROOT\extern\bin\win64;$env:Path"
 ```
 
@@ -165,7 +171,7 @@ $env:Path = "$env:MCR_ROOT\runtime\win64;$env:MCR_ROOT\bin\win64;$env:MCR_ROOT\e
 
 - DNNTrain 重新编译需要 Deep Learning Toolbox。
 - MPC 重新编译需要 Optimization Toolbox。
-- 具体导出流程参考 `GRIDATTACKPKG_NEW_ENV_SETUP.md` 和 `DNN_MPC_NEW_ENV_SETUP.md`。
+- 具体导出流程参考 `GRIDATTACKPKG_NEW_ENV_SETUP.md` 和 `dnn_mpc/DNN_MPC_PYTHON_PACKAGE_SETUP.md`。
 
 ### 3.4 数据和输出约定
 
@@ -183,19 +189,7 @@ $env:Path = "$env:MCR_ROOT\runtime\win64;$env:MCR_ROOT\bin\win64;$env:MCR_ROOT\e
 
 ### 3.5 本机启动脚本的环境路径
 
-当前 `scripts/run_web_local.ps1` 内部固定使用：
-
-```text
-D:\ana3\envs\Platform\python.exe
-```
-
-并默认查找：
-
-```text
-C:\Program Files\nodejs\npm.cmd
-```
-
-换机器或 Conda 环境路径不同，必须修改该脚本中的 `$python`/`$npm`，或直接使用当前环境手动启动：
+`scripts/run_web_local.ps1` 依次从 `-PythonExe` 参数或 `PLATFORM_PYTHON` 环境变量、已激活的 Conda 环境、系统 PATH 选择 Python，并从 PATH 查找 `npm.cmd`。无需修改脚本中的机器路径；也可激活环境后手动启动：
 
 ```powershell
 conda activate Platform
@@ -284,13 +278,13 @@ python -c "import dnnmpcpkg; h=dnnmpcpkg.initialize(); print('dnnmpcpkg ok'); h.
 - CDQ 模块报数据缺失：检查 `input_data/cdq_data.xlsx` 是否存在，且没有改变工作目录导致相对路径失效。
 - Runtime 包路径和输出目录不一致：统一使用当前项目中的 `build_python`、`dnn_mpc/build_python` 和 `dnn_mpc/output`，不要混用其他项目副本的路径。
 
-只查看 BS 静态界面时，可以先安装 Python/FastAPI 和 Node.js 并构建前端，不必立即安装 MATLAB Runtime；要执行异常检测、DNNTrain、MPC 等 Runtime 功能时，仍必须完成 R2024b Runtime 和对应导出包配置。
+只查看 BS 静态界面时，可以先安装 Python/FastAPI 和 Node.js 并构建前端，不必立即安装 MATLAB Runtime；要执行异常检测或独立调用历史编译包时，仍必须完成 R2024b Runtime 和对应导出包配置。
 
 ## 5. 新增模块规范
 
 ### 5.1 新增 CS 模块
 
-1. 沿用现有模块结构，在项目根目录新建继承 `QWidget` 的页面；优先复用已有公共控件和文件，不为单个模块另建前端目录。
+1. 沿用现有模块结构新建继承 `QWidget` 的页面；风险管控页面及共用 Qt 控件统一放在 `desktop/risk_control/`，其他模块保持现有目录。优先复用已有控件，不为单个模块另建前端目录。
 2. 在 `main_interface.py` 中增加页面导入（推荐在懒加载分支内导入）、页面容器成员和统一隐藏逻辑。
 3. 在导航菜单列表中增加一级菜单或子模块名称。
 4. 在 `_on_submodule_clicked()` 中增加与菜单名称完全一致的显示分支。
@@ -344,3 +338,9 @@ python -c "import dnnmpcpkg; h=dnnmpcpkg.initialize(); print('dnnmpcpkg ok'); h.
 - 涉及训练、仿真或 Runtime 的改动，必须同时检查进度、结果图、结果 JSON 和错误状态。
 - 不要删除或覆盖用户已有的运行结果、输入数据和未相关改动。
 - 修改完成后至少运行与改动范围匹配的语法检查、前端构建和测试；涉及 Runtime 时再执行对应初始化检查。
+
+## 化学反应器模块
+
+新增化学反应器自适应控制仿真：共享核心 platform_core/risk_control/reactor，桌面 desktop/risk_control/reactor_page.py，Web ReactorPage.tsx 与 web_backend/services/reactor.py。两端使用 assets/reactor 的 GIF/PNG，并保留后台计算、取消、回放和结果导出。输出遵循 dnn_mpc/python_output/reactor 约定。
+
+模型、参数、页面操作、结果格式与数值验证边界统一维护在 [风险管控手册第 7 节](RISK_CONTROL_MANUAL.md#reactor)，不再依赖独立的 `docs/reactor` 目录或文档生成脚本。

@@ -5,9 +5,9 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 import numpy as np
-from platform_core.replay.config import validate_config
-from platform_core.replay.simulation import simulate, SimulationCancelled
-from platform_core.replay.runner import run, artifact_path, ARTIFACT_NAMES
+from platform_core.risk_control.replay.config import validate_config
+from platform_core.risk_control.replay.simulation import simulate, SimulationCancelled
+from platform_core.risk_control.replay.runner import run, artifact_path, ARTIFACT_NAMES
 
 
 class ReplayContractTests(unittest.TestCase):
@@ -50,7 +50,7 @@ class ReplayContractTests(unittest.TestCase):
             for name in ("../signals.csv", "tracking.pdf", "replay_config.json"):
                 with self.assertRaises(FileNotFoundError):
                     artifact_path(directory, name)
-        with TemporaryDirectory() as directory, patch("platform_core.replay.runner.simulate", side_effect=RuntimeError("solver failed")):
+        with TemporaryDirectory() as directory, patch("platform_core.risk_control.replay.runner.simulate", side_effect=RuntimeError("solver failed")):
             with self.assertRaisesRegex(RuntimeError, "solver failed"):
                 run(run_dir=directory)
             self.assertFalse((Path(directory) / "result.json").exists())

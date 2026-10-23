@@ -21,7 +21,7 @@ assert.ok(pollingEffect && runningExpression, 'DNN-MPC polling effect must be fo
 const transpile = code => ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText
 const flush = () => new Promise(resolve => setImmediate(resolve))
 
-function fixture(mode, responses) {
+function fixture(mode, responses, status = 'running') {
   const timers = new Map()
   let sequence = 0, requests = 0, cleanup
   const context = vm.createContext({
@@ -30,7 +30,7 @@ function fixture(mode, responses) {
       const response = responses[Math.min(requests++, responses.length - 1)]
       if (response instanceof Error) throw response
       return { ok: response === 200, status: response, json: async () => response === 200
-        ? { id: 'task-before-restart', status: 'running', logs: [] }
+        ? { id: 'task-before-restart', status, logs: [], result: { model_path: 'C:/trained.npz' } }
         : { detail: `HTTP ${response}` } }
     },
     useEffect: effect => { cleanup = effect() },
@@ -42,11 +42,11 @@ function fixture(mode, responses) {
     const taskId = 'task-before-restart';
     let currentTaskId = taskId, task = { id: taskId, status: 'running' }, submitting = false;
     const mode = ${JSON.stringify(mode)}, training = mode === 'training';
-    const sessions = { [mode]: { taskId, form: { model_path: 'C:/chosen.npz' }, manualModel: true } };
+    const sessions = { mpc: { taskId: 'finished-mpc', form: { model_path: 'C:/trained.npz' }, manualModel: false }, [mode]: { taskId, form: { model_path: 'C:/chosen.npz' }, manualModel: true } };
     let error = '';
     const setTask = value => task = value, setTaskId = value => currentTaskId = value, setError = value => error = value;
     ${pollingEffect};
-    function snapshot() { const taskId = currentTaskId; return { taskId, task, running: (${runningExpression}), error, saved: sessions[mode] }; }
+    function snapshot() { const taskId = currentTaskId; return { taskId, task, running: (${runningExpression}), error, saved: sessions[mode], mpc: sessions.mpc }; }
   `), context)
   return {
     snapshot: () => JSON.parse(JSON.stringify(vm.runInContext('snapshot()', context))),
@@ -107,3 +107,13 @@ for (const mode of ['training', 'mpc']) {
     assert.equal(page.timers.size, 0)
   })
 }
+
+
+test('revisiting completed training retains the completed MPC task', async () => {
+  const page = fixture('training', [200], 'succeeded')
+  await flush()
+  assert.equal(page.snapshot().task.status, 'succeeded')
+  assert.equal(page.snapshot().mpc.taskId, 'finished-mpc')
+  assert.equal(page.timers.size, 0)
+  page.stop()
+})
