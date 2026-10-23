@@ -851,6 +851,13 @@ class DnnPlotViewTests(unittest.TestCase):
 
     def test_wheel_anchor_and_drag(self):
         point = QPoint(600, 150)
+        self.canvas.clearFocus()
+        inactive = QWheelEvent(QPointF(point), QPointF(self.canvas.viewport().mapToGlobal(point)),
+                               QPoint(), QPoint(0, 120), Qt.NoButton, Qt.NoModifier, Qt.NoScrollPhase, False)
+        self.app.sendEvent(self.canvas.viewport(), inactive)
+        self.assertEqual(self.canvas._zoom, 1.)
+        QTest.mouseClick(self.canvas.viewport(), Qt.LeftButton, pos=point)
+        self.assertTrue(self.canvas.hasFocus())
         before = self.canvas.mapToScene(point)
         event = QWheelEvent(QPointF(point), QPointF(self.canvas.viewport().mapToGlobal(point)),
                             QPoint(), QPoint(0, 120), Qt.NoButton, Qt.NoModifier, Qt.NoScrollPhase, False)

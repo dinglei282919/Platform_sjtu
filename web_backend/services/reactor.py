@@ -45,6 +45,15 @@ def artifact_path(directory, name):
         raise FileNotFoundError("化学反应器结果文件不存在")
     return path
 
+
+def import_saved(source, log, *, run_dir):
+    """Validate a desktop export and publish an independent Web task snapshot."""
+    log("正在载入已有化学反应器仿真结果。")
+    result = load_result(source)
+    export_result(result, run_dir)
+    return {"module": "reactor", "config": result["config"], "metrics": result["metrics"],
+            "files": sorted(ARTIFACTS), "imported": True}
+
 def trajectory(directory):
     result = load_result(directory)
     return {key: values.tolist() for key, values in result["data"].items()}

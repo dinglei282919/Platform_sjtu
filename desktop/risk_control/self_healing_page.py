@@ -3,11 +3,13 @@ from pathlib import Path
 import shutil
 import html
 from threading import Event
-from PySide6.QtCore import QObject, QThread, Signal, Slot, Qt
+from PySide6.QtCore import QObject, QThread, Signal, Slot, Qt, QEvent
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-                               QPushButton, QDoubleSpinBox, QSpinBox, QComboBox, QTabBar, QTabWidget,
+                               QPushButton,
                                QFrame, QFileDialog, QMessageBox, QLayout)
-from desktop.risk_control.dnn_mpc_plot_view import DnnMpcPlotView, ControlPlotRefresh, ControlRunLog, ControlScrollArea, ControlTaskStatus, control_page_style
+from desktop.risk_control.dnn_mpc_plot_view import ControlTabWidget as QTabWidget, ControlTabBar as QTabBar
+from desktop.risk_control.dnn_mpc_plot_view import ControlSpinBox as QSpinBox, ControlDoubleSpinBox as QDoubleSpinBox, ControlComboBox as QComboBox
+from desktop.risk_control.dnn_mpc_plot_view import DnnMpcPlotView, ControlPlotRefresh, ControlRunLog, ControlScrollArea, ControlTaskStatus, control_page_style, format_rmse
 from platform_core.risk_control.self_healing.config import PLOT_GROUPS, SCENARIOS, PARAMETERS, NOTICE, defaults, validate_config
 
 PLOT_DESCRIPTIONS = {
@@ -50,10 +52,19 @@ class SelfHealingWidget(QWidget):
         self._run_dir = None
         self._result = None
         self.views = {}
-        root = QVBoxLayout(self)
+        self._scenario_states = {}
+        self._active_scenario = next(iter(SCENARIOS))
+        container = QVBoxLayout(self)
+        container.setContentsMargins(0, 0, 0, 0)
+        page = QWidget()
+        page.setProperty("controlSurface", True)
+        page.setAttribute(Qt.WA_StyledBackground, True)
+        root = QVBoxLayout(page)
+        root.setSizeConstraint(QLayout.SetMinimumSize)
         root.setContentsMargins(14, 14, 14, 14)
         root.setSpacing(18)
         self.scenario_tabs = QTabBar()
+        self.scenario_tabs.setDrawBase(False)
         self.scenario_tabs.setAccessibleName("自愈控制场景")
         self.scenario_tabs.setExpanding(True)
         for key, label in SCENARIOS.items():
@@ -62,7 +73,7 @@ class SelfHealingWidget(QWidget):
         root.addWidget(self.scenario_tabs)
         body = QHBoxLayout()
         body.setSpacing(18)
-        root.addLayout(body, 1)
+        root.addLayout(body)
         controls = QFrame()
         controls.setObjectName("self_healingControls")
         controls.setProperty("controlPanel", True)
@@ -89,6 +100,7 @@ class SelfHealingWidget(QWidget):
                 field.setSingleStep(parameter["step"])
             field.setAccessibleName(parameter["label"])
             self.fields[key] = field
+            field.installEventFilter(self)
             left.addWidget(field)
         self._reset_config()
         self.run_button = QPushButton("开始自愈控制仿真")
@@ -111,8 +123,8 @@ class SelfHealingWidget(QWidget):
         self.export_button.clicked.connect(self.export)
         left.addWidget(self.export_button)
         left.addStretch()
-        self._config_scroll = ControlScrollArea(controls, width=380)
-        body.addWidget(self._config_scroll)
+        controls.setFixedWidth(380)
+        body.addWidget(controls)
         right = QVBoxLayout()
         output = QFrame()
         output.setObjectName("self_healingOutput")
@@ -160,13 +172,36 @@ class SelfHealingWidget(QWidget):
         right.setContentsMargins(0, 0, 0, 0)
         right.setSizeConstraint(QLayout.SetMinimumSize)
         content.setLayout(right)
-        self._result_scroll = ControlScrollArea(content)
-        body.addWidget(self._result_scroll, 1)
+        body.addWidget(content, 1)
+        root.addStretch()
+        self._page_scroll = ControlScrollArea(page)
+        self._page_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
+        container.addWidget(self._page_scroll)
         self.setStyleSheet(control_page_style("self_healingPage"))
         self._plot_refresh = ControlPlotRefresh(self.views, self)
         self.scenario_tabs.currentChanged.connect(self._change_scenario)
 
+    def eventFilter(self, watched, event):
+        if event.type() == QEvent.Wheel and watched in self.fields.values():
+            delta = event.angleDelta().y()
+            if delta:
+                bar = self._page_scroll.verticalScrollBar()
+                bar.setValue(bar.value() - delta)
+                event.accept()
+                return True
+        return super().eventFilter(watched, event)
+
     def _change_scenario(self):
+        self._scenario_states[self._active_scenario] = {
+            "values": {key: field.currentData() if isinstance(field, QComboBox) else field.value()
+                       for key, field in self.fields.items()},
+            "result": self._result, "run_dir": self._run_dir,
+            "metrics": self.metrics.text(), "logs": self.logs.text.toPlainText(),
+            "logs_expanded": self.logs.toggle.isChecked(),
+            "state": self.task_status.property("state"), "message": self.status.text(),
+            "percent": self.progress.value(), "plot": self.plot_tabs.currentIndex(),
+        }
+        self._active_scenario = self.scenario_tabs.tabData(self.scenario_tabs.currentIndex())
         self._reset_config()
         self._result = None
         self._run_dir = None
@@ -177,6 +212,26 @@ class SelfHealingWidget(QWidget):
             view.set_placeholder("运行仿真后显示结果图")
         self.export_button.setEnabled(False)
         self.task_status.set_status("idle", "设置参数后开始运行", 0)
+        saved = self._scenario_states.get(self._active_scenario)
+        if saved is not None:
+            for key, field in self.fields.items():
+                if isinstance(field, QComboBox):
+                    field.setCurrentIndex(field.findData(saved["values"][key]))
+                else:
+                    field.setValue(saved["values"][key])
+            self._result, self._run_dir = saved["result"], saved["run_dir"]
+            self.metrics.setText(saved["metrics"])
+            if saved["logs"]:
+                self.logs.append(saved["logs"])
+            self.logs.toggle.setChecked(saved["logs_expanded"])
+            self.task_status.set_status(saved["state"], saved["message"], saved["percent"])
+            self.plot_tabs.setCurrentIndex(saved["plot"])
+            if self._run_dir is not None:
+                for name, view in self.views.items():
+                    path = self._run_dir / f"{name}.svg"
+                    if path.is_file():
+                        view.load(str(path))
+            self.export_button.setEnabled(self._result is not None)
 
     def _reset_config(self):
         values = defaults(self.scenario_tabs.tabData(self.scenario_tabs.currentIndex()))
@@ -261,7 +316,7 @@ class SelfHealingWidget(QWidget):
         rows = ["<tr><th>输出</th>" + "".join(f"<th>{m.upper()}</th>" for m in methods) + "</tr>"]
         for j, label in enumerate(result["output_names"]):
             rows.append("<tr><td>" + html.escape(label) + "</td>" + "".join(
-                f"<td>{result['metrics'][m]['tail_20_percent']['rmse'][j]:.4g}</td>" for m in methods) + "</tr>")
+                f"<td>{format_rmse(result['metrics'][m]['tail_20_percent']['rmse'][j])}</td>" for m in methods) + "</tr>")
         self.metrics.setText("<p>最后 20% 时域 RMSE（各输出自身单位）</p><table cellspacing='5'>" + "".join(rows) + "</table>")
         self.export_button.setEnabled(True)
         self.logs.append("任务完成。")

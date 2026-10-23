@@ -48,6 +48,36 @@ class ReactorApiTests(unittest.TestCase):
         self.assertEqual(self.client.get("/api/reactor/diagram/reactor_dual_feed.png").headers["content-type"], "image/png")
         self.assertEqual(self.client.get("/api/reactor/diagram/not-allowed.txt").status_code, 404)
 
+    def test_import_desktop_export_without_changing_source(self):
+        import hashlib
+        import numpy as np
+        from platform_core.risk_control.reactor.core import Config, simulate
+        from platform_core.risk_control.reactor.reporting import export_result
+        source = Path(self.temp.name) / "desktop-export"
+        expected = simulate(Config(duration=.2, prescribed_time=.1))
+        export_result(expected, source)
+        before = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in source.iterdir()}
+        response = self.client.post('/api/reactor/import-result', json={"directory": str(source)})
+        self.assertEqual(response.status_code, 200, response.text)
+        task_id = response.json()['task_id']
+        task = self.wait(task_id)
+        self.assertEqual(task['status'], 'succeeded', task)
+        self.assertTrue(task['result']['imported'])
+        self.assertEqual(task['result']['config'], expected['config'])
+        data = self.client.get(f'/api/reactor/tasks/{task_id}/trajectory').json()
+        for key, value in expected['data'].items():
+            np.testing.assert_array_equal(data[key], value)
+        for name in server.reactor.ARTIFACTS:
+            self.assertEqual(self.client.get(f'/api/reactor/tasks/{task_id}/files/{name}').status_code, 200)
+        self.assertEqual(before, {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in source.iterdir()})
+
+    def test_import_invalid_directory_is_reported_as_failure(self):
+        self.assertEqual(self.client.post('/api/reactor/import-result', json={"directory": "relative"}).status_code, 422)
+        response = self.client.post('/api/reactor/import-result', json={"directory": str(Path(self.temp.name) / 'missing')})
+        task = self.wait(response.json()['task_id'])
+        self.assertEqual(task['status'], 'failed')
+        self.assertTrue(task['error'])
+
     def test_task_trajectory_and_downloads(self):
         response = self.client.post("/api/reactor/tasks", json={"duration": .3, "prescribed_time": .2})
         self.assertEqual(response.status_code, 200, response.text)

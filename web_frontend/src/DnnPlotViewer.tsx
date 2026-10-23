@@ -51,7 +51,7 @@ export function DnnPlotViewer({ src, alt, placeholder, onError }: Props) {
     const node = viewport.current
     if (!node) return
     const wheel = (event: WheelEvent) => {
-      if (!ready) return
+      if (!ready || document.activeElement !== node) return
       event.preventDefault()
       const rect = node.getBoundingClientRect()
       const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? size.height : 1)
@@ -74,7 +74,7 @@ export function DnnPlotViewer({ src, alt, placeholder, onError }: Props) {
       <button type="button" onClick={() => fit()} disabled={!ready}>适应窗口</button>
       <button type="button" onClick={() => fit('width')} disabled={!ready}>适应宽度</button>
       <output aria-label="图表缩放比例">{Math.round(zoom * 100)}%</output>
-      <span>滚轮缩放 · 按住左键拖动 · 双击适应窗口</span>
+      <span>点击图表后滚轮缩放 · 按住左键拖动 · 双击适应窗口</span>
     </div>
     <div ref={viewport} className={`dnn-plot-viewport${dragging ? ' is-dragging' : ''}`} role="region" aria-label="可缩放图表" tabIndex={0}
       onDoubleClick={() => fit()}

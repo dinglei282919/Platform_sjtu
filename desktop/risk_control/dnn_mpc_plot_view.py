@@ -9,7 +9,40 @@ from PySide6.QtGui import QColor, QPainter, QTransform
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtSvgWidgets import QGraphicsSvgItem
 from PySide6.QtWidgets import (QGraphicsScene, QGraphicsView, QGridLayout, QHBoxLayout, QFrame, QProgressBar, QSizePolicy,
-                               QLabel, QPushButton, QPlainTextEdit, QScrollArea, QVBoxLayout, QWidget)
+                               QLabel, QPushButton, QPlainTextEdit, QScrollArea, QVBoxLayout, QWidget,
+                               QSpinBox, QDoubleSpinBox, QComboBox, QSlider, QTabBar, QTabWidget)
+
+
+class _ScrollParameters:
+    def wheelEvent(self, event):
+        # Leave scrolling to the containing panel, even while focused.
+        event.ignore()
+
+
+class ControlSpinBox(_ScrollParameters, QSpinBox):
+    pass
+
+
+class ControlDoubleSpinBox(_ScrollParameters, QDoubleSpinBox):
+    pass
+
+
+class ControlComboBox(_ScrollParameters, QComboBox):
+    pass
+
+
+class ControlSlider(_ScrollParameters, QSlider):
+    pass
+
+
+class ControlTabBar(_ScrollParameters, QTabBar):
+    pass
+
+
+class ControlTabWidget(QTabWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setTabBar(ControlTabBar(self))
 
 
 def _svg_for_qt(data):
@@ -57,7 +90,8 @@ class SvgPlotCanvas(QGraphicsView):
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setStyleSheet("background: white; border: 1px solid #7999b9; border-radius: 5px;")
         self.setAccessibleName("可缩放图表")
-        self.setToolTip("滚轮缩放；按住左键拖动；双击适应窗口")
+        self.setFocusPolicy(Qt.ClickFocus)
+        self.setToolTip("点击图表后滚轮缩放；按住左键拖动；双击适应窗口")
 
     def _fit_scale(self):
         bounds = self._item.boundingRect()
@@ -125,12 +159,12 @@ class SvgPlotCanvas(QGraphicsView):
         self.zoom_changed.emit(zoom)
 
     def wheelEvent(self, event):
-        if self._loaded:
+        if self._loaded and self.hasFocus():
             delta = event.angleDelta().y() or event.pixelDelta().y()
             self.zoom_by(1.2 ** max(-5., min(5., delta/120)), event.position().toPoint())
             event.accept()
         else:
-            super().wheelEvent(event)
+            event.ignore()
 
     def mousePressEvent(self, event):
         if self._loaded and event.button() == Qt.LeftButton:
@@ -183,7 +217,7 @@ class DnnMpcPlotView(QWidget):
         self.canvas.zoom_changed.connect(lambda value: self._zoom_label.setText(f"{value:.0%}"))
         self.canvas.zoom_changed.connect(self._update_tools)
         layout.addLayout(toolbar)
-        hint = QLabel("滚轮缩放 · 按住左键拖动 · 双击适应窗口")
+        hint = QLabel("点击图表后滚轮缩放 · 按住左键拖动 · 双击适应窗口")
         hint.setProperty("controlHint", True)
         hint.setWordWrap(True)
         layout.addWidget(hint)
@@ -323,7 +357,8 @@ def control_page_style(root_name):
         QWidget#ROOT QFrame[controlDivider="true"] { background: #365477; border: none; max-height: 1px; }
         QWidget#ROOT QSplitter::handle { background: #365477; }
         QWidget#ROOT QTabWidget::pane { border: none; }
-        QWidget#ROOT QTabBar::tab { background: #214c70; color: #e2efff; border: 1px solid #4c83ac; border-radius: 8px; padding: 10px 18px; margin-right: 8px; font-size: 14px; font-weight: 600; }
+        QWidget#ROOT QTabBar { background: transparent; border: none; }
+        QWidget#ROOT QTabBar::tab { background: #214c70; color: #e2efff; border: 1px solid #4c83ac; border-radius: 8px; padding: 12px 20px; margin: 8px 12px 12px 0; font-size: 14px; font-weight: 600; }
         QWidget#ROOT QTabBar::tab:selected { background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #438fc3, stop:1 #2f689b); border-color: #85cef6; }
     """.replace("#ROOT", "#" + root_name)
 

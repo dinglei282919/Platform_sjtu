@@ -1,3 +1,4 @@
+import { scrollControlParameters } from './controlInteraction'
 import { useEffect, useRef, useState } from 'react'
 import { ApiError, api, post } from './api'
 import { DnnPlotViewer } from './DnnPlotViewer'
@@ -145,7 +146,7 @@ export function SelfHealingPage() {
   const status = task?.status === 'cancelled' ? '仿真已取消。' : task?.status === 'failed' ? '执行失败' : result
     ? `仿真完成 · ${catalog?.scenarios[result.config.scenario] ?? result.config.scenario} · ${result.config.duration} 模型时间 · 用时 ${result.elapsed_seconds.toFixed(2)} 秒`
     : task?.progress?.message ?? (running ? '等待执行' : '设置参数后开始运行')
-  return <main className="self-healing-page control-module" aria-label="多变量过程自愈控制仿真">
+  return <main onWheelCapture={scrollControlParameters} className="self-healing-page control-module" aria-label="多变量过程自愈控制仿真">
     <div className="self-healing-scenarios" role="tablist" aria-label="自愈控制场景">
       {scenarios.map(([key, label], index) => <button type="button" role="tab" key={key}
         id={`self-healing-scenario-${key}`} aria-controls="self-healing-scenario-panel"
@@ -188,7 +189,7 @@ export function SelfHealingPage() {
         <h3>最后 20% 时域 RMSE</h3><p className="muted">各输出自身单位；FAULT 为仅底层控制。完整评价窗口和 MAPE、ATAE 见下载文件。</p>
         <div className="self-healing-table"><table><thead><tr><th>输出</th>{['normal', 'fault', 'scsc', 'ccsc'].map(method => <th key={method}>{method.toUpperCase()}</th>)}</tr></thead>
         <tbody>{result.output_names.map((label, j) => <tr key={label}><th>{label}</th>{['normal', 'fault', 'scsc', 'ccsc'].map(method =>
-          <td key={method}>{Number(result.metrics[method].tail_20_percent.rmse[j].toPrecision(4)).toString()}</td>)}</tr>)}</tbody></table></div>
+          <td key={method}>{result.metrics[method].tail_20_percent.rmse[j].toPrecision(4)}</td>)}</tr>)}</tbody></table></div>
         <div className="self-healing-downloads">{['normal.csv', 'fault.csv', 'scsc.csv', 'ccsc.csv', 'metrics.csv', 'trajectories.npz', 'summary.json', 'result.json'].map(name =>
           <a key={name} href={`/api/self-healing/tasks/${taskId}/files/${name}`} download>{name}</a>)}</div>
       </section>}

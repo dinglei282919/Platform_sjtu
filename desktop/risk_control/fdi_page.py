@@ -4,8 +4,10 @@ import shutil
 from threading import Event
 from PySide6.QtCore import QObject, QThread, Signal, Slot, Qt
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-                               QPushButton, QDoubleSpinBox, QTabWidget,
+                               QPushButton,
                                QFrame, QFileDialog, QMessageBox, QLayout)
+from desktop.risk_control.dnn_mpc_plot_view import ControlTabWidget as QTabWidget
+from desktop.risk_control.dnn_mpc_plot_view import ControlDoubleSpinBox as QDoubleSpinBox
 from desktop.risk_control.dnn_mpc_plot_view import DnnMpcPlotView, ControlPlotRefresh, ControlRmseMetrics, ControlRunLog, ControlScrollArea, ControlTaskStatus, control_page_style
 from platform_core.risk_control.fdi.config import PLOT_GROUPS, defaults
 

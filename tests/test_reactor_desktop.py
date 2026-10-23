@@ -41,12 +41,11 @@ class DesktopTests(unittest.TestCase):
         self.window.resize(900,700)
         self.app.processEvents()
         d = self.window.diagram
-        self.assertTrue(d.animation.isValid())
+        self.assertTrue(d.renderer.isValid())
         self.window.toggle_animation()
         self.assertFalse(d.animated)
-        self.assertFalse(d.pixmap().isNull())
-        self.assertLessEqual(d.pixmap().width(),d.width())
-        self.assertLessEqual(d.pixmap().height(),d.height())
+        self.assertTrue(d.renderer.isValid())
+        self.assertAlmostEqual(d.height(), d.width() * 895 / 1600, delta=1)
 
     def test_first_movie_frame_is_fitted_before_display(self):
         from desktop.risk_control.reactor_page import Diagram
@@ -55,10 +54,11 @@ class DesktopTests(unittest.TestCase):
         try:
             diagram.resize(600, 400)
             diagram.set_animated(True)
-            frame = diagram.animation.currentImage()
+            frame = diagram.grab().toImage()
             self.assertFalse(frame.isNull())
-            self.assertLessEqual(frame.width(), diagram.width() - 16)
-            self.assertLessEqual(frame.height(), diagram.height() - 16)
+            self.assertLessEqual(frame.width(), diagram.width())
+            self.assertLessEqual(frame.height(), diagram.height())
+            self.assertAlmostEqual(diagram.height(), diagram.width() * 895 / 1600, delta=1)
         finally:
             diagram.animation.stop()
             diagram.close()
@@ -77,8 +77,41 @@ class DesktopTests(unittest.TestCase):
             timer.stop()
             self.assertGreater(len(sizes), 2)
             self.assertEqual(len(set(sizes)), 1, "Animation frames must not resize the diagram container")
+            self.assertAlmostEqual(window.diagram.height(), window.diagram.width() * 895 / 1600, delta=1)
+            self.assertGreater(window.diagram.frame_index, 0)
+            self.assertTrue(window.diagram.renderer.isValid())
+            # Available vertical space must not stretch the natural-aspect image.
+            window.resize(900, 1000)
+            self.app.processEvents()
+            self.assertAlmostEqual(window.diagram.height(), window.diagram.width() * 895 / 1600, delta=1)
         finally:
             window.close()
+
+    def test_vector_animation_frames_and_pause(self):
+        from desktop.risk_control.reactor_page import Diagram
+        from PySide6.QtCore import QByteArray
+        from PySide6.QtSvg import QSvgRenderer
+        diagram = Diagram()
+        try:
+            self.assertEqual(len(diagram.frames), 120)
+            self.assertTrue(diagram.label_renderer.isValid())
+            for data in diagram.frames:
+                self.assertNotIn(b'<image', data)
+                self.assertNotIn(b'clip-path', data)
+                self.assertTrue(QSvgRenderer(QByteArray(data)).isValid())
+            diagram.set_animated(True)
+            self.assertTrue(diagram.animation.isActive())
+            diagram._advance_frame()
+            self.assertEqual(diagram.frame_index, 1)
+            diagram.set_animated(False)
+            self.assertFalse(diagram.animation.isActive())
+            self.assertEqual(diagram.frame_index, 0)
+            diagram.resize(2400, 1343)
+            diagram.rescale()
+            self.assertAlmostEqual(diagram.height(), diagram.width() * 895 / 1600, delta=1)
+        finally:
+            diagram.animation.stop()
+            diagram.close()
 
     def test_short_run_replay_reset_and_rerun(self):
         w = self.window
@@ -102,7 +135,12 @@ class DesktopTests(unittest.TestCase):
         self.assertIn("0.300",w.readout.text())
         w.toggle_playback()
         self.assertTrue(w.timer.isActive())
+        w.slider.sliderPressed.emit()
+        self.assertFalse(w.timer.isActive())
+        self.assertEqual(w.play_button.text(), "回放仿真数据")
         w.toggle_playback()
+        w.slider.actionTriggered.emit(1)
+        self.assertFalse(w.timer.isActive())
         w.reset()
         self.assertEqual(w.inputs["duration"].value(),3)
         w.start_run()
@@ -123,12 +161,18 @@ class DesktopTests(unittest.TestCase):
         w = self.window
         w.accept_result(simulate(Config(duration=.3, prescribed_time=.2)))
         w.tabs.setCurrentIndex(1)
+        w.activateWindow()
         self.app.processEvents()
         canvas = w.plot_view.canvas
         self.assertTrue(w.plot_view.renderer().isValid())
         point = canvas.viewport().rect().center()
+        canvas.clearFocus()
         event = QWheelEvent(QPointF(point), QPointF(canvas.viewport().mapToGlobal(point)),
                             QPoint(), QPoint(0, 120), Qt.NoButton, Qt.NoModifier, Qt.NoScrollPhase, False)
+        self.app.sendEvent(canvas.viewport(), event)
+        self.assertAlmostEqual(canvas._zoom, 1.)
+        QTest.mouseClick(canvas.viewport(), Qt.LeftButton, pos=point)
+        self.assertTrue(canvas.hasFocus())
         self.app.sendEvent(canvas.viewport(), event)
         self.assertAlmostEqual(canvas._zoom, 1.2)
         center = canvas.mapToScene(point)
@@ -164,7 +208,7 @@ class DesktopTests(unittest.TestCase):
             window._on_submodule_clicked("风险管控优化决策", "化学反应器自适应控制仿真")
             reactor = window._reactor_content_widget
             self.assertTrue(reactor.isVisible())
-            self.assertTrue(reactor.diagram.animation.isValid())
+            self.assertTrue(reactor.diagram.renderer.isValid())
             window._on_submodule_clicked("风险管控优化决策", "多变量过程自愈控制仿真")
             healing = window._self_healing_content_widget
             self.assertTrue(healing.isVisible())

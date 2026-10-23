@@ -1,3 +1,4 @@
+import { scrollControlParameters } from './controlInteraction'
 import { useEffect, useRef, useState } from 'react'
 import { ApiError, api, post } from './api'
 import { DnnPlotViewer } from './DnnPlotViewer'
@@ -107,7 +108,7 @@ export function FdiPage() {
   const status = task?.status === 'cancelled' ? '仿真已取消。' : task?.status === 'failed' ? '执行失败' : result
     ? `仿真完成 · ${result.config.sim_time} 秒场景 · 用时 ${result.elapsed_seconds.toFixed(2)} 秒`
     : task?.progress?.message ?? (running ? '等待执行' : '设置参数后开始运行')
-  return <main className="fdi-page fdi-wide-page control-module" aria-label="虚假数据注入下的自适应控制仿真">
+  return <main onWheelCapture={scrollControlParameters} className="fdi-page fdi-wide-page control-module" aria-label="虚假数据注入下的自适应控制仿真">
     <section className="panel fdi-controls">
       <h3>仿真设置</h3>
       <label htmlFor="fdi-duration">仿真时长（秒）</label>

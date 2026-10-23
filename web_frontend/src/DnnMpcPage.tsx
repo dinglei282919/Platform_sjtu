@@ -1,3 +1,4 @@
+import { scrollControlParameters } from './controlInteraction'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { ApiError, api, post } from './api'
 import { DnnPlotViewer } from './DnnPlotViewer'
@@ -179,7 +180,7 @@ function DnnMpcStage({ mode }: { mode: Mode }) {
     <span>{label}</span><div className="training-path-control"><input aria-label={label} value={form[key] ?? ''} placeholder={key === 'dataset_path' ? '留空则按原状态方程生成数据集' : undefined} onChange={e => update(key, e.target.value)} disabled={running || !ready}/><button type="button" onClick={() => void choose(key)} disabled={running || selecting || !ready}>选择</button>{key === 'dataset_path' && <button type="button" onClick={() => update(key, '')} disabled={running || selecting || !ready}>清空</button>}</div>
   </label>
   const downloads = training ? [['SVG', 'training_rmse.svg'], ['PDF', 'training_rmse.pdf'], ['模型 NPZ', 'trained_model.npz'], ['训练记录', 'training_history.csv'], ['数据集 MAT', 'training_dataset.mat']] : [['当前图 SVG', `${activePlot}.svg`], ['当前图 PDF', `${activePlot}.pdf`], ['结果 ZIP', 'dnn_mpc_results.zip']]
-  return <main className="training-page dnn-python-page control-module" aria-label={training ? '控制模型训练评估' : '优化控制仿真验证'}>
+  return <main onWheelCapture={scrollControlParameters} className="training-page dnn-python-page control-module" aria-label={training ? '控制模型训练评估' : '优化控制仿真验证'}>
     <div className="training-layout">
       <section className="training-panel training-config-panel">
         <h3>{training ? '训练设置' : '仿真设置'}</h3>
@@ -283,9 +284,9 @@ export function DnnMpcPage() {
     setMode(next)
     writeSession('dnn-mpc.stage', next)
   }
-  return <section className="dnn-workflow" aria-label="深度神经网络优化控制">
-    <div className="mpc-plot-tabs dnn-stage-tabs" role="tablist" aria-label="深度神经网络优化控制工作流程">
-      {(['training', 'mpc'] as const).map((stage, index) => <button type="button" key={stage}
+  return <section className="dnn-workflow control-module" aria-label="深度神经网络优化控制">
+    <div className="dnn-stage-tabs" role="tablist" aria-label="深度神经网络优化控制工作流程">
+      {(['training', 'mpc'] as const).map(stage => <button type="button" key={stage}
         role="tab" id={`dnn-stage-${stage}`} aria-controls="dnn-stage-panel" aria-selected={mode === stage}
         tabIndex={mode === stage ? 0 : -1} onClick={() => selectMode(stage)} onKeyDown={event => {
           if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
@@ -293,7 +294,7 @@ export function DnnMpcPage() {
           const next = event.key === 'Home' ? 'training' : event.key === 'End' ? 'mpc' : stage === 'training' ? 'mpc' : 'training'
           selectMode(next)
           document.getElementById(`dnn-stage-${next}`)?.focus()
-        }}>{index + 1}. {stage === 'training' ? '模型训练' : 'MPC 仿真'}</button>)}
+        }}>{stage === 'training' ? '风险场景下控制系统智能模型训练算法' : '风险场景下智能模型优化控制算法'}</button>)}
     </div>
     <p className="dnn-workflow-hint">训练模型后进入 MPC 仿真，也可直接选择已有模型。切换阶段保留参数与任务记录。</p>
     <div id="dnn-stage-panel" role="tabpanel" aria-labelledby={`dnn-stage-${mode}`}>

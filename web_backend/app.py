@@ -200,6 +200,18 @@ class ReactorTaskRequest(BaseModel):
         Config(**self.model_dump()).validate()
         return self
 
+
+class ReactorImportRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    directory: str = Field(min_length=1, max_length=4096)
+
+    @field_validator("directory")
+    @classmethod
+    def absolute_directory(cls, value):
+        if not Path(value).is_absolute():
+            raise ValueError("请选择本机绝对路径的结果文件夹")
+        return value
+
 class ReplayTaskRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     sim_time: float = Field(default=50., ge=.1, le=50., allow_inf_nan=False, strict=True)
@@ -646,6 +658,15 @@ def create_reactor_task(request: ReactorTaskRequest):
     task = task_manager.submit("化学反应器自适应控制仿真",
         lambda log: reactor.run(request.model_dump(), log, run_dir=directory, cancelled=cancelled.is_set),
         artifact_dir=directory, progress_path=directory / "progress.json", cancel_event=cancelled)
+    return {"task_id": task.id, "status": task.status}
+
+
+@app.post("/api/reactor/import-result")
+def import_reactor_result(request: ReactorImportRequest):
+    directory = reactor.new_run_dir()
+    task = task_manager.submit("载入化学反应器仿真结果",
+        lambda log: reactor.import_saved(request.directory, log, run_dir=directory),
+        artifact_dir=directory)
     return {"task_id": task.id, "status": task.status}
 
 

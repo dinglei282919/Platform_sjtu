@@ -5,11 +5,13 @@ from pathlib import Path
 
 from PySide6.QtCore import QEvent, QObject, QThread, QTimer, Qt, Signal
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGridLayout, QFrame, QLayout,
-    QLineEdit, QSpinBox, QDoubleSpinBox, QPushButton, QLabel,
-    QSplitter, QFileDialog, QMessageBox, QSizePolicy, QTabWidget)
+    QLineEdit, QPushButton, QLabel,
+    QSplitter, QFileDialog, QMessageBox, QSizePolicy, )
 
 from platform_core.risk_control.dnn_mpc.config import training_defaults, mpc_defaults, validate_config, model_info, MPC_PLOT_GROUPS
 from platform_core.risk_control.dnn_mpc.runner import new_run_dir, run
+from desktop.risk_control.dnn_mpc_plot_view import ControlTabWidget as QTabWidget, ControlTabBar
+from desktop.risk_control.dnn_mpc_plot_view import ControlSpinBox as QSpinBox, ControlDoubleSpinBox as QDoubleSpinBox
 from desktop.risk_control.dnn_mpc_plot_view import DnnMpcPlotView, ControlPanel, ControlRunLog, ControlScrollArea, ControlTaskStatus, control_page_style
 
 
@@ -37,8 +39,9 @@ class ProcessControlDnnMpcWorker(QObject):
 
 
 class ProcessControlDnnMpcWidget(QWidget):
-    def __init__(self, page_mode="training", parent=None):
+    def __init__(self, page_mode="training", parent=None, *, page_scroll=False):
         super().__init__(parent)
+        self._page_scroll = page_scroll
         self.page_mode = page_mode if page_mode in ("training", "mpc") else "training"
         self._thread = self._worker = None
         self._outputs = {}
@@ -47,6 +50,9 @@ class ProcessControlDnnMpcWidget(QWidget):
         self._model_path_user_selected = False
         self._model_signature = None
         self._last_image_revision = {}
+        self._page_height_timer = QTimer(self)
+        self._page_height_timer.setSingleShot(True)
+        self._page_height_timer.timeout.connect(self._sync_page_height)
         self._progress_timer = QTimer(self)
         self._progress_timer.setInterval(500)
         self._progress_timer.timeout.connect(self._poll_progress)
@@ -59,6 +65,8 @@ class ProcessControlDnnMpcWidget(QWidget):
         root = QVBoxLayout(self)
         root.setContentsMargins(16, 16, 16, 16)
         root.setSpacing(18)
+        if self._page_scroll:
+            root.setSizeConstraint(QLayout.SetMinimumSize)
         splitter = QSplitter(Qt.Horizontal)
         splitter.setHandleWidth(12)
         splitter.setChildrenCollapsible(False)
@@ -150,11 +158,11 @@ class ProcessControlDnnMpcWidget(QWidget):
         result_paths_layout.addWidget(self._result_path_label)
         layout.addWidget(result_paths)
         layout.addStretch()
-        scroll = ControlScrollArea(self._config_group)
+        scroll = self._config_group if self._page_scroll else ControlScrollArea(self._config_group)
         scroll.setMinimumWidth(320)
         scroll.setMaximumWidth(380)
         scroll.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Expanding)
-        self._config_scroll = scroll
+        self._config_scroll = None if self._page_scroll else scroll
         for child in [self._config_group, *self._config_group.findChildren(QWidget)]:
             child.installEventFilter(self)
         splitter.addWidget(scroll)
@@ -227,14 +235,15 @@ class ProcessControlDnnMpcWidget(QWidget):
         self._logs = ControlRunLog()
         result_column.addWidget(self._logs)
         result_column.addStretch()
-        self._result_scroll = ControlScrollArea(self._result_content)
+        self._result_scroll = None if self._page_scroll else ControlScrollArea(self._result_content)
         # Keep the viewport width stable when wrapped results/logs change height.
         # Qt 6.11's as-needed scrollbar sizing can recursively resize this content
         # at the overflow threshold, eventually overflowing the GUI thread stack.
-        self._result_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
+        if self._result_scroll is not None:
+            self._result_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
         self._result_content.installEventFilter(self)
         self._layout_downloads()
-        splitter.addWidget(self._result_scroll)
+        splitter.addWidget(self._result_scroll if self._result_scroll is not None else self._result_content)
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
         splitter.setSizes([350, 1050])
@@ -295,6 +304,8 @@ class ProcessControlDnnMpcWidget(QWidget):
                                    "按原状态方程生成仿真数据后训练；dt=0.02 s，随机种子 42。")
 
     def eventFilter(self, watched, event):
+        if self._page_scroll and watched in (self._config_group, getattr(self, "_result_content", None)) and event.type() in (QEvent.Resize, QEvent.LayoutRequest):
+            self._page_height_timer.start(0)
         if watched is getattr(self, "_result_content", None):
             if event.type() == QEvent.Resize:
                 self._layout_downloads()
@@ -302,11 +313,29 @@ class ProcessControlDnnMpcWidget(QWidget):
         if event.type() == QEvent.Wheel:
             delta = event.angleDelta().y()
             if delta:
-                bar = self._config_scroll.verticalScrollBar()
+                scroll = self._config_scroll
+                if self._page_scroll:
+                    scroll = self.parentWidget()
+                    while scroll is not None and not isinstance(scroll, ControlScrollArea):
+                        scroll = scroll.parentWidget()
+                if scroll is None:
+                    return super().eventFilter(watched, event)
+                bar = scroll.verticalScrollBar()
                 bar.setValue(bar.value() - delta)
                 event.accept()
                 return True
         return super().eventFilter(watched, event)
+
+    def _sync_page_height(self):
+        if not self._page_scroll:
+            return
+        # QSplitter does not propagate height-for-width. Reserve wrapped text's
+        # actual height so the outer page scrolls rather than squeezing fields.
+        for panel in (self._config_group, self._result_content):
+            layout = panel.layout()
+            height = layout.totalHeightForWidth(panel.width()) if layout.hasHeightForWidth() else layout.minimumSize().height()
+            if height > 0 and panel.minimumHeight() != height:
+                panel.setMinimumHeight(height)
 
     def _browse(self, field, kind):
         if kind == "directory":
@@ -490,22 +519,59 @@ class ProcessControlDnnMpcWidget(QWidget):
                 QMessageBox.warning(self, "导出失败", str(exc))
 
 
-class DnnMpcWorkflowWidget(QTabWidget):
+class DnnMpcWorkflowWidget(ControlScrollArea):
     """One module with persistent training and simulation stages."""
 
+    currentChanged = Signal(int)
+
     def __init__(self, parent=None):
-        super().__init__(parent)
+        content = QWidget()
+        content.setAttribute(Qt.WA_StyledBackground, True)
+        content.setProperty("controlSurface", True)
+        super().__init__(content, parent=parent)
         self.setAccessibleName("深度神经网络优化控制")
-        self.training_page = ProcessControlDnnMpcWidget("training")
-        self.mpc_page = ProcessControlDnnMpcWidget("mpc")
-        self.addTab(self.training_page, "1. 模型训练")
-        self.addTab(self.mpc_page, "2. MPC 仿真")
-        self.tabBar().setExpanding(True)
-        self.currentChanged.connect(self._stage_changed)
+        self.setObjectName("dnnMpcWorkflowRoot")
+        self.setStyleSheet(control_page_style("dnnMpcWorkflowRoot"))
+        # One stable gutter for the entire page, including its stage tabs.
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.setSizeConstraint(QLayout.SetMinimumSize)
+        header = QVBoxLayout()
+        header.setContentsMargins(16, 0, 16, 0)
+        header.setSpacing(0)
+        self._stage_tabs = ControlTabBar()
+        self._stage_tabs.setAccessibleName("深度神经网络优化控制工作流程")
+        self._stage_tabs.setDrawBase(False)
+        self._stage_tabs.addTab("风险场景下控制系统智能模型训练算法")
+        self._stage_tabs.addTab("风险场景下智能模型优化控制算法")
+        self._stage_tabs.setExpanding(True)
+        header.addWidget(self._stage_tabs)
+        layout.addLayout(header)
+        self.training_page = ProcessControlDnnMpcWidget("training", page_scroll=True)
+        self.mpc_page = ProcessControlDnnMpcWidget("mpc", page_scroll=True)
+        layout.addWidget(self.training_page)
+        layout.addWidget(self.mpc_page)
+        self.mpc_page.hide()
+        self._stage_tabs.currentChanged.connect(self._stage_changed)
+
+    def tabBar(self):
+        return self._stage_tabs
+
+    def setCurrentIndex(self, index):
+        self._stage_tabs.setCurrentIndex(index)
+
+    def currentIndex(self):
+        return self._stage_tabs.currentIndex()
 
     def _stage_changed(self, index):
+        self.training_page.setVisible(index == 0)
+        self.mpc_page.setVisible(index == 1)
+        self.verticalScrollBar().setValue(0)
         if index == 1:
             self.mpc_page._apply_latest_training_defaults()
+        self.currentChanged.emit(index)
 
     def has_running_worker(self):
         return self.training_page.has_running_worker() or self.mpc_page.has_running_worker()

@@ -1,16 +1,20 @@
 """Standalone Qt review interface; all simulation work runs off the UI thread."""
 from pathlib import Path
 from io import BytesIO
+from zipfile import ZipFile
 import time
 
-from PySide6.QtCore import Qt, QThread, Signal, QTimer, QSize
-from PySide6.QtGui import QColor, QFont, QFontDatabase, QMovie, QPalette, QPixmap
+from PySide6.QtCore import Qt, QThread, Signal, QTimer, QByteArray, QRectF
+from PySide6.QtGui import QColor, QFont, QFontDatabase, QPainter, QPalette
+from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (QApplication, QWidget, QLabel, QPushButton,
-    QVBoxLayout, QHBoxLayout, QFormLayout, QDoubleSpinBox,
-    QTabWidget, QFileDialog, QMessageBox, QSlider, QFrame, QSizePolicy)
+    QVBoxLayout, QHBoxLayout, QFormLayout,
+    QFileDialog, QMessageBox, QFrame, QSizePolicy)
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_agg import FigureCanvasAgg
-from desktop.risk_control.dnn_mpc_plot_view import DnnMpcPlotView, ControlScrollArea, ControlTaskStatus, control_page_style
+from desktop.risk_control.dnn_mpc_plot_view import ControlTabWidget as QTabWidget
+from desktop.risk_control.dnn_mpc_plot_view import ControlDoubleSpinBox as QDoubleSpinBox, ControlSlider as QSlider
+from desktop.risk_control.dnn_mpc_plot_view import DnnMpcPlotView, ControlScrollArea, ControlTaskStatus, ControlRunLog, control_page_style, format_rmse
 
 from platform_core.risk_control.control_paths import module_output_dir
 from platform_core.risk_control.reactor.core import Config, SimulationCancelled, simulate
@@ -42,40 +46,62 @@ class Worker(QThread):
             self.failed.emit(f"{type(exc).__name__}: {exc}")
 
 
-class Diagram(QLabel):
+class Diagram(QWidget):
     def __init__(self):
         super().__init__()
-        self.setAlignment(Qt.AlignCenter)
-        self.setMinimumSize(300, 190)
-        # Scaled movie frames must not become the parent layout's size hint.
-        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
-        self.setStyleSheet("background: white; border: 1px solid #dce6ed; border-radius: 8px")
-        self.still = QPixmap(str(DIAGRAM / "reactor_dual_feed.png"))
-        self.animation = QMovie(str(DIAGRAM / "reactor_dual_feed.gif"))
-        self.animation.setCacheMode(QMovie.CacheNone)
+        # Match Web's full-width, natural-aspect image rather than filling the
+        # remaining panel height. Movie frames must not drive the layout size.
+        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self.setStyleSheet("background: white; border: none;")
+        # Vector frames use the same geometry/phases as the Web GIF. Paint at
+        # the device resolution so text and pipes stay sharp on high-DPI screens.
+        with ZipFile(DIAGRAM / "reactor_dual_feed_svg.zip") as archive:
+            self.frames = tuple(archive.read(name) for name in sorted(archive.namelist()) if name[:3].isdigit())
+            labels = archive.read("labels.svg")
+        self.renderer = QSvgRenderer(self)
+        self.label_renderer = QSvgRenderer(QByteArray(labels), self)
+        if not self.label_renderer.isValid():
+            raise ValueError("反应器矢量框图文字资源无效")
+        self.frame_index = 0
+        self.animation = QTimer(self)
+        self.animation.setInterval(50)
+        self.animation.setTimerType(Qt.PreciseTimer)
+        self.animation.timeout.connect(self._advance_frame)
         self.animated = False
         self.setAccessibleName("化学反应器双路进料工艺框图")
-        if self.still.isNull() or not self.animation.isValid():
-            raise FileNotFoundError(f"Diagram assets missing: {DIAGRAM}")
+        self._load_frame()
+
+    def _load_frame(self):
+        if not self.renderer.load(QByteArray(self.frames[self.frame_index])):
+            raise ValueError("反应器矢量框图资源无效")
+        self.update()
+
+    def _advance_frame(self):
+        self.frame_index = (self.frame_index + 1) % len(self.frames)
+        self._load_frame()
 
     def set_animated(self, enabled):
         self.animated = enabled
+        self.animation.stop()
+        self.frame_index = 0
+        self._load_frame()
+        self.rescale()
         if enabled:
-            self.setMovie(self.animation)
-            # Set the decoding size before the first frame is displayed.
-            self.rescale()
             self.animation.start()
-        else:
-            self.animation.stop()
-            self.rescale()
 
     def rescale(self):
-        size = QSize(1600, 895).scaled(self.size() - QSize(16, 16), Qt.KeepAspectRatio)
-        if self.animated:
-            if self.animation.scaledSize() != size:
-                self.animation.setScaledSize(size)
-        else:
-            self.setPixmap(self.still.scaled(size, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        height = max(1, round(self.width() * 895 / 1600))
+        if self.height() != height:
+            self.setFixedHeight(height)
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), Qt.white)
+        painter.setRenderHint(QPainter.Antialiasing)
+        self.renderer.render(painter, QRectF(self.contentsRect()))
+        self.label_renderer.render(painter, QRectF(self.contentsRect()))
+        painter.end()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -119,7 +145,7 @@ class ReactorWidget(QWidget):
             box.setDecimals(decimals)
             box.setRange(lower, upper)
             box.setValue(default)
-            box.setSingleStep(0.001 if name == "sample_dt" else 0.05)
+            box.setSingleStep({"duration": .1, "sample_dt": .001, "prescribed_time": .1, "ell": .01}.get(name, .05))
             box.setAccessibleName(label)
             self.inputs[name] = box
             form.addRow(label, box)
@@ -165,11 +191,19 @@ class ReactorWidget(QWidget):
         output_layout.addWidget(self.task_status)
         self.tabs = QTabWidget()
         output_layout.addWidget(self.tabs, 1)
+        self.logs = ControlRunLog()
+        output_layout.addWidget(self.logs)
         layout.addWidget(ControlScrollArea(output), 1)
         process = QWidget()
         view = QVBoxLayout(process)
+        view.setContentsMargins(0, 0, 0, 0)
+        view.setSpacing(12)
         self.diagram = Diagram()
-        view.addWidget(self.diagram, 1)
+        view.addWidget(self.diagram)
+        diagram_note = QLabel("框图为固定工艺示意，液位、流速与双路进料不由数值状态驱动。")
+        diagram_note.setWordWrap(True)
+        diagram_note.setProperty("controlHint", True)
+        view.addWidget(diagram_note)
         row = QHBoxLayout()
         self.animation_button = QPushButton("暂停工艺动画")
         self.animation_button.clicked.connect(self.toggle_animation)
@@ -181,12 +215,15 @@ class ReactorWidget(QWidget):
         self.slider = QSlider(Qt.Horizontal)
         self.slider.setEnabled(False)
         self.slider.valueChanged.connect(self.show_sample)
+        self.slider.sliderPressed.connect(self.pause_playback)
+        self.slider.actionTriggered.connect(self.pause_playback)
         row.addWidget(self.slider, 1)
         view.addLayout(row)
         self.readout = QLabel("t = —    σ = —    x1 = —    x2 = —    u = —")
         self.readout.setWordWrap(True)
         self.readout.setObjectName("resultPathLabel")
         view.addWidget(self.readout)
+        view.addStretch(1)
         self.tabs.addTab(process, "工艺框图")
         plots = QWidget()
         plot_layout = QVBoxLayout(plots)
@@ -232,6 +269,8 @@ class ReactorWidget(QWidget):
             QMessageBox.warning(self, "参数无效", str(exc))
             return
         self.timer.stop()
+        self.logs.clear()
+        self.logs.append("化学反应器计算开始。")
         self.resume_animation = self.diagram.animated
         self.diagram.set_animated(False)
         self.animation_button.setText("计算期间暂停工艺动画")
@@ -272,12 +311,14 @@ class ReactorWidget(QWidget):
         self.play_button.setEnabled(True)
         self.show_sample(0)
         m = result["metrics"]
-        self.summary.setText(f"终态 ||x|| = {m['final_x_norm']:.3g}\n观测误差 = {m['final_observer_error']:.3g}\n采样 max |u| = {m['peak_abs_u_sampled']:.3g}\n输出点数 = {m['samples']}")
+        self.summary.setText(f"终态 ||x|| = {format_rmse(m['final_x_norm'])}\n观测误差 = {format_rmse(m['final_observer_error'])}\n采样 max |u| = {format_rmse(m['peak_abs_u_sampled'])}\n输出点数 = {m['samples']}")
         elapsed = m.get("elapsed_seconds")
         duration_label = f" · 用时 {elapsed:.1f} s" if elapsed is not None else ""
         self.task_status.set_status("succeeded", f"计算完成{duration_label} · 可检查曲线、回放数据或导出", 100)
+        self.logs.append("任务完成。")
 
     def failed(self, message):
+        self.logs.append(message)
         self.task_status.set_status("cancelled" if "取消" in message else "failed", message)
         self.summary.setText("未生成完整结果。可调整参数后重试。")
         self.readout.setText("无本次仿真数据")
@@ -307,6 +348,10 @@ class ReactorWidget(QWidget):
             self.play_start_clock = time.monotonic()
             self.timer.start()
             self.play_button.setText("暂停数据回放")
+
+    def pause_playback(self, *_):
+        self.timer.stop()
+        self.play_button.setText("回放仿真数据")
 
     def advance(self):
         import numpy as np
@@ -346,6 +391,8 @@ class ReactorWidget(QWidget):
 
     def load_saved(self, target):
         result = load_result(target)
+        self.logs.clear()
+        self.logs.append("正在载入已有化学反应器仿真结果。")
         self.timer.stop()
         self.play_button.setText("回放仿真数据")
         for key, box in self.inputs.items():
