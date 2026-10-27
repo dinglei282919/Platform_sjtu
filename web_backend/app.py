@@ -189,10 +189,19 @@ class ReactorTaskRequest(BaseModel):
     sample_dt: float = Field(default=.002, ge=.0001, le=.1, allow_inf_nan=False, strict=True)
     prescribed_time: float = Field(default=1.5, ge=.1, le=3., allow_inf_nan=False, strict=True)
     ell: float = Field(default=.15, ge=.01, le=1., allow_inf_nan=False, strict=True)
-    x1: float = Field(default=.5, ge=-1., le=1., allow_inf_nan=False, strict=True)
-    x2: float = Field(default=.5, ge=-1., le=1., allow_inf_nan=False, strict=True)
-    observer1: float = Field(default=0., ge=-1., le=1., allow_inf_nan=False, strict=True)
-    observer2: float = Field(default=.5, ge=-1., le=1., allow_inf_nan=False, strict=True)
+    xs: float = Field(default=1., ge=-4., le=4., allow_inf_nan=False, strict=True)
+    xd: float = Field(default=.5, ge=-2., le=2., allow_inf_nan=False, strict=True)
+    observer_s: float = Field(default=0., ge=-4., le=4., allow_inf_nan=False, strict=True)
+    observer_d: float = Field(default=.5, ge=-2., le=2., allow_inf_nan=False, strict=True)
+    r1: float = Field(default=.3, ge=0., le=1., allow_inf_nan=False, strict=True)
+    r2: float = Field(default=.2, ge=0., le=.95, allow_inf_nan=False, strict=True)
+    attack_scale: float = Field(default=1., ge=0., le=1.8, allow_inf_nan=False, strict=True)
+    attack_frequency: float = Field(default=.25, ge=.01, le=2., allow_inf_nan=False, strict=True)
+    attack_phase: float = Field(default=0., ge=-math.pi, le=math.pi, allow_inf_nan=False, strict=True)
+    x1: float | None = Field(default=None, ge=-1., le=1., allow_inf_nan=False, strict=True)
+    x2: float | None = Field(default=None, ge=-1., le=1., allow_inf_nan=False, strict=True)
+    observer1: float | None = Field(default=None, ge=-1., le=1., allow_inf_nan=False, strict=True)
+    observer2: float | None = Field(default=None, ge=-1., le=1., allow_inf_nan=False, strict=True)
 
     @model_validator(mode="after")
     def validate_reactor(self):
@@ -240,6 +249,7 @@ class DnnModelInfoRequest(BaseModel):
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     yield
+    reactor.live_sessions.close()
     task_manager.shutdown()
 
 
@@ -639,9 +649,68 @@ def replay_artifact(task_id: str, file_name: str):
     return FileResponse(path, filename=path.name)
 
 
+class ReactorLiveCommand(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["r1", "r2", "mode", "enabled", "pause", "resume", "reset", "attack", "attack_enabled"]
+    value: Any = None
+
+    @model_validator(mode="after")
+    def validate_value(self):
+        if self.kind in {"pause", "resume", "reset"}:
+            if self.value is not None:
+                raise ValueError("该指令不接收数值")
+        elif self.kind == "attack":
+            from platform_core.risk_control.reactor.attack import parse_attack
+            self.value = parse_attack(self.value)
+        elif self.kind in {"enabled", "attack_enabled"}:
+            if not isinstance(self.value, bool):
+                raise ValueError("控制投入状态必须为布尔值")
+        elif (isinstance(self.value, bool) or not isinstance(self.value, (int, float))
+              or not math.isfinite(self.value)):
+            raise ValueError("请输入有限数值")
+        elif self.kind == "mode":
+            if self.value not in (0, 1, 2):
+                raise ValueError("系统模式为 0（自动）、1 或 2")
+        elif not 0 <= self.value <= (1. if self.kind == "r1" else .95):
+            raise ValueError("R1 范围 [0,1]，R2 范围 [0,0.95]；R2=1 使坐标变换退化")
+        return self
+
+
+@app.post("/api/reactor/live")
+def create_reactor_live():
+    try:
+        return reactor.live_sessions.create()
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.get("/api/reactor/live/{identifier}")
+def get_reactor_live(identifier: str):
+    try:
+        return JSONResponse(reactor.live_sessions.snapshot(identifier), headers={"Cache-Control": "no-store"})
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="在线会话不存在或已过期") from exc
+
+
+@app.post("/api/reactor/live/{identifier}/command")
+def command_reactor_live(identifier: str, request: ReactorLiveCommand):
+    try:
+        return reactor.live_sessions.command(identifier, request.kind, request.value)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="在线会话不存在或已过期") from exc
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.delete("/api/reactor/live/{identifier}")
+def delete_reactor_live(identifier: str):
+    reactor.live_sessions.delete(identifier)
+    return {"closed": True}
+
+
 @app.get("/api/reactor/defaults")
 def reactor_defaults():
-    return ReactorTaskRequest().model_dump()
+    return ReactorTaskRequest().model_dump(exclude_none=True)
 
 
 @app.get("/api/reactor/diagram/{name}")

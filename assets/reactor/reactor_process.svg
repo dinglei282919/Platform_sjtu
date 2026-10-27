@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="895" viewBox="0 0 1600 895">
+  <defs>
+    <linearGradient id="feed-one" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#1f9aba"/><stop offset="1" stop-color="#126b8b"/></linearGradient>
+    <linearGradient id="feed-two" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#cbeef6"/><stop offset="1" stop-color="#a4d9e8"/></linearGradient>
+    <linearGradient id="reactor-liquid" x1="0" y1="0" x2="0" y2="1"><stop stop-color="__LIQUID_COLOR__" stop-opacity="0.8"/><stop offset="1" stop-color="__LIQUID_COLOR__"/></linearGradient>
+    <linearGradient id="concentration-scale" x1="0" y1="0" x2="1" y2="0"><stop stop-color="#dbeafe"/><stop offset="1" stop-color="#1e3a8a"/></linearGradient>
+  </defs>
+  <!-- Preserve the original illustration's geometry, thin outlines and white ground. -->
+  <g transform="scale(0.78125)" font-family="Microsoft YaHei, sans-serif" font-weight="400" fill="#182739">
+    <rect width="2048" height="1145" fill="#ffffff"/>
+    <text x="1990" y="48" text-anchor="end" font-size="28">仿真时间：__TIME__</text>
+    <text x="1990" y="91" text-anchor="end" font-size="28">系统模式：__MODE__</text>
+    <g fill="none" stroke-linejoin="round" stroke-linecap="round">
+      <path d="M20 19 H583 V133 M20 60 H244 V133" stroke="#182739" stroke-width="13"/>
+      <path d="M20 19 H583 V133" stroke="#b6e1ed" stroke-width="8"/>
+      <path d="M20 60 H244 V133" stroke="#147e9c" stroke-width="8"/>
+      <path d="M237 990 V1096 H855 V244 H1003 M583 990 V1065 H787 V198 H1003" stroke="#182739" stroke-width="13"/>
+      <path d="M237 990 V1096 H855 V244 H1003" stroke="#147e9c" stroke-width="8"/>
+      <path d="M583 990 V1065 H787 V198 H1003" stroke="#b6e1ed" stroke-width="8"/>
+    </g>
+    <!-- Tall capsule vessels and wavy, sample-driven liquid surfaces. -->
+    <path d="M90 287 C90 81 398 81 398 287 L398 842 C398 1049 90 1049 90 842 Z" fill="#f8fbfd"/>
+    <path d="M430 287 C430 81 738 81 738 287 L738 842 C738 1049 430 1049 430 842 Z" fill="#f8fbfd"/>
+    <path d="M90 __FILL1_Y__ c80 -28 140 30 210 0 s70 -10 98 0 L398 842 C398 1049 90 1049 90 842 Z" fill="#b7d9e5"/>
+    <path d="M90 __FILL1_Y__ c80 32 145 -42 210 -10 s70 20 98 10 L398 842 C398 1049 90 1049 90 842 Z" fill="url(#feed-one)"/>
+    <path d="M430 __FILL2_Y__ c80 -28 140 30 210 0 s70 -10 98 0 L738 842 C738 1049 430 1049 430 842 Z" fill="#e4f5fa"/>
+    <path d="M430 __FILL2_Y__ c80 32 145 -42 210 -10 s70 20 98 10 L738 842 C738 1049 430 1049 430 842 Z" fill="url(#feed-two)"/>
+    <path d="M90 287 C90 81 398 81 398 287 L398 842 C398 1049 90 1049 90 842 Z M430 287 C430 81 738 81 738 287 L738 842 C738 1049 430 1049 430 842 Z" fill="none" stroke="#182739" stroke-width="4.5"/>
+    <path d="M90 388 H398 M90 460 H398 M90 532 H398 M430 388 H738 M430 460 H738 M430 532 H738" stroke="#182739" stroke-width="2" opacity="0.28"/>
+    <path d="M173 794 C144 858 160 917 237 960 C319 916 347 864 312 794 M513 794 C484 858 500 917 577 960 C659 916 687 864 652 794" fill="none" stroke="#ffffff" stroke-width="4" stroke-dasharray="15 24" stroke-dashoffset="__FLOW_OFFSET__" opacity="0.45"/>
+    <text x="244" y="241" text-anchor="middle" font-size="28">循环流量 R1：__FLOW1__</text>
+    <text x="584" y="241" text-anchor="middle" font-size="28">循环流量 R2：__FLOW2__</text>
+    <text x="244" y="278" text-anchor="middle" font-size="22" fill="#526878">当前模型参数</text>
+    <text x="584" y="278" text-anchor="middle" font-size="22" fill="#526878">当前模型参数</text>
+    <text x="244" y="660" text-anchor="middle" font-size="32">反应器 1</text>
+    <text x="584" y="660" text-anchor="middle" font-size="32">反应器 2</text>
+    <text x="244" y="715" text-anchor="middle" font-size="32"><tspan font-family="Times New Roman" font-style="italic" font-size="44">x</tspan><tspan dy="12" font-size="23">s</tspan><tspan dy="-12">：</tspan>__XS__</text>
+    <text x="584" y="715" text-anchor="middle" font-size="32"><tspan font-family="Times New Roman" font-style="italic" font-size="44">x</tspan><tspan dy="12" font-size="23">d</tspan><tspan dy="-12">：</tspan>__XD__</text>
+    <!-- Simple operator silhouette, consistent with the equipment outlines. -->
+    <circle cx="1040" cy="57" r="23" fill="#eaf5fa" stroke="#182739" stroke-width="3.5"/>
+    <path d="M995 130 V119 C995 79 1085 79 1085 119 V130 Z" fill="#eaf5fa" stroke="#182739" stroke-width="3.5"/>
+    <path d="M1014 105 V128 M1066 105 V128 M1040 135 V159" fill="none" stroke="#182739" stroke-width="3"/>
+    <path d="M1033 151 L1040 163 L1047 151" fill="none" stroke="#182739" stroke-width="3"/>
+    <text x="1105" y="82" font-size="28">操作员</text>
+    <rect x="973" y="170" width="138" height="116" rx="8" fill="#eef7fb" stroke="#182739" stroke-width="3"/>
+    <path d="M973 198 H1003 M973 244 H1003 M1070 221 H1111" stroke="#182739" stroke-width="5"/>
+    <circle cx="1003" cy="198" r="6" fill="__ROUTE2__"/>
+    <circle cx="1003" cy="244" r="6" fill="__ROUTE1__"/>
+    <path d="M1070 221 L1010 __SWITCH_Y__" stroke="#182739" stroke-width="5" stroke-linecap="round"/>
+    <circle cx="1070" cy="221" r="6" fill="#182739"/>
+    <text x="1042" y="329" text-anchor="middle" font-size="32">系统模式切换</text>
+    <!-- Valve on the original feed route. -->
+    <path d="M1111 221 H1207 L1304 268" fill="none" stroke="#182739" stroke-width="13" stroke-linejoin="round" stroke-linecap="round"/>
+    <path d="M1111 221 H1207 L1304 268" fill="none" stroke="#75bed3" stroke-width="8" stroke-linejoin="round" stroke-linecap="round"/>
+    <path d="M1153 202 L1193 240 V202 L1153 240 Z" fill="#eef7fb" stroke="#182739" stroke-width="3"/>
+    <path d="M1173 221 V179 M1157 179 H1189" stroke="#182739" stroke-width="3.5"/>
+    <text x="1240" y="60" font-size="28">控制输入 u：__U__</text>
+    <rect x="1240" y="80" width="360" height="18" rx="3" fill="#e2e8f0"/>
+    <rect x="__U_BAR_X__" y="80" width="__U_BAR_WIDTH__" height="18" fill="__U_BAR_COLOR__"/>
+    <path d="M1420 75 V103" stroke="#182739" stroke-width="2"/>
+    <text x="1240" y="123" font-size="18">−20</text><text x="1420" y="123" text-anchor="middle" font-size="18">0</text><text x="1600" y="123" text-anchor="end" font-size="18">+20</text>
+    <text x="1240" y="153" font-size="24">反馈增益 κ：__KAPPA__</text>
+    <text x="1250" y="191" font-size="32">反应剂进料口</text>
+    <!-- Original jacket and pale-violet coolant circuit. -->
+    <path d="M1260 327 H1202 V982 H1779 V327 H1710" fill="#f2f5fd" stroke="#182739" stroke-width="4" stroke-linejoin="round"/>
+    <path d="M1006 873 H1218 V960 H1758 V453 H1984" fill="none" stroke="#182739" stroke-width="20" stroke-linejoin="round" stroke-linecap="round"/>
+    <path d="M1006 873 H1218 V960 H1758 V453 H1984" fill="none" stroke="#c2cff0" stroke-width="15" stroke-linejoin="round" stroke-linecap="round"/>
+    <g fill="#6685cd">
+      <path d="M1068 868 l12 5 -12 5 Z M1136 868 l12 5 -12 5 Z M1250 955 l12 5 -12 5 Z M1320 955 l12 5 -12 5 Z M1390 955 l12 5 -12 5 Z M1530 955 l12 5 -12 5 Z M1600 955 l12 5 -12 5 Z M1670 955 l12 5 -12 5 Z M1800 448 l12 5 -12 5 Z M1870 448 l12 5 -12 5 Z M1940 448 l12 5 -12 5 Z"/>
+      <path d="M1213 900 l5 12 5 -12 Z M1753 890 l5 -12 5 12 Z M1753 810 l5 -12 5 12 Z M1753 730 l5 -12 5 12 Z M1753 650 l5 -12 5 12 Z M1753 570 l5 -12 5 12 Z M1753 490 l5 -12 5 12 Z"/>
+    </g>
+    <!-- Broad stirred reactor, with the selected sample's concentration color. -->
+    <path d="M1233 386 C1233 145 1738 145 1738 386 L1738 723 C1738 968 1233 968 1233 723 Z" fill="#f8fbfd"/>
+    <path d="M1233 430 C1320 408 1460 470 1565 445 S1680 415 1738 435 L1738 723 C1738 968 1233 968 1233 723 Z" fill="__LIQUID_COLOR__" opacity="0.4"/>
+    <path d="M1233 422 C1310 408 1440 520 1530 466 S1650 397 1738 442 L1738 723 C1738 968 1233 968 1233 723 Z" fill="url(#reactor-liquid)"/>
+    <path d="M1233 386 C1233 145 1738 145 1738 386 L1738 723 C1738 968 1233 968 1233 723 Z" fill="none" stroke="#182739" stroke-width="4.5"/>
+    <path d="M1485 163 V637" stroke="#182739" stroke-width="4"/>
+    <path d="M1485 637 L__BLADE_LEFT__ 593 c-55 -20 -45 110 0 85 L1485 637 L__BLADE_RIGHT__ 593 c55 -20 45 110 0 85 Z" fill="__LIQUID_COLOR__" stroke="#182739" stroke-width="3"/>
+    <circle cx="1485" cy="637" r="7" fill="#182739"/>
+    <path d="M1305 580 C1310 480 1410 500 1430 580 M1600 520 C1680 485 1690 550 1665 590 M1375 670 C1280 700 1280 810 1345 850 C1430 920 1480 820 1460 700 M1515 675 C1690 640 1710 845 1600 890 C1530 910 1510 810 1515 720" fill="none" stroke="#ffffff" stroke-width="5" stroke-dasharray="15 30" stroke-dashoffset="__FLOW_OFFSET__" opacity="0.6"/>
+    <path d="M1485 908 V1096" stroke="#182739" stroke-width="13" stroke-linecap="round"/>
+    <path d="M1485 908 V1096" stroke="#75bed3" stroke-width="8" stroke-linecap="round"/>
+    <path d="__FLOW_ARROWS__" fill="#ffffff"/>
+    <text x="865" y="954" font-size="32">冷却剂进料口</text>
+    <text x="1900" y="548" text-anchor="middle" font-size="32">冷却剂</text>
+    <text x="1900" y="603" text-anchor="middle" font-size="32">出料口</text>
+    <text x="1575" y="1020" font-size="32">搅拌反应釜（示意）</text>
+    <text x="1575" y="1080" font-size="32">出料口</text>
+    <text x="865" y="1125" font-size="22" fill="#526878">显示有符号组分值；液位、搅拌及冷却管路仅为工艺示意。</text>
+  </g>
+</svg>

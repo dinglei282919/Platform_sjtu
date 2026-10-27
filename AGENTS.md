@@ -341,6 +341,12 @@ python -c "import dnnmpcpkg; h=dnnmpcpkg.initialize(); print('dnnmpcpkg ok'); h.
 
 ## 化学反应器模块
 
-新增化学反应器自适应控制仿真：共享核心 platform_core/risk_control/reactor，桌面 desktop/risk_control/reactor_page.py，Web ReactorPage.tsx 与 web_backend/services/reactor.py。两端使用 assets/reactor 的 GIF/PNG，并保留后台计算、取消、回放和结果导出。输出遵循 dnn_mpc/python_output/reactor 约定。
+新增化学反应器自适应控制仿真：共享核心 platform_core/risk_control/reactor，桌面 desktop/risk_control/reactor_page.py，Web ReactorPage.tsx 与 web_backend/services/reactor.py。两端共用 assets/reactor/reactor_process.svg，使用共享 presentation.py 的样本显示映射；历史 GIF/PNG/SVG 帧资源保留兼容。保留后台计算、取消、回放和结果导出。输出遵循 dnn_mpc/python_output/reactor 约定。
+
+反应器默认打开在线闭环运行界面：reactor/live.py 保存对象、控制器和事件状态，共享 live_runtime.py 在后台推进；CS reactor_live_page.py 和 BS ReactorLivePage.tsx 只消费已完成快照。离线实验作为独立标签保留。实时交互不得用预计算回放替代；切页暂停、关闭释放线程，指令在积分边界生效，求解失败保留最近有效样本并明确提示。
 
 模型、参数、页面操作、结果格式与数值验证边界统一维护在 [风险管控手册第 7 节](RISK_CONTROL_MANUAL.md#reactor)，不再依赖独立的 `docs/reactor` 目录或文档生成脚本。
+
+反应器主展示使用论文反变换后的有符号 xs/xd；共享 coordinates.py 负责尺度、FDI 说明与组分输出。R1/R2 必须实际进入两套数值内核；在线修改参数明确复位实验。不得重新引入浓度百分比、液位或阀门开度作为数值模型输出。详情见风险管控手册第 7 节。
+
+反应器 FDI 参数与验证集中在 reactor/attack.py：默认复现原乘性攻击，在线原子更新 attack 参数保留闭环状态；attack_enabled 独立开关。u 有符号动态条只限制显示长度，不限制真实控制量。模型与 UI 变更时同时核对 NumPy/Numba 和在线/离线入口。

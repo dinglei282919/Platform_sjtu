@@ -4,13 +4,14 @@ from pathlib import Path
 import json
 import re
 
-from PySide6.QtCore import QByteArray, QObject, QTimer, Qt, Signal
-from PySide6.QtGui import QColor, QPainter, QTransform
+from PySide6.QtCore import QByteArray, QObject, QPointF, QTimer, Qt, Signal
+from PySide6.QtGui import QColor, QPainter, QPolygonF, QTransform
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtSvgWidgets import QGraphicsSvgItem
 from PySide6.QtWidgets import (QGraphicsScene, QGraphicsView, QGridLayout, QHBoxLayout, QFrame, QProgressBar, QSizePolicy,
                                QLabel, QPushButton, QPlainTextEdit, QScrollArea, QVBoxLayout, QWidget,
-                               QSpinBox, QDoubleSpinBox, QComboBox, QSlider, QTabBar, QTabWidget)
+                               QAbstractSpinBox, QSpinBox, QDoubleSpinBox, QComboBox, QSlider,
+                               QStyle, QStyleOptionSpinBox, QTabBar, QTabWidget)
 
 
 class _ScrollParameters:
@@ -19,11 +20,41 @@ class _ScrollParameters:
         event.ignore()
 
 
-class ControlSpinBox(_ScrollParameters, QSpinBox):
+class _ControlSpinButtons(_ScrollParameters):
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if self.buttonSymbols() == QAbstractSpinBox.NoButtons:
+            return
+        # Qt's native arrows disappear once the dark stylesheet paints the
+        # spin-box border. Draw only the glyphs; Qt retains native hit testing,
+        # stepping, held-button repeat, keyboard input, and boundary handling.
+        option = QStyleOptionSpinBox()
+        self.initStyleOption(option)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setPen(Qt.NoPen)
+        for control, flag, direction in (
+            (QStyle.SC_SpinBoxUp, QAbstractSpinBox.StepUpEnabled, -1),
+            (QStyle.SC_SpinBoxDown, QAbstractSpinBox.StepDownEnabled, 1),
+        ):
+            rect = self.style().subControlRect(QStyle.CC_SpinBox, option, control, self)
+            if not rect.isValid():
+                continue
+            x, y = rect.center().x(), rect.center().y()
+            painter.setBrush(QColor("#e2efff" if self.isEnabled() and option.stepEnabled & flag else "#60788f"))
+            painter.drawPolygon(QPolygonF([
+                QPointF(x - 4, y - direction * 2),
+                QPointF(x + 4, y - direction * 2),
+                QPointF(x, y + direction * 3),
+            ]))
+        painter.end()
+
+
+class ControlSpinBox(_ControlSpinButtons, QSpinBox):
     pass
 
 
-class ControlDoubleSpinBox(_ScrollParameters, QDoubleSpinBox):
+class ControlDoubleSpinBox(_ControlSpinButtons, QDoubleSpinBox):
     pass
 
 
@@ -346,6 +377,27 @@ def control_page_style(root_name):
             border-radius: 6px; min-height: 28px; padding: 2px 8px; font-size: 14px;
         }
         QWidget#ROOT QLineEdit:disabled, QWidget#ROOT QSpinBox:disabled, QWidget#ROOT QDoubleSpinBox:disabled { color: #87a2bd; }
+        QWidget#ROOT QSpinBox, QWidget#ROOT QDoubleSpinBox { padding-right: 30px; }
+        QWidget#ROOT QSpinBox::up-button, QWidget#ROOT QDoubleSpinBox::up-button {
+            subcontrol-origin: border; subcontrol-position: top right;
+            width: 26px; height: 17px; background: #214c70;
+            border-left: 1px solid #365477; border-top-right-radius: 5px;
+        }
+        QWidget#ROOT QSpinBox::down-button, QWidget#ROOT QDoubleSpinBox::down-button {
+            subcontrol-origin: border; subcontrol-position: bottom right;
+            width: 26px; height: 17px; background: #214c70;
+            border-left: 1px solid #365477; border-bottom-right-radius: 5px;
+        }
+        QWidget#ROOT QSpinBox::up-button:hover, QWidget#ROOT QDoubleSpinBox::up-button:hover,
+        QWidget#ROOT QSpinBox::down-button:hover, QWidget#ROOT QDoubleSpinBox::down-button:hover { background: #31678f; }
+        QWidget#ROOT QSpinBox::up-button:pressed, QWidget#ROOT QDoubleSpinBox::up-button:pressed,
+        QWidget#ROOT QSpinBox::down-button:pressed, QWidget#ROOT QDoubleSpinBox::down-button:pressed { background: #438fc3; }
+        QWidget#ROOT QSpinBox::up-button:off, QWidget#ROOT QDoubleSpinBox::up-button:off,
+        QWidget#ROOT QSpinBox::down-button:off, QWidget#ROOT QDoubleSpinBox::down-button:off,
+        QWidget#ROOT QSpinBox::up-button:disabled, QWidget#ROOT QDoubleSpinBox::up-button:disabled,
+        QWidget#ROOT QSpinBox::down-button:disabled, QWidget#ROOT QDoubleSpinBox::down-button:disabled { background: #182d43; }
+        QWidget#ROOT QSpinBox::up-arrow, QWidget#ROOT QDoubleSpinBox::up-arrow,
+        QWidget#ROOT QSpinBox::down-arrow, QWidget#ROOT QDoubleSpinBox::down-arrow { image: none; }
         QWidget#ROOT QPushButton { background: #214c70; color: #e2efff; border: 1px solid #4c83ac; border-radius: 8px; min-height: 20px; padding: 7px 12px; font-size: 14px; font-weight: 600; }
         QWidget#ROOT QPushButton[controlPrimary="true"] { background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #438fc3, stop:1 #2f689b); border-color: #85cef6; }
         QWidget#ROOT QPushButton[controlPlotTool="true"] { min-height: 20px; padding: 4px 10px; font-size: 13px; }

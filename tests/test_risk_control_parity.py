@@ -68,9 +68,9 @@ class RiskControlParityTests(unittest.TestCase):
         defaults = self.client.get('/api/reactor/defaults').json()
         widget = ReactorWidget()
         try:
-            self.assertEqual({key: field.value() for key, field in widget.inputs.items()}, defaults)
+            self.assertEqual({key: field.value() for key, field in widget.experiment.inputs.items()}, defaults)
             steps = dict(duration=.1, sample_dt=.001, prescribed_time=.1, ell=.01,
-                         x1=.05, x2=.05, observer1=.05, observer2=.05)
-            self.assertEqual({key: field.singleStep() for key, field in widget.inputs.items()}, steps)
+                         xs=.05, xd=.05, observer_s=.05, observer_d=.05, r1=.05, r2=.05, attack_scale=.1, attack_frequency=.05, attack_phase=.1)
+            self.assertEqual({key: field.singleStep() for key, field in widget.experiment.inputs.items()}, steps)
         finally:
             widget.close()

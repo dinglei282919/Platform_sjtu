@@ -458,6 +458,9 @@ class MainWindow(QMainWindow):
                     QMessageBox.warning(self, "后台任务运行中", "请等待当前计算任务完成后再关闭。")
                     event.ignore()
                     return
+        if self._reactor_content_widget is not None and not self._reactor_content_widget.shutdown():
+            event.ignore()
+            return
         super().closeEvent(event)
 
     def showEvent(self, event):

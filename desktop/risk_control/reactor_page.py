@@ -1,7 +1,6 @@
 """Standalone Qt review interface; all simulation work runs off the UI thread."""
 from pathlib import Path
 from io import BytesIO
-from zipfile import ZipFile
 import time
 
 from PySide6.QtCore import Qt, QThread, Signal, QTimer, QByteArray, QRectF
@@ -19,9 +18,9 @@ from desktop.risk_control.dnn_mpc_plot_view import DnnMpcPlotView, ControlScroll
 from platform_core.risk_control.control_paths import module_output_dir
 from platform_core.risk_control.reactor.core import Config, SimulationCancelled, simulate
 from platform_core.risk_control.reactor.reporting import export_result, load_result, populate_figure
+from platform_core.risk_control.reactor.presentation import build_diagram_series, render_diagram
 
 ROOT = Path(__file__).resolve().parents[2]
-DIAGRAM = ROOT / "assets" / "reactor"
 OUTPUT = module_output_dir("reactor")
 
 
@@ -47,22 +46,19 @@ class Worker(QThread):
 
 
 class Diagram(QWidget):
+    """Render the shared process diagram at the selected simulation sample."""
+
     def __init__(self):
         super().__init__()
-        # Match Web's full-width, natural-aspect image rather than filling the
-        # remaining panel height. Movie frames must not drive the layout size.
+        # Keep the natural aspect ratio independent of animation frames.
         self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
         self.setStyleSheet("background: white; border: none;")
-        # Vector frames use the same geometry/phases as the Web GIF. Paint at
-        # the device resolution so text and pipes stay sharp on high-DPI screens.
-        with ZipFile(DIAGRAM / "reactor_dual_feed_svg.zip") as archive:
-            self.frames = tuple(archive.read(name) for name in sorted(archive.namelist()) if name[:3].isdigit())
-            labels = archive.read("labels.svg")
         self.renderer = QSvgRenderer(self)
-        self.label_renderer = QSvgRenderer(QByteArray(labels), self)
-        if not self.label_renderer.isValid():
-            raise ValueError("反应器矢量框图文字资源无效")
+        self.data = None
+        self.series = None
+        self.sample_index = 0
         self.frame_index = 0
+        self.svg = ""
         self.animation = QTimer(self)
         self.animation.setInterval(50)
         self.animation.setTimerType(Qt.PreciseTimer)
@@ -71,22 +67,43 @@ class Diagram(QWidget):
         self.setAccessibleName("化学反应器双路进料工艺框图")
         self._load_frame()
 
+    def set_data(self, data):
+        self.data = data
+        self.series = build_diagram_series(data) if data is not None else None
+        self.sample_index = 0
+        self.frame_index = 0
+        self._load_frame()
+
+    def set_live_data(self, data):
+        """Update the current online sample without restarting the flow phase."""
+        self.data = data
+        self.series = build_diagram_series(data)
+        self.sample_index = max(0, len(data["t"]) - 1)
+        self._load_frame()
+
+    def set_sample(self, index):
+        self.sample_index = (max(0, min(int(index), len(self.data["t"]) - 1))
+                             if self.data is not None else 0)
+        self._load_frame()
+
     def _load_frame(self):
-        if not self.renderer.load(QByteArray(self.frames[self.frame_index])):
+        self.svg = render_diagram(data=self.data, index=self.sample_index,
+                                  series=self.series, phase=self.frame_index / 120)
+        if not self.renderer.load(QByteArray(self.svg.encode("utf-8"))):
             raise ValueError("反应器矢量框图资源无效")
         self.update()
 
     def _advance_frame(self):
-        self.frame_index = (self.frame_index + 1) % len(self.frames)
+        # Flow dashes/stirring are decorative. Only the playback slider changes
+        # the selected sample and its numerical values, level and valve state.
+        self.frame_index = (self.frame_index + 1) % 120
         self._load_frame()
 
     def set_animated(self, enabled):
-        self.animated = enabled
+        self.animated = bool(enabled)
         self.animation.stop()
-        self.frame_index = 0
-        self._load_frame()
         self.rescale()
-        if enabled:
+        if self.animated:
             self.animation.start()
 
     def rescale(self):
@@ -100,7 +117,6 @@ class Diagram(QWidget):
         painter.fillRect(self.rect(), Qt.white)
         painter.setRenderHint(QPainter.Antialiasing)
         self.renderer.render(painter, QRectF(self.contentsRect()))
-        self.label_renderer.render(painter, QRectF(self.contentsRect()))
         painter.end()
 
     def resizeEvent(self, event):
@@ -108,7 +124,9 @@ class Diagram(QWidget):
         self.rescale()
 
 
-class ReactorWidget(QWidget):
+class ReactorExperimentWidget(QWidget):
+    busy_changed = Signal(bool)
+
     def __init__(self):
         super().__init__()
         self.setObjectName("reactorPage")
@@ -130,25 +148,34 @@ class ReactorWidget(QWidget):
         heading = QLabel("仿真设置")
         heading.setProperty("controlHeading", True)
         side.addWidget(heading)
+        objective = QLabel("控制目标：期望组分 <i>x</i><sub>s</sub>、<i>x</i><sub>d</sub> 趋于 0。")
+        objective.setWordWrap(True)
+        objective.setProperty("controlHint", True)
+        side.addWidget(objective)
         form = QFormLayout()
         self.inputs = {}
         specs = [("duration", "仿真时长 / s", 0.1, 3, 3, 3),
                  ("sample_dt", "输出间隔 / s", 0.0001, 0.1, 0.002, 4),
                  ("prescribed_time", "预设时间 T / s", 0.1, 3, 1.5, 3),
                  ("ell", "增益参数 ell", 0.01, 1, 0.15, 3),
-                 ("x1", "初态 x1", -1, 1, 0.5, 3),
-                 ("x2", "初态 x2", -1, 1, 0.5, 3),
-                 ("observer1", "估计初态 xhat1", -1, 1, 0, 3),
-                 ("observer2", "估计初态 xhat2", -1, 1, 0.5, 3)]
+                 ("xs", "组分初态 xs", -4, 4, 1., 3),
+                 ("xd", "组分初态 xd", -2, 2, 0.5, 3),
+                 ("observer_s", "组分估计初态 xs", -4, 4, 0, 3),
+                 ("observer_d", "组分估计初态 xd", -2, 2, 0.5, 3),
+                 ("r1", "循环参数 R1", 0, 1, .3, 3),
+                 ("r2", "循环参数 R2", 0, .95, .2, 3),
+                 ("attack_scale", "FDI 强度 a（0 无攻击）", 0, 1.8, 1., 3),
+                 ("attack_frequency", "FDI 角频率 ω / rad·s⁻¹", .01, 2, .25, 3),
+                 ("attack_phase", "FDI 相位 φ / rad", -3.141592653589793, 3.141592653589793, 0., 8)]
         for name, label, lower, upper, default, decimals in specs:
             box = QDoubleSpinBox()
             box.setDecimals(decimals)
             box.setRange(lower, upper)
             box.setValue(default)
-            box.setSingleStep({"duration": .1, "sample_dt": .001, "prescribed_time": .1, "ell": .01}.get(name, .05))
+            box.setSingleStep({"duration": .1, "sample_dt": .001, "prescribed_time": .1, "ell": .01, "attack_scale": .1, "attack_frequency": .05, "attack_phase": .1}.get(name, .05))
             box.setAccessibleName(label)
             self.inputs[name] = box
-            form.addRow(label, box)
+            form.addRow(label.replace("xs", "<i>x</i><sub>s</sub>").replace("xd", "<i>x</i><sub>d</sub>"), box)
         side.addLayout(form)
         self.run_button = QPushButton("运行仿真")
         self.run_button.setProperty("controlPrimary", True)
@@ -174,7 +201,8 @@ class ReactorWidget(QWidget):
         self.summary = QLabel("运行后显示终态与采样控制峰值。")
         self.summary.setWordWrap(True)
         side.addWidget(self.summary)
-        note = QLabel("状态与输入沿用原模型符号，未推定物理单位。\n\n框图为双路连续进料示意；液位与流速不随仿真数值变化。")
+        from platform_core.risk_control.reactor.coordinates import FDI_DESCRIPTION
+        note = QLabel(FDI_DESCRIPTION)
         note.setWordWrap(True)
         note.setProperty("controlHint", True)
         side.addWidget(note)
@@ -200,7 +228,7 @@ class ReactorWidget(QWidget):
         view.setSpacing(12)
         self.diagram = Diagram()
         view.addWidget(self.diagram)
-        diagram_note = QLabel("框图为固定工艺示意，液位、流速与双路进料不由数值状态驱动。")
+        diagram_note = QLabel("显示反变换后的组分 xs/xd 和控制输入 u；容器液面与冷却管路仅作工艺示意。")
         diagram_note.setWordWrap(True)
         diagram_note.setProperty("controlHint", True)
         view.addWidget(diagram_note)
@@ -219,7 +247,7 @@ class ReactorWidget(QWidget):
         self.slider.actionTriggered.connect(self.pause_playback)
         row.addWidget(self.slider, 1)
         view.addLayout(row)
-        self.readout = QLabel("t = —    σ = —    x1 = —    x2 = —    u = —")
+        self.readout = QLabel("时间 t：—    切换模式 σ：—    组分 <i>x</i><sub>s</sub>：—    组分 <i>x</i><sub>d</sub>：—    控制输入 u：—")
         self.readout.setWordWrap(True)
         self.readout.setObjectName("resultPathLabel")
         view.addWidget(self.readout)
@@ -228,9 +256,9 @@ class ReactorWidget(QWidget):
         plots = QWidget()
         plot_layout = QVBoxLayout(plots)
         plot_layout.setContentsMargins(0, 14, 0, 0)
-        self.figure = Figure(figsize=(13, 7), dpi=150)
+        self.figure = Figure(figsize=(13, 10), dpi=150)
         FigureCanvasAgg(self.figure)
-        self.plot_view = DnnMpcPlotView(aspect_ratio=13 / 7)
+        self.plot_view = DnnMpcPlotView(aspect_ratio=13 / 10)
         self.plot_view.set_placeholder("完成仿真后显示曲线")
         self.plot_view.setAccessibleName("化学反应器仿真曲线")
         plot_layout.addWidget(self.plot_view)
@@ -258,6 +286,7 @@ class ReactorWidget(QWidget):
         self.cancel_button.setEnabled(busy)
         self.load_button.setEnabled(not busy)
         self.export_button.setEnabled(not busy and self.result is not None)
+        self.busy_changed.emit(bool(busy))
 
     def start_run(self):
         if self.worker is not None:
@@ -279,6 +308,7 @@ class ReactorWidget(QWidget):
         self.play_button.setEnabled(False)
         self.slider.setEnabled(False)
         self.result = None
+        self.diagram.set_data(None)
         self.figure.clear()
         self.plot_view.clear()
         self.readout.setText("计算中，等待本次结果…")
@@ -301,6 +331,7 @@ class ReactorWidget(QWidget):
 
     def accept_result(self, result):
         self.result = result
+        self.diagram.set_data(result["data"])
         populate_figure(self.figure, result)
         preview = BytesIO()
         self.figure.savefig(preview, format="svg")
@@ -311,7 +342,7 @@ class ReactorWidget(QWidget):
         self.play_button.setEnabled(True)
         self.show_sample(0)
         m = result["metrics"]
-        self.summary.setText(f"终态 ||x|| = {format_rmse(m['final_x_norm'])}\n观测误差 = {format_rmse(m['final_observer_error'])}\n采样 max |u| = {format_rmse(m['peak_abs_u_sampled'])}\n输出点数 = {m['samples']}")
+        self.summary.setText(f"终态组分范数 = {format_rmse(m['final_composition_norm'])}\n观测误差 = {format_rmse(m['final_composition_observer_error'])}\n采样控制峰值 |u| = {format_rmse(m['peak_abs_u_sampled'])}\n输出点数 = {m['samples']}")
         elapsed = m.get("elapsed_seconds")
         duration_label = f" · 用时 {elapsed:.1f} s" if elapsed is not None else ""
         self.task_status.set_status("succeeded", f"计算完成{duration_label} · 可检查曲线、回放数据或导出", 100)
@@ -335,7 +366,8 @@ class ReactorWidget(QWidget):
     def show_sample(self, index):
         if self.result:
             d = self.result["data"]
-            self.readout.setText(f"t = {d['t'][index]:.3f} s    σ = {d['mode'][index]:.0f}    x1 = {d['x1'][index]:.5g}    x2 = {d['x2'][index]:.5g}    u = {d['u'][index]:.5g}")
+            self.diagram.set_sample(index)
+            self.readout.setText(f"时间 t：{d['t'][index]:.3f} s    切换模式 σ：{d['mode'][index]:.0f}    组分 <i>x</i><sub>s</sub>：{d['xs'][index]:.5g}    组分 <i>x</i><sub>d</sub>：{d['xd'][index]:.5g}    控制输入 u：{d['u'][index]:.5g}")
 
     def toggle_playback(self):
         if self.timer.isActive():
@@ -412,6 +444,108 @@ class ReactorWidget(QWidget):
             self.timer.stop()
             self.diagram.animation.stop()
             event.accept()
+
+
+class ReactorWidget(QWidget):
+    """Online operation by default, with the original experiment tools retained."""
+
+    def __init__(self, runtime_factory=None):
+        super().__init__()
+        from desktop.risk_control.reactor_live_page import ReactorLiveWidget
+        self.setObjectName("reactorWorkspace")
+        self.setWindowTitle("化学反应器自适应控制仿真")
+        self.resize(1320, 980)
+        self.setMinimumSize(600, 450)
+        self.setFont(QFont("Microsoft YaHei", 10))
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self.tabs = QTabWidget()
+        self.live = ReactorLiveWidget(runtime_factory=runtime_factory)
+        self.experiment = ReactorExperimentWidget()
+        self.tabs.addTab(self.live, "在线运行")
+        self.tabs.addTab(self.experiment, "离线实验与导出")
+        layout.addWidget(self.tabs)
+        self._experiment_animated = True
+        self._mode_index = None
+        self._closed = False
+        self.tabs.currentChanged.connect(self._select_mode)
+        self.experiment.busy_changed.connect(self._experiment_busy)
+        self.mode_timer = QTimer(self)
+        self.mode_timer.setInterval(100)
+        self.mode_timer.timeout.connect(self._sync_modes)
+        self.setStyleSheet(control_page_style("reactorWorkspace"))
+        self._select_mode(0)
+
+    @property
+    def diagram(self):
+        return self.live.diagram
+
+    def has_running_worker(self):
+        return self.experiment.has_running_worker()
+
+    def _experiment_busy(self, busy):
+        self.tabs.setTabEnabled(0, not busy)
+
+    def _select_mode(self, index):
+        if index == 0 and self.has_running_worker():
+            self.tabs.blockSignals(True)
+            self.tabs.setCurrentIndex(1)
+            self.tabs.blockSignals(False)
+            index = 1
+        if index == 0:
+            if self._mode_index == 1:
+                self._experiment_animated = self.experiment.diagram.animated
+            self.experiment.pause_playback()
+            self.experiment.diagram.set_animated(False)
+            self.live.set_active(self.isVisible())
+        else:
+            self.live.set_active(False)
+            self.experiment.diagram.set_animated(self._experiment_animated and self.isVisible())
+        self._mode_index = index
+        self._sync_modes()
+
+    def _sync_modes(self):
+        # Pause is acknowledged by the worker before offline work is enabled.
+        ready = self.live.runtime is None or self.live.snapshot_status() != "running"
+        self.experiment.setEnabled(self.tabs.currentIndex() != 1 or ready)
+        self.tabs.setTabEnabled(0, not self.has_running_worker())
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not self._closed:
+            self.mode_timer.start()
+            self._select_mode(self.tabs.currentIndex())
+
+    def hideEvent(self, event):
+        self.mode_timer.stop()
+        self.live.set_active(False)
+        self.experiment.pause_playback()
+        if self.tabs.currentIndex() == 1:
+            self._experiment_animated = self.experiment.diagram.animated
+        self.experiment.diagram.set_animated(False)
+        super().hideEvent(event)
+
+    def shutdown(self):
+        if self.has_running_worker():
+            return False
+        stopped = self.live.shutdown()
+        if stopped:
+            self._closed = True
+            self.mode_timer.stop()
+            self.experiment.timer.stop()
+            self.experiment.diagram.animation.stop()
+        return stopped
+
+    def closeEvent(self, event):
+        if self.has_running_worker():
+            self.experiment.cancel_run()
+            self.experiment.status.setText("正在停止离线计算，请稍后关闭")
+            event.ignore()
+            return
+        if self.shutdown():
+            event.accept()
+        else:
+            event.ignore()
 
 
 def create_application():

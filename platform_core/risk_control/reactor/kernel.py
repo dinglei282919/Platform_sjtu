@@ -16,9 +16,9 @@ def _nussbaum(eta):
 
 
 @njit(cache=True, nogil=True)
-def derivatives_compiled(t, y, prescribed_time, ell, mode):
+def derivatives_compiled(t, y, prescribed_time, ell, mode, r1=.3, r2=.2, attack_scale=1., attack_frequency=.25, attack_phase=0.):
     g = math.exp(t / (prescribed_time - t + ell)) if t <= prescribed_time else math.exp(prescribed_time / ell)
-    k = 1.5 * math.sin(0.25 * t) + 2
+    k = 1 + attack_scale + 1.5 * attack_scale * math.sin(attack_frequency * t + attack_phase)
     kx1, kx2 = k * y[0], k * y[3]
     v1, v2 = g * kx1, g * (kx2 - y[34])
     h1, h2 = np.empty(7), np.empty(7)
@@ -41,7 +41,7 @@ def derivatives_compiled(t, y, prescribed_time, ell, mode):
     dy = np.empty_like(y)
     w1, w2, decay1, decay2 = (0.75, 2., 0.2, 0.3) if mode == 1 else (1., 1.8, 0.4, 0.3)
     dy[0] = y[1] - (1 / w1 + decay1) * y[0]
-    dy[1] = u - (1 / w2 + decay2 - 0.2 / 0.5) * y[1] + 1.2 * y[0]
+    dy[1] = u - (1 / w2 + decay2 - r2 / 0.5) * y[1] + r1 * (1 - r2) / (.4 * .5) * y[0]
     e = y[0] - y[2]
     dy[2] = y[3] + obs1 @ th1 + g * 5 * e
     dy[3] = u + obs2 @ th2 + g * 8 * e

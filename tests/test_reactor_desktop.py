@@ -3,7 +3,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import time
 import unittest
 
-from desktop.risk_control.reactor_page import ReactorWidget as ReactorWindow, create_application
+from desktop.risk_control.reactor_page import ReactorExperimentWidget as ReactorWindow, create_application
 
 
 class DesktopTests(unittest.TestCase):
@@ -47,7 +47,7 @@ class DesktopTests(unittest.TestCase):
         self.assertTrue(d.renderer.isValid())
         self.assertAlmostEqual(d.height(), d.width() * 895 / 1600, delta=1)
 
-    def test_first_movie_frame_is_fitted_before_display(self):
+    def test_first_diagram_frame_is_fitted_before_display(self):
         from desktop.risk_control.reactor_page import Diagram
         from PySide6.QtCore import QEventLoop, QTimer
         diagram = Diagram()
@@ -87,25 +87,54 @@ class DesktopTests(unittest.TestCase):
         finally:
             window.close()
 
-    def test_vector_animation_frames_and_pause(self):
+    def test_data_drives_diagram_while_animation_only_changes_decoration(self):
+        import numpy as np
         from desktop.risk_control.reactor_page import Diagram
         from PySide6.QtCore import QByteArray
         from PySide6.QtSvg import QSvgRenderer
         diagram = Diagram()
+        data = {
+            "t": np.array([0., .1, .2]),
+            "x1": np.array([.5, .2, 0.]),
+            "x2": np.array([.4, .1, 0.]),
+            "u": np.array([-1., 0., 1.]),
+            "mode": np.array([1, 2, 1]),
+        }
         try:
-            self.assertEqual(len(diagram.frames), 120)
-            self.assertTrue(diagram.label_renderer.isValid())
-            for data in diagram.frames:
-                self.assertNotIn(b'<image', data)
-                self.assertNotIn(b'clip-path', data)
-                self.assertTrue(QSvgRenderer(QByteArray(data)).isValid())
+            waiting_svg = diagram.svg
+            self.assertTrue(diagram.renderer.isValid())
+            diagram.set_data(data)
+            first_svg = diagram.svg
+            self.assertNotEqual(first_svg, waiting_svg)
+            diagram.set_sample(1)
+            second_svg = diagram.svg
+            self.assertNotEqual(second_svg, first_svg)
+            self.assertEqual(diagram.sample_index, 1)
+            self.assertTrue(QSvgRenderer(QByteArray(second_svg.encode("utf-8"))).isValid())
+            self.assertNotIn("<image", second_svg)
+
             diagram.set_animated(True)
             self.assertTrue(diagram.animation.isActive())
             diagram._advance_frame()
             self.assertEqual(diagram.frame_index, 1)
+            self.assertEqual(diagram.sample_index, 1)
+            animated_svg = diagram.svg
             diagram.set_animated(False)
             self.assertFalse(diagram.animation.isActive())
-            self.assertEqual(diagram.frame_index, 0)
+            self.assertEqual(diagram.frame_index, 1)
+            self.assertEqual(diagram.svg, animated_svg)
+            self.assertEqual(diagram.sample_index, 1)
+
+            # Pausing decoration must not freeze slider-driven readouts.
+            diagram.set_sample(2)
+            self.assertNotEqual(diagram.svg, animated_svg)
+            self.assertEqual(diagram.sample_index, 2)
+            self.assertFalse(diagram.animation.isActive())
+            diagram.set_sample(0)
+            diagram.set_data(None)
+            self.assertIsNone(diagram.data)
+            self.assertIsNone(diagram.series)
+            self.assertEqual(diagram.svg, waiting_svg)
             diagram.resize(2400, 1343)
             diagram.rescale()
             self.assertAlmostEqual(diagram.height(), diagram.width() * 895 / 1600, delta=1)
@@ -122,17 +151,27 @@ class DesktopTests(unittest.TestCase):
         self.assertFalse(w.diagram.animated)
         self.assertFalse(w.animation_button.isEnabled())
         self.assertFalse(w.run_button.isEnabled())
-        self.assertFalse(w.inputs["x1"].isEnabled())
+        self.assertFalse(w.inputs["xs"].isEnabled())
         self.wait_until(lambda: w.worker is None)
         self.assertIsNotNone(w.result)
         self.assertIn("用时", w.status.text())
         self.assertTrue(w.diagram.animated)
         self.assertTrue(w.animation_button.isEnabled())
         self.assertTrue(w.export_button.isEnabled())
-        self.assertEqual(len(w.figure.axes),6)
+        self.assertEqual(len(w.figure.axes),9)
         self.assertTrue(w.plot_view.renderer().isValid())
         w.slider.setValue(w.slider.maximum())
         self.assertIn("0.300",w.readout.text())
+        self.assertEqual(w.diagram.sample_index, w.slider.maximum())
+        self.assertIs(w.diagram.data, w.result["data"])
+        self.assertIn("时间 t", w.readout.text())
+        w.toggle_animation()
+        self.assertFalse(w.diagram.animated)
+        final_svg = w.diagram.svg
+        w.slider.setValue(0)
+        self.assertEqual(w.diagram.sample_index, 0)
+        self.assertNotEqual(w.diagram.svg, final_svg)
+        w.slider.setValue(w.slider.maximum())
         w.toggle_playback()
         self.assertTrue(w.timer.isActive())
         w.slider.sliderPressed.emit()
@@ -145,6 +184,9 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(w.inputs["duration"].value(),3)
         w.start_run()
         self.assertIsNone(w.result)
+        self.assertIsNone(w.diagram.data)
+        self.assertIsNone(w.diagram.series)
+        self.assertEqual(w.diagram.sample_index, 0)
         self.assertFalse(w.plot_view.canvas._loaded)
         self.assertFalse(any(button.isEnabled() for button in w.plot_view._tool_buttons))
         self.assertFalse(w.export_button.isEnabled())
@@ -224,9 +266,14 @@ class DesktopTests(unittest.TestCase):
             window._on_submodule_clicked("风险管控优化决策", "化学反应器自适应控制仿真")
             self.assertIs(window._reactor_content_widget, reactor)
             self.assertFalse(healing.isVisible())
+            with patch.object(reactor, "shutdown", return_value=False):
+                event = QCloseEvent()
+                window.closeEvent(event)
+                self.assertFalse(event.isAccepted())
         finally:
             window.close()
             self.app.processEvents()
+        self.assertFalse(reactor.live.runtime._thread.is_alive())
 
 
 if __name__ == "__main__":

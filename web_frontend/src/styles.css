@@ -809,13 +809,15 @@ main { min-width: 0; padding: 16px; }
 .fdi-wide-page .fdi-plot-panel header a { flex-shrink: 0; }
 
 .reactor-page { min-width: 0; --control-plot-aspect: 13 / 7; }
+.reactor-page { font-family: "Microsoft YaHei", "Segoe UI", sans-serif; }
 .reactor-layout { display: grid; grid-template-columns: clamp(320px, 25vw, 380px) minmax(0, 1fr); gap: 18px; align-items: start; }
 .reactor-page .reactor-controls, .reactor-page .reactor-view { padding: 20px; }
 .reactor-controls { display: grid; gap: 12px; position: sticky; top: 12px; min-width: 0; }
 .reactor-controls label { display: grid; grid-template-columns: minmax(0, 1fr) 110px; align-items: center; gap: 8px; margin: 0; }
 .reactor-controls input { width: 100%; min-width: 0; }
 .reactor-view { min-width: 0; }
-.reactor-diagram { display: block; width: 100%; height: auto; aspect-ratio: 1600 / 895; object-fit: contain; background: white; }
+.reactor-diagram { display: block; width: 100%; height: auto; aspect-ratio: 1600 / 895; background: white; border-radius: 10px; overflow: hidden; }
+.reactor-diagram svg { display: block; width: 100%; height: auto; }
 .reactor-playback { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .reactor-playback input { flex: 1; min-width: 140px; }
 .reactor-readout { background: var(--control-inset); border: 1px solid var(--control-border); border-radius: 6px; padding: 12px; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
@@ -846,3 +848,62 @@ main { min-width: 0; padding: 16px; }
 @media (max-width: 600px) { .dnn-stage-tabs { grid-template-columns: 1fr; } }
 .control-module .fdi-tabs, .control-module .mpc-plot-tabs { gap: 16px; margin-bottom: 24px; }
 .control-module .dnn-plot-viewport:focus { outline: 2px solid #63bcff; outline-offset: -3px; }
+
+/* Live reactor controls and same-sample process/curve monitoring. */
+.reactor-live-tabs { display: flex; flex-wrap: wrap; gap: 12px; padding: 16px 16px 0; }
+.reactor-live-tabs button[aria-pressed="true"] { background: #28608d; border-color: #80bfe9; }
+.reactor-live-page { font-size: 14px; }
+.reactor-live-page button, .reactor-live-page input, .reactor-live-page select { font: inherit; }
+.reactor-live-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; align-items: start; }
+.reactor-live-page .reactor-live-controls, .reactor-live-page .reactor-live-system { min-width: 0; padding: 12px; }
+.reactor-live-controls { display: grid; gap: 10px; }
+.reactor-live-controls-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.reactor-live-control-bar { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)) minmax(190px, .95fr); gap: 12px; align-items: start; }
+.reactor-live-run-controls { display: grid; gap: 7px; padding-top: 1px; }
+.reactor-live-controls h3, .reactor-live-system h3, .reactor-live-curves h4 { margin: 0; font-size: 16px; font-weight: 600; }
+.reactor-live-field { display: grid; gap: 4px; }
+.reactor-live-field label { margin: 0; }
+.reactor-live-field > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
+.reactor-live-field input, .reactor-live-field select { min-width: 0; width: 100%; }
+.reactor-live-control-bar button { padding: 6px 8px; white-space: nowrap; }
+.reactor-live-stepper { display: grid; grid-template-columns: 26px minmax(0, 1fr) 26px; min-width: 0; }
+.reactor-live-control-bar .reactor-live-stepper button { min-width: 0; padding: 0; font-size: 18px; line-height: 1; }
+.reactor-live-stepper button:first-child { border-radius: 6px 0 0 6px; }
+.reactor-live-stepper button:last-child { border-radius: 0 6px 6px 0; }
+.reactor-live-stepper input { appearance: textfield; border-radius: 0; border-left: 0; border-right: 0; padding: 6px 2px; text-align: center; }
+.reactor-live-stepper input::-webkit-inner-spin-button, .reactor-live-stepper input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+.reactor-live-number-hint { display: flex; flex-wrap: wrap; justify-content: space-between; column-gap: 8px; }
+.reactor-live-field small, .reactor-live-curves small { font-size: 12px; color: var(--control-muted); font-weight: 400; }
+.reactor-live-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.reactor-live-controls .muted, .reactor-live-diagram .muted { margin: 0; font-size: 12px; line-height: 1.6; }
+.reactor-live-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 10px; }
+.reactor-live-header > div { display: flex; flex-wrap: wrap; align-items: center; column-gap: 16px; row-gap: 4px; }
+.reactor-live-header p { margin: 0; color: var(--control-muted); line-height: 1.5; font-size: 13px; }
+.reactor-live-status { flex-shrink: 0; border: 1px solid #6d849c; border-radius: 5px; padding: 5px 9px; color: #cbd8e8; font-size: 13px; }
+.reactor-live-status.running { border-color: #5bc8ae; color: #71dec1; }
+.reactor-live-status.error { border-color: #db8888; color: #ffc0c0; }
+.reactor-live-readouts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 10px; }
+.reactor-live-readouts > div { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; min-width: 0; background: var(--control-inset); border: 1px solid var(--control-border); border-radius: 6px; padding: 7px 10px; }
+.reactor-live-readouts span { color: var(--control-muted); font-size: 12px; }
+.reactor-live-readouts strong { font-size: 16px; font-weight: 500; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.reactor-live-monitor { display: grid; grid-template-columns: minmax(0, 1.8fr) minmax(330px, 1fr); gap: 12px; align-items: start; }
+.reactor-live-diagram { min-width: 0; }
+.reactor-live-diagram .muted { margin-top: 8px; }
+.reactor-live-curves { min-width: 0; border: 1px solid var(--control-border); border-radius: 6px; padding: 12px 0 0; }
+.reactor-live-curves h4 { padding: 0 14px; font-size: 14px; }
+.reactor-live-curves h4 small { margin-left: 8px; }
+.reactor-live-chart { width: 100%; height: clamp(330px, 30vw, 390px); }
+.reactor-live-events { border-top: 1px solid var(--control-border); margin-top: 10px; padding-top: 8px; font-size: 12px; }
+.reactor-live-events summary { cursor: pointer; font-size: 13px; }
+.reactor-live-events ol { list-style: none; padding: 0; margin: 9px 0 0; max-height: 180px; overflow-y: auto; }
+.reactor-live-events li { margin-bottom: 6px; line-height: 1.5; overflow-wrap: anywhere; }
+.reactor-live-events time { color: #88b4d9; font-variant-numeric: tabular-nums; }
+.reactor-live-notice { margin: 8px 0 0; color: var(--control-muted); font-size: 12px; line-height: 1.5; }
+.reactor-live-system .error { margin-bottom: 12px; }
+.reactor-live-system .error button { margin-left: 12px; }
+@media (max-width: 1100px) { .reactor-live-control-bar { grid-template-columns: repeat(4, minmax(0, 1fr)); } .reactor-live-run-controls { grid-column: 1 / -1; grid-template-columns: minmax(170px, 1fr) 2fr; padding-top: 0; } }
+@media (max-width: 1000px) { .reactor-live-monitor { grid-template-columns: minmax(0, 1fr); } .reactor-live-chart { height: 350px; } .reactor-live-control-bar { grid-template-columns: repeat(2, minmax(0, 1fr)); } .reactor-live-controls-heading { align-items: start; flex-direction: column; gap: 4px; } }
+@media (max-width: 520px) { .reactor-live-control-bar, .reactor-live-run-controls { grid-template-columns: minmax(0, 1fr); } .reactor-live-readouts { grid-template-columns: repeat(2, minmax(0, 1fr)); } .reactor-live-readouts > div { flex-direction: column; gap: 3px; } .reactor-live-header { flex-wrap: wrap; } }
+
+.reactor-attack-controls { border-top: 1px solid #365477; margin-top: 12px; padding-top: 10px; }
+.reactor-attack-controls h4 { margin: 0 0 8px; color: #dce8f5; }

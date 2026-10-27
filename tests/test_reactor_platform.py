@@ -86,6 +86,10 @@ class ReactorApiTests(unittest.TestCase):
         self.assertEqual(task["status"], "succeeded", task)
         data = self.client.get(f"/api/reactor/tasks/{task_id}/trajectory").json()
         self.assertEqual(data["t"][-1], .3)
+        from platform_core.risk_control.reactor.presentation import build_diagram_series
+        for key, values in build_diagram_series(data).items():
+            self.assertEqual(data[key], values)
+            self.assertEqual(len(data[key]), len(data["t"]))
         for name in server.reactor.ARTIFACTS:
             response = self.client.get(f"/api/reactor/tasks/{task_id}/files/{name}")
             self.assertEqual(response.status_code, 200)
@@ -119,7 +123,7 @@ class ReactorApiTests(unittest.TestCase):
         exposed = self.client.get("/api/reactor/defaults").json()
         self.assertEqual(exposed, {key: expected[key] for key in exposed})
         self.assertEqual(set(exposed), {"duration", "sample_dt", "prescribed_time", "ell",
-                                       "x1", "x2", "observer1", "observer2"})
+                                       "xs", "xd", "observer_s", "observer_d", "r1", "r2", "attack_scale", "attack_frequency", "attack_phase"})
 
     def test_output_directory_uses_platform_convention(self):
         from platform_core.risk_control.control_paths import module_output_dir

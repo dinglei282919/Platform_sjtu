@@ -6,6 +6,8 @@ from typing import Callable
 
 import numpy as np
 from scipy.integrate import solve_ivp
+from .coordinates import scales, validate_flows, composition_series
+from .attack import validate_attack, multiplier
 
 SWITCHES = (0.2, 0.7, 1.2, 1.6, 1.9, 2.3)
 MODES = (2, 1, 2, 1, 2, 1, 2)
@@ -20,16 +22,30 @@ class Config:
     sample_dt: float = 0.002
     prescribed_time: float = 1.5
     ell: float = 0.15
-    x1: float = 0.5
-    x2: float = 0.5
-    observer1: float = 0.0
-    observer2: float = 0.5
+    xs: float = 1.0
+    xd: float = 0.5
+    observer_s: float = 0.0
+    observer_d: float = 0.5
+    r1: float = .3
+    r2: float = .2
+    attack_scale: float = 1.
+    attack_frequency: float = .25
+    attack_phase: float = 0.
+    # Optional legacy transformed initial conditions for existing callers/files.
+    x1: float | None = None
+    x2: float | None = None
+    observer1: float | None = None
+    observer2: float | None = None
     rtol: float = 1e-3
     atol: float = 1e-6
     method: str = "BDF"
 
     def validate(self):
+        validate_flows(self.r1, self.r2)
+        validate_attack(self.attack_scale, self.attack_frequency, self.attack_phase)
         for name, value in asdict(self).items():
+            if value is None and name in {"x1", "x2", "observer1", "observer2"}:
+                continue
             if name != "method" and (isinstance(value, bool) or not isinstance(value, (float, int)) or not math.isfinite(value)):
                 raise ValueError(f"{name} must be a finite number")
         if not 0 < self.duration <= 3:
@@ -90,7 +106,9 @@ def basis2(x1, x2):
 
 def initial_state(c):
     y = np.zeros(37)
-    y[:4] = (c.x1, c.x2, c.observer1, c.observer2)
+    ss, sd = scales(c.r2)
+    y[:4] = tuple(legacy if legacy is not None else physical / scale for legacy, physical, scale in
+                  ((c.x1, c.xs, ss), (c.x2, c.xd, sd), (c.observer1, c.observer_s, ss), (c.observer2, c.observer_d, sd)))
     y[4:18] = 0.5
     y[19:33] = 1
     y[36] = 0.75
@@ -100,7 +118,7 @@ def initial_state(c):
 def signals(t, y, c, mode=None):
     mode = switching_mode(t) if mode is None else mode
     g = gamma(t, c)
-    k = 1.5 * math.sin(0.25 * t) + 2
+    k = multiplier(t, c.attack_scale, c.attack_frequency, c.attack_phase)
     kx1, kx2 = k * y[0], k * y[3]
     v1, v2 = g * kx1, g * (kx2 - y[34])
     weight_shape = (2, 7) + y.shape[1:]
@@ -126,7 +144,7 @@ def derivatives(t, y, c, mode):
         dy = np.zeros_like(y)
         w1, w2, decay1, decay2 = (0.75, 2, 0.2, 0.3) if mode == 1 else (1, 1.8, 0.4, 0.3)
         dy[0] = y[1] - (1 / w1 + decay1) * y[0]
-        dy[1] = s["u"] - (1 / w2 + decay2 - 0.2 / 0.5) * y[1] + 1.2 * y[0]
+        dy[1] = s["u"] - (1 / w2 + decay2 - c.r2 / 0.5) * y[1] + c.r1 * (1 - c.r2) / (.4 * .5) * y[0]
         e = y[0] - y[2]
         hobs1, hobs2 = basis1(y[0]), basis2(y[2], y[3])
         ef1 = hobs1 @ s["theta1"] if y.ndim == 1 else np.sum(hobs1 * s["theta1"], axis=0)
@@ -163,7 +181,7 @@ def simulate(config=None, progress: Callable = None, cancelled: Callable = None,
     c.validate()
     if compiled:
         from .kernel import derivatives_compiled
-        evaluate = lambda t, state, mode: derivatives_compiled(t, state, c.prescribed_time, c.ell, mode)
+        evaluate = lambda t, state, mode: derivatives_compiled(t, state, c.prescribed_time, c.ell, mode, c.r1, c.r2, c.attack_scale, c.attack_frequency, c.attack_phase)
     else:
         evaluate = lambda t, state, mode: derivatives(t, state, c, mode)
     y = initial_state(c)
@@ -210,6 +228,7 @@ def simulate(config=None, progress: Callable = None, cancelled: Callable = None,
         data[name] = np.array([s[name] for s in extra])
     for name in ("theta1", "theta2"):
         data[name + "_norm"] = np.array([np.linalg.norm(s[name]) for s in extra])
+    data.update(composition_series(data, asdict(c)))
     if not all(np.isfinite(a).all() for a in data.values()):
         raise FloatingPointError("Non-finite result")
     metrics = {"final_x_norm": float(np.linalg.norm(y[:2])),
@@ -217,4 +236,6 @@ def simulate(config=None, progress: Callable = None, cancelled: Callable = None,
                "peak_abs_u_sampled": float(np.max(np.abs(data["u"]))),
                "nfev": evaluations, "samples": len(grid),
                "elapsed_seconds": time.monotonic() - started}
+    metrics["final_composition_norm"] = float(np.linalg.norm([data["xs"][-1], data["xd"][-1]]))
+    metrics["final_composition_observer_error"] = float(np.linalg.norm([data["error_s"][-1], data["error_d"][-1]]))
     return {"config": asdict(c), "data": data, "states": values, "metrics": metrics}
