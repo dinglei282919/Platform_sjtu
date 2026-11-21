@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 760 250" width="760" height="250">
+<defs>
+ <linearGradient id="temp"><stop stop-color="#91c5e0"/><stop offset=".5" stop-color="#f4ddba"/><stop offset="1" stop-color="#e38d70"/></linearGradient>
+</defs>
+<g font-family="Microsoft YaHei, Segoe UI, sans-serif" fill="#233c4c" font-size="13">
+ <rect width="760" height="250" fill="#fbfdfe"/>
+ <rect x="299" y="91" width="158" height="109" rx="14" fill="#d9eef1" stroke="#247f91" stroke-width="3"/>
+ <rect x="310" y="63" width="136" height="128" rx="10" fill="@@COLOR@@" stroke="#314e64" stroke-width="3"/>
+ <rect x="368" y="18" width="29" height="15" rx="3" fill="#e4edf1" stroke="#314e64" stroke-width="2"/>
+ <path d="M383 33V108 M369 108H397 M369 102V114 M397 102V114" fill="none" stroke="#314e64" stroke-width="2.5"/>
+ <g fill="none" stroke-width="9" stroke-linecap="round" stroke-linejoin="round">
+  <g stroke="#365369">
+   <g id="material-pipes">
+    <polyline id="pipe-feed" points="34,45 333,45 333,52"/>
+    <polyline id="pipe-product" points="430,177 698,177"/>
+   </g>
+  </g>
+  <g stroke="#247f91">
+   <g id="coolant-pipes">
+    <polyline id="pipe-coolant-to-valve" points="34,176 190,176"/>
+    <polyline id="pipe-valve-to-jacket" points="225,176 286,176"/>
+    <polyline id="pipe-jacket-outlet" points="457,106 698,106"/>
+   </g>
+  </g>
+ </g>
+ <g fill="none" stroke-width="5.6" stroke-linecap="round" stroke-linejoin="round">
+  <use xlink:href="#material-pipes" stroke="#59788d"/>
+  <use xlink:href="#coolant-pipes" stroke="#3b99a5"/>
+ </g>
+ <g id="pipe-motion" data-reference-flow="100" fill="none" stroke-width="3.8"
+    stroke-dasharray="8 16" stroke-linecap="round" stroke-linejoin="round" display="none">
+  <g data-stream="material" stroke="#e2ecf4">
+   <use xlink:href="#pipe-feed"/><use xlink:href="#pipe-product"/>
+  </g>
+  <g data-stream="coolant" stroke="#a9f5ef">
+   <use xlink:href="#pipe-coolant-to-valve"/><use xlink:href="#pipe-valve-to-jacket"/>
+   <use xlink:href="#pipe-jacket-outlet"/>
+  </g>
+ </g>
+ <path d="M325 52H341L333 63Z M698 169V185L712 177Z" fill="#365369"/>
+ <path d="M286 168V184L299 176Z M698 98V114L712 106Z" fill="#247f91"/>
+ <path d="M192 168L207 176 192 184Z M222 168L207 176 222 184Z" fill="#fff" stroke="#247f91" stroke-width="2"/>
+ <path d="M207 176V163 M201 163H213" stroke="#247f91" fill="none" stroke-width="1.5"/>
+ <circle cx="207" cy="115" r="15" stroke="#78658c" fill="#f2edf6" stroke-width="2"/>
+ <path d="M318 115H222 M207 130V161" fill="none" stroke="#78658c" stroke-width="2" stroke-dasharray="5 4"/>
+ <circle cx="318" cy="115" r="3" fill="#78658c"/>
+ <text x="207" y="120" text-anchor="middle" fill="#665078">TC</text>
+ <text x="32" y="32">进料 · @@CI@@ mol/L · @@TI@@ K</text>
+ <text x="32" y="151" fill="#247f91">冷却液入口 · @@TCI@@ K</text>
+ <text x="32" y="198" fill="#247f91">实际流量 @@FLOW@@ L/min</text>
+ <text x="504" y="93" fill="#247f91">夹套出口 · @@JACKET@@ K</text>
+ <text x="504" y="162">物料出口 · @@C@@ mol/L</text>
+ <text x="504" y="199">釜温设定 · @@REF@@ K</text>
+ <text x="378" y="144" text-anchor="middle" font-size="12">釜内温度</text>
+ <text x="378" y="167" text-anchor="middle" font-weight="bold" font-size="18">@@TEMP@@ K</text>
+ <rect x="320" y="220" width="102" height="6" rx="3" fill="url(#temp)"/>
+ <text x="306" y="228" text-anchor="end" font-size="11">424 K</text><text x="432" y="228" font-size="11">438 K</text>
+</g></svg>
