@@ -200,7 +200,7 @@ sys.stdin.read()
         def complete_before_releasing_lease(directory):
             record.write_bytes(finished)
             return False
-        with patch("web_backend.task_manager._owner_is_alive", side_effect=complete_before_releasing_lease):
+        with patch("platform_core.task_manager._owner_is_alive", side_effect=complete_before_releasing_lease):
             recovered = self.manager().get(created.id)
         self.assertEqual(recovered["status"], "succeeded")
         self.assertEqual(recovered["result"], {"answer": 42})
