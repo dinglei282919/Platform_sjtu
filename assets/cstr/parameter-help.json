@@ -1,0 +1,17 @@
+{
+  "trajectories": "可调范围 {min}–{max} 条\n机理模型生成的独立训练轨迹数。",
+  "length": "可调范围 {min}–{max} 个周期\n每条训练轨迹的长度，每周期模拟 {period} 秒。",
+  "epochs": "可调范围 {min}–{max} 轮\n每轮完整遍历一次训练集。",
+  "seed": "可调范围 {min}–{max}（整数）\n固定随机种子便于复现实验。",
+  "lr": "可调范围 {min}–{max}\n控制每次更新网络权重的步长。",
+  "horizon": "可调范围 {min}–{max} 步\nMPC 向前预测的步数，每步模拟 {period} 秒。",
+  "flow_min": "可调范围 {min}–{max} L/min\nMPC 可选的最低冷却液流量。",
+  "flow_max": "可调范围 {min}–{max} L/min\nMPC 可选的最高冷却液流量。",
+  "move_weight": "可调范围 {min}–{max}\n权重越大，MPC 越倾向于平缓调节流量。",
+  "speed": "可调范围 {min}–{max}×\n每周期模拟 {period} 秒{wall}。",
+  "reference": "可调范围 {min}–{max} K\nMPC 跟踪的目标釜温，点击“更新设定值”生效。",
+  "duration": "可调范围 {min}–{max} 个周期\n入口扰动的持续时间，期满后恢复原工况。",
+  "preset": "选择要改变的入口条件，点击“施加扰动”生效。",
+  "model": "选择预测器后，点击“应用所选模型”切换。",
+  "device": "auto 优先使用 CUDA，也可指定 cpu 或 cuda。"
+}

@@ -1,15 +1,12 @@
-import { ReactorPage } from './ReactorPage'
-import { useCallback, useEffect, useMemo, useRef, useState, type FocusEvent, type ReactNode } from 'react'
+import { Chart, FormNumber, Page } from './PlatformUI'
+import { CstrWorkspace, riskEntries, useCstrPresence, type RiskId } from './CstrWorkspace'
+import { useCallback, useEffect, useMemo, useRef, useState, type FocusEvent } from 'react'
 import * as echarts from 'echarts'
 import { api, post } from './api'
-import { DnnMpcPage } from './DnnMpcPage'
-import { FdiPage } from './FdiPage'
-import { ReplayPage } from './ReplayPage'
-import { SelfHealingPage } from './SelfHealingPage'
 import { useTask } from './useTask'
 import { useStoredState } from './taskSession'
 
-type ModuleId = 'governance' | 'score' | 'classification' | 'cdq' | 'sdg' | 'sil' | 'anomaly' | 'dnn-mpc' | 'fdi' | 'replay' | 'self-healing' | 'reactor'
+type ModuleId = 'governance' | 'score' | 'classification' | 'cdq' | 'sdg' | 'sil' | 'anomaly' | RiskId
 type TaskProgress = { percent?: number; message?: string; module?: string; timestamp?: string; revision?: number; outputs?: Record<string, unknown> }
 type Task = { id: string; title: string; status: string; logs: string[]; result?: Record<string, unknown>; error?: string; progress?: TaskProgress }
 type Recommendation = { node_id: string; node_name: string; frequency: number; severity: number; rrf: number; target_sil: number }
@@ -233,37 +230,11 @@ const navigationGroups: NavigationGroup[] = [
     ],
   },
   {
-    id: 'risk-control', icon: '🎛', name: '风险管控优化决策', items: [
-      { id: 'dnn-mpc', name: '深度神经网络优化控制' },
-      { id: 'fdi', name: '虚假数据注入下的自适应控制仿真' },
-      { id: 'reactor', name: '化学反应器自适应控制仿真' },
-      { id: 'replay', name: '重放攻击下的自适应控制仿真' },
-      { id: 'self-healing', name: '多变量过程自愈控制仿真' },
-    ],
+    id: 'risk-control', icon: '🎛', name: '风险管控优化决策', items: riskEntries,
   },
   { id: 'sis', icon: '🛡', name: 'SIS自主化检测', items: [{ id: 'sdg', name: 'SDG-HAZOP' }] },
   { id: 'sil', icon: '✅', name: '在线SIL验证', items: [{ id: 'sil', name: '基于GSPN-MC模型的动态化SIL验证方法' }] },
 ]
-
-function Chart({ option, height = 330, fill = false, className = '', onClick, onResize }: { option: echarts.EChartsOption; height?: number; fill?: boolean; className?: string; onClick?: (params: any) => void; onResize?: (width: number, height: number) => void }) {
-  const element = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    if (!element.current) return
-    const instance = echarts.getInstanceByDom(element.current) ?? echarts.init(element.current)
-    instance.setOption(option, true)
-    if (onClick) instance.on('click', onClick)
-    const resize = () => {
-      instance.resize()
-      if (onResize && element.current) onResize(element.current.clientWidth, element.current.clientHeight)
-    }
-    window.addEventListener('resize', resize)
-    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(resize)
-    observer?.observe(element.current)
-    requestAnimationFrame(resize)
-    return () => { if (onClick) instance.off('click', onClick); window.removeEventListener('resize', resize); observer?.disconnect() }
-  }, [option, onClick, onResize])
-  return <div className={`chart ${className}`} ref={element} style={fill ? undefined : { height }} />
-}
 
 function TaskPanel({ task }: { task: Task | null }) {
   if (!task) return null
@@ -415,7 +386,7 @@ function AnomalyPage() {
       <section className="anomaly-box anomaly-result-root">
         <h3>结果图示</h3>
         <div className="anomaly-box-body">
-          <div className="anomaly-image-switches"><button type="button" className={imageMode === 'topology' ? 'active' : ''} onClick={() => { setImageMode('topology'); setImageError(false) }} disabled={running}>网络拓扑图</button><button type="button" className={imageMode === 'detection' ? 'active' : ''} onClick={() => { setImageMode('detection'); setImageError(false) }} disabled={running}>异常检测概率图</button></div>
+          <div className="view-switches"><button type="button" className={imageMode === 'topology' ? 'active' : ''} onClick={() => { setImageMode('topology'); setImageError(false) }} disabled={running}>网络拓扑图</button><button type="button" className={imageMode === 'detection' ? 'active' : ''} onClick={() => { setImageMode('detection'); setImageError(false) }} disabled={running}>异常检测概率图</button></div>
           <div className="anomaly-image-panel"><h4>{imageTitle}</h4><div className="anomaly-image-frame" role="img" aria-label={imageTitle} style={imageError ? undefined : { backgroundImage: `url("${imageUrl}")`, backgroundSize: 'contain', backgroundPosition: 'center', backgroundRepeat: 'no-repeat' }}>{imageError ? <div className="anomaly-image-placeholder">暂无{imageMode === 'detection' ? '异常检测概率图' : '拓扑图'}</div> : <img className="anomaly-result-image" src={imageUrl} alt="" aria-hidden="true" style={{ display: 'none' }} onError={() => setImageError(true)}/>}</div></div>
         </div>
       </section>
@@ -1566,12 +1537,11 @@ function ClassificationMatrix({ matrix, names }: { matrix: number[][]; names: st
   return <div className="matrix classification-matrix"><table><thead><tr><th className="matrix-corner"></th>{names.map(name => <th key={name}>预测-{name}</th>)}<th>合计</th></tr></thead><tbody>{matrix.map((row, index) => <tr key={names[index]}><th>真实-{names[index]}</th>{row.map((value, column) => <td key={column}>{value}</td>)}<td>{rowTotals[index]}</td></tr>)}<tr><th>合计</th>{columnTotals.map((value, index) => <td key={index}>{value}</td>)}<td>{total}</td></tr></tbody></table></div>
 }
 function ScoreCard({ label, value, tone }: { label: string; value: string | number; tone: string }) { return <div className={`score-card ${tone}`}><small>{label}</small><strong>{value}</strong></div> }
-function FormNumber({ label, value, onChange, min, max, step, onBlur }: { label: string; value: number; onChange: (value: number) => void; min: number; max: number; step: number; onBlur?: (event: FocusEvent<HTMLInputElement>) => void }) { return <label>{label}<input type="number" value={value} min={min} max={max} step={step} onChange={e => onChange(Number(e.target.value))} onBlur={onBlur}/></label> }
 function Empty({ text }: { text: string }) { return <div className="empty">{text}</div> }
 function ErrorBox({ text }: { text: string }) { return <div className="error">{text}</div> }
-function Page({ title, subtitle, className, children }: { title: string; subtitle?: string; className?: string; children: ReactNode }) { const classificationPage = title.startsWith('风险动态分析'); const classes = [classificationPage ? 'classification-page' : '', className ?? ''].filter(Boolean).join(' '); return <main className={classes || undefined} aria-label={title}>{subtitle && <p className="page-subtitle">{subtitle}</p>}{children}</main> }
 
 function App() {
+  useCstrPresence()
   const [active, setActive] = useState<ModuleId>('sdg')
   const [recommendation, setRecommendation] = useState<Recommendation | null>(null)
   const [openMenu, setOpenMenu] = useState<string | null>(null)
@@ -1593,8 +1563,42 @@ function App() {
       document.body.classList.remove('anomaly-page-locked')
     }
   }, [active])
-  const content = active === 'reactor' ? <ReactorPage/> : active === 'self-healing' ? <SelfHealingPage/> : active === 'replay' ? <ReplayPage/> : active === 'fdi' ? <FdiPage/> : active === 'score' ? <ScorePage/> : active === 'anomaly' ? <AnomalyPage/> : active === 'dnn-mpc' ? <DnnMpcPage/> : active === 'sdg' ? <SdgPage onRecommend={value => { setRecommendation(value); selectModule('sil') }}/> : active === 'sil' ? <SilPage recommendation={recommendation}/> : active === 'cdq' ? <CdqPageReplica/> : active === 'classification' ? <ClassificationPage/> : active === 'governance' ? <Page title="异构数据治理" subtitle="该一级导航已保留，当前暂无可用子模块。"><Empty text="暂无可用子模块，后续可在此扩展异构数据接入、清洗和治理能力。"/></Page> : <Page title={activeItem?.name ?? ''} subtitle="该模块仍可在桌面端使用。"><div className="deferred"><h3>桌面端可用，Web版后续迁移</h3><p>此模块依赖 MATLAB Runtime。首期本机 Web 版不会调用或重新编译 Runtime 包，以避免影响当前桌面端。</p></div></Page>
-  return <div className={`desktop-shell ${active === 'anomaly' ? 'anomaly-shell' : ''} ${active === 'dnn-mpc' ? 'mpc-shell' : ''}`}><header className="platform-header"><div className="platform-brand"><span className="logo-block">◈</span><h1>流程行业动态风险管控工具集平台</h1></div><div className="header-actions" aria-label="平台工具"><button type="button" title="用户">👤</button><button type="button" title="设置">⚙</button><button type="button" title="退出">⏻</button></div></header><nav className="function-bar" aria-label="功能导航"><div className="function-bar-scroll">{navigationGroups.map(group => { const selected = activeGroup?.id === group.id; const isOpen = openMenu === group.id; const hasMenu = group.items.length > 0; return <div className="nav-menu" key={group.id}><button type="button" className={`top-nav-button ${selected ? 'active' : ''}`} aria-expanded={hasMenu ? isOpen : undefined} onClick={() => { if (!hasMenu) { selectModule('governance'); return } setOpenMenu(isOpen ? null : group.id) }}><span>{group.icon}</span>{group.name}{hasMenu && <b>⌄</b>}</button>{hasMenu && isOpen && <div className="nav-dropdown">{group.items.map(item => <button type="button" key={item.id} className={active === item.id ? 'drop-active' : ''} onClick={() => selectModule(item.id)}>{item.name}{item.deferred && <em>桌面端</em>}</button>)}</div>}</div> })}</div></nav><section className="content-shell"><header className={`content-title-bar ${active === 'sil' ? 'sil-content-title-bar' : active === 'anomaly' ? 'anomaly-content-title-bar' : active === 'dnn-mpc' ? 'training-content-title-bar' : ''}`}><h2>{contentTitle}</h2></header><div className={`content-body ${active === 'classification' ? 'classification-content-body' : active === 'cdq' ? 'cdq-content-body' : active === 'sdg' ? 'sdg-content-body' : active === 'sil' ? 'sil-content-body' : active === 'anomaly' ? 'anomaly-content-body' : active === 'dnn-mpc' ? 'training-content-body' : ''}`}>{content}</div></section></div>
+  const content = activeGroup?.id === 'risk-control' ? <CstrWorkspace active={active as RiskId}/> : active === 'score' ? <ScorePage/> : active === 'anomaly' ? <AnomalyPage/> : active === 'sdg' ? <SdgPage onRecommend={value => { setRecommendation(value); selectModule('sil') }}/> : active === 'sil' ? <SilPage recommendation={recommendation}/> : active === 'cdq' ? <CdqPageReplica/> : active === 'classification' ? <ClassificationPage/> : active === 'governance' ? <Page title="异构数据治理" subtitle="该一级导航已保留，当前暂无可用子模块。"><Empty text="暂无可用子模块，后续可在此扩展异构数据接入、清洗和治理能力。"/></Page> : <Page title={activeItem?.name ?? ''} subtitle="该模块仍可在桌面端使用。"><div className="deferred"><h3>桌面端可用，Web版后续迁移</h3><p>此模块依赖 MATLAB Runtime。首期本机 Web 版不会调用或重新编译 Runtime 包，以避免影响当前桌面端。</p></div></Page>
+  return <div className={`desktop-shell ${active === 'anomaly' ? 'anomaly-shell' : ''}`}><header className="platform-header"><div className="platform-brand"><span className="logo-block">◈</span><h1>流程行业动态风险管控工具集平台</h1></div><div className="header-actions" aria-label="平台工具"><button type="button" title="用户">👤</button><button type="button" title="设置">⚙</button><button type="button" title="退出">⏻</button></div></header><nav className="function-bar" aria-label="功能导航" onBlur={event => {
+    if (!event.currentTarget.contains(event.relatedTarget)) setOpenMenu(null)
+  }} onKeyDown={event => {
+    if (event.key === 'Escape' && openMenu) {
+      const trigger = document.getElementById(`nav-trigger-${openMenu}`)
+      setOpenMenu(null)
+      trigger?.focus()
+    }
+  }}>
+    <div className="function-bar-scroll">{navigationGroups.map(group => {
+      const selected = activeGroup?.id === group.id
+      const isOpen = openMenu === group.id
+      const hasMenu = group.items.length > 0
+      const triggerId = `nav-trigger-${group.id}`
+      const menuId = `nav-list-${group.id}`
+      return <div className="nav-menu" key={group.id}>
+        <button type="button" id={triggerId} className={`top-nav-button${selected ? ' active' : ''}`}
+          aria-expanded={hasMenu ? isOpen : undefined} aria-controls={isOpen ? menuId : undefined}
+          onClick={() => {
+            if (!hasMenu) { selectModule('governance'); return }
+            if (group.id === 'risk-control' && !selected) setActive('risk-overview')
+            setOpenMenu(isOpen ? null : group.id)
+          }}>
+          <span aria-hidden="true">{group.icon}</span>{group.name}{hasMenu && <b aria-hidden="true">⌄</b>}
+        </button>
+        {hasMenu && isOpen && <div className="nav-dropdown" id={menuId}>
+          {group.items.map(item => <button type="button" key={item.id}
+            className={active === item.id ? 'drop-active' : ''} aria-current={active === item.id ? 'page' : undefined}
+            onClick={() => selectModule(item.id)}>
+            {item.name}{item.deferred && <em>桌面端</em>}
+          </button>)}
+        </div>}
+      </div>
+    })}</div>
+  </nav><section className="content-shell"><header className={`content-title-bar ${active === 'sil' ? 'sil-content-title-bar' : active === 'anomaly' ? 'anomaly-content-title-bar' : ''}`}><h2>{contentTitle}</h2></header><div className={`content-body ${active === 'classification' ? 'classification-content-body' : active === 'cdq' ? 'cdq-content-body' : active === 'sdg' ? 'sdg-content-body' : active === 'sil' ? 'sil-content-body' : active === 'anomaly' ? 'anomaly-content-body' : ''}`}>{content}</div></section></div>
 }
 
 export default App

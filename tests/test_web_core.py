@@ -18,7 +18,7 @@ from pydantic import ValidationError
 
 from platform_core.scoring import default_values, evaluate
 from web_backend.task_manager import TaskManager, TaskStateUnavailable
-from web_backend.app import AnomalyTaskRequest, MpcTaskRequest, SDGNodeRequest, SILTaskRequest, TrainingTaskRequest, app
+from web_backend.app import AnomalyTaskRequest, SDGNodeRequest, SILTaskRequest, app
 
 
 class TaskManagerPersistenceTests(unittest.TestCase):
@@ -62,9 +62,9 @@ class TaskManagerPersistenceTests(unittest.TestCase):
         manager = self.manager()
         artifacts = self.root / "artifacts"
         artifacts.mkdir()
-        image = artifacts / "training_rmse.svg"
-        image.write_text('<svg xmlns="http://www.w3.org/2000/svg"/>', encoding="utf-8")
-        created = manager.submit("saved result", lambda log: {"answer": 42}, artifact_dir=artifacts)
+        report = artifacts / "result.json"
+        report.write_text(json.dumps({"answer": 42}), encoding="utf-8")
+        created = manager.submit("CSTR 预测模型训练", lambda log: {"answer": 42}, artifact_dir=artifacts)
         finished = self.wait(manager, created.id)
         original = (created.work_dir / "task.json").read_bytes()
         manager.shutdown()
@@ -73,9 +73,9 @@ class TaskManagerPersistenceTests(unittest.TestCase):
         self.assertEqual(recovered.artifact_dir(created.id), artifacts)
         with patch("web_backend.app.task_manager", recovered), TestClient(app) as client:
             self.assertEqual(client.get(f"/api/tasks/{created.id}").json()["status"], "succeeded")
-            response = client.get(f"/api/training/tasks/{created.id}/images/training_rmse.svg")
+            response = client.get(f"/api/cstr/training/{created.id}/report")
             self.assertEqual(response.status_code, 200, response.text)
-            self.assertEqual(response.content, image.read_bytes())
+            self.assertEqual(response.content, report.read_bytes())
         self.assertEqual((created.work_dir / "task.json").read_bytes(), original)
 
     def test_second_instance_does_not_invalidate_a_live_owner(self):
@@ -355,21 +355,6 @@ class LocalApiTests(unittest.TestCase):
         response = self.client.post("/api/sdg/analyze", json=missing_cause)
         self.assertEqual(response.status_code, 400, response.text)
 
-    def test_python_dnn_defaults_and_image_whitelist(self) -> None:
-        modules = self.client.get("/api/modules").json()
-        self.assertEqual(next(x for x in modules if x["id"] == "dnn-mpc")["status"], "available")
-        defaults = self.client.get("/api/training/defaults").json()
-        self.assertEqual(defaults["hidden_layers"], "64,64")
-        self.assertEqual(defaults["epochs"], 200)
-        self.assertEqual(defaults["lr"], .001)
-        self.assertNotIn("mcr_root", defaults)
-        self.assertTrue(defaults["model_path"].endswith(".npz"))
-        defaults = self.client.get("/api/mpc/defaults").json()
-        self.assertEqual(defaults["prediction_horizon"], 10)
-        self.assertEqual(defaults["sim_time"], 5.)
-        for url in ("/api/training/images/prediction_error.png", "/api/mpc/images/cost_curve.png",
-                    "/api/mpc/tasks/missing/images/dnn_mpc.svg", "/api/dnn/training/tasks/missing/files/trained_model.npz"):
-            self.assertEqual(self.client.get(url).status_code, 404)
 
     def test_anomaly_request_accepts_inclusive_boundaries(self) -> None:
         request = AnomalyTaskRequest(
@@ -403,75 +388,8 @@ class LocalApiTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             AnomalyTaskRequest(attack_min_pct=float("nan"))
 
-    def test_dnn_training_request_accepts_inclusive_boundaries(self) -> None:
-        minimum = TrainingTaskRequest(epochs=1, lr=.000001, hidden_layers="1,1")
-        maximum = TrainingTaskRequest(epochs=5000, lr=.1, hidden_layers="512,512")
-        self.assertEqual(minimum.epochs, 1)
-        self.assertEqual(maximum.epochs, 5000)
-        self.assertEqual(maximum.hidden_layers, "512,512")
 
-    def test_dnn_training_request_rejects_parameters_and_paths_before_task_creation(self) -> None:
-        invalid_payloads = [
-            {"lr": 0.0000009},
-            {"lr": .10001},
-            {"epochs": 0},
-            {"epochs": 5001},
-            {"hidden_layers": "64,0"},
-            {"hidden_layers": ",".join(["64"] * 11)},
-            {"package_name": "dnn-mpc"},
-            {"package_dir": r"unused\package"},
-            {"mcr_root": r"relative\runtime"},
-            {"output_dir": r"relative\output"},
-            {"model_path": r"C:\example\Platform_sjtu\dnn_mpc\python_output\model.txt"},
-            {"dataset_path": r"relative\dataset.mat"},
-        ]
-        for payload in invalid_payloads:
-            with self.subTest(payload=payload):
-                response = self.client.post("/api/training/tasks", json=payload)
-                self.assertEqual(response.status_code, 422, response.text)
-                self.assertNotIn("task_id", response.json())
 
-        for field, value in (("lr", float("nan")), ("epochs", float("inf"))):
-            with self.subTest(field=field):
-                payload = {field: value}
-                response = self.client.post(
-                    "/api/training/tasks",
-                    content=json.dumps(payload, allow_nan=True),
-                    headers={"content-type": "application/json"},
-                )
-                self.assertEqual(response.status_code, 422, response.text)
-                self.assertNotIn("task_id", response.json())
-
-        with self.assertRaises(ValidationError):
-            TrainingTaskRequest(sample_count=-1)
-        with self.assertRaises(ValidationError):
-            TrainingTaskRequest(epochs=0)
-        with self.assertRaises(ValidationError):
-            TrainingTaskRequest(hidden_layers="64,0")
-
-    def test_mpc_request_rejects_parameters_and_paths_before_task_creation(self) -> None:
-        invalid_payloads = [
-            {"sim_time": 0.19},
-            {"sim_time": 20.01},
-            {"prediction_horizon": 0},
-            {"prediction_horizon": 61},
-            {"package_name": "dnn-mpc"},
-            {"mcr_root": r"relative\runtime"},
-            {"output_dir": r"relative\output"},
-            {"model_path": r"C:\example\Platform_sjtu\dnn_mpc\python_output\model.txt"},
-        ]
-        for payload in invalid_payloads:
-            with self.subTest(payload=payload):
-                response = self.client.post("/api/mpc/tasks", json=payload)
-                self.assertEqual(response.status_code, 422, response.text)
-                self.assertNotIn("task_id", response.json())
-
-        with self.assertRaises(ValidationError):
-            MpcTaskRequest(sim_time=float("nan"))
-        with self.assertRaises(ValidationError):
-            MpcTaskRequest(sim_time=0.1)
-        with self.assertRaises(ValidationError):
-            MpcTaskRequest(prediction_horizon=61)
 
     def test_cdq_config_and_sample_first_analysis(self) -> None:
         config_response = self.client.get("/api/cdq/config")
@@ -619,334 +537,14 @@ class LocalApiTests(unittest.TestCase):
         self.assertIn("pfdavg", task["result"])
 
 
-def check_running_control_images(test, mode, *, cancel=False):
-    """Pause a real run after its first preview and exercise live image routes."""
-    from importlib import import_module
-    from pathlib import Path
-    from threading import Event
-    from xml.etree import ElementTree
-    ready, release = Event(), Event()
-    runner = import_module(f"platform_core.risk_control.{mode}.runner")
-
-    original_run = runner.run
-
-    def gated_run(config, log, *, run_dir, cancelled=None):
-        def progress(percent, message):
-            state = json.loads((Path(run_dir) / "progress.json").read_text(encoding="utf-8"))
-            if state["image_revision"] and percent < 85 and not release.is_set():
-                ready.set()
-                if not release.wait(20):
-                    raise RuntimeError("preview API test gate timed out")
-        return original_run(config, log, run_dir=run_dir, progress=progress, cancelled=cancelled)
-
-    try:
-        with patch.object(runner, "run", side_effect=gated_run):
-            task_id = test.client.post(f"/api/{mode}/tasks", json={"sim_time": 1.}).json()["task_id"]
-            test.assertTrue(ready.wait(20))
-            task = test.manager.get(task_id)
-            test.assertEqual(task["status"], "running")
-            test.assertIsNone(task["result"])
-            for name in task["progress"]["outputs"]:
-                response = test.client.get(f"/api/{mode}/tasks/{task_id}/images/{name}.svg?v=1")
-                test.assertEqual(response.status_code, 200)
-                test.assertEqual(response.headers["cache-control"], "no-store")
-                ElementTree.fromstring(response.content)
-                test.assertEqual(test.client.get(f"/api/{mode}/tasks/{task_id}/files/{name}.svg").status_code, 409)
-            test.assertEqual(test.client.get(f"/api/{mode}/tasks/{task_id}/files/result.json").status_code, 409)
-            test.assertEqual(test.client.get(f"/api/{mode}/tasks/{task_id}/images/tracking.png").status_code, 409)
-            other = "replay" if mode == "fdi" else "fdi"
-            test.assertNotEqual(test.client.get(f"/api/{other}/tasks/{task_id}/images/tracking.svg").status_code, 200)
-            if cancel:
-                response = test.client.post(f"/api/tasks/{task_id}/cancel")
-                test.assertEqual(response.status_code, 200)
-                test.assertTrue(response.json()["cancel_requested"])
-                test.assertEqual(response.json()["status"], "running")
-            release.set()
-            final = test.wait_task(task_id)
-            if cancel:
-                test.assertEqual(final["status"], "cancelled", final)
-                test.assertIsNone(final["result"])
-                test.assertIsNone(final["error"])
-                test.assertEqual(test.client.get(f"/api/{mode}/tasks/{task_id}/files/result.json").status_code, 409)
-                test.assertEqual(test.client.get(f"/api/{mode}/tasks/{task_id}/images/tracking.svg").status_code, 200)
-                test.assertEqual(test.client.post(f"/api/tasks/{task_id}/cancel").json(), final)
-            else:
-                test.assertEqual(final["status"], "succeeded", final)
-                test.assertGreater(final["progress"]["image_revision"], task["progress"]["image_revision"])
-                test.assertEqual(test.client.post(f"/api/tasks/{task_id}/cancel").json(), final)
-    finally:
-        release.set()
-
-
-class FdiApiTests(unittest.TestCase):
-    def test_queued_cancellation_and_unsupported_tasks(self):
-        from threading import Event
-        started, release, cancelled = Event(), Event(), Event()
-        invoked = []
-
-        def occupy(log):
-            started.set()
-            if not release.wait(10):
-                raise RuntimeError("queue test gate timed out")
-            return {"finished": True}
-
-        first = self.manager.submit("uncancellable", occupy)
-        try:
-            self.assertTrue(started.wait(5))
-            second = self.manager.submit("queued", lambda log: invoked.append(True), cancel_event=cancelled)
-            self.assertEqual(self.client.post("/api/tasks/missing/cancel").status_code, 404)
-            self.assertEqual(self.client.post(f"/api/tasks/{first.id}/cancel").status_code, 409)
-            response = self.client.post(f"/api/tasks/{second.id}/cancel")
-            self.assertEqual(response.status_code, 200)
-            self.assertEqual(response.json()["status"], "cancelled")
-            self.assertTrue(cancelled.is_set())
-            self.assertEqual(self.client.post(f"/api/tasks/{second.id}/cancel").json(), response.json())
-        finally:
-            release.set()
-            self.manager._executor.shutdown(wait=True)
-        self.assertEqual(invoked, [])
-        self.assertEqual(self.manager.get(first.id)["status"], "succeeded")
-
-    def test_running_cancellation_preserves_preview_but_not_final_results(self):
-        check_running_control_images(self, "fdi", cancel=True)
-
-    def test_running_images_are_published_before_final_exports(self):
-        check_running_control_images(self, "fdi")
-
-    def setUp(self):
-        from tempfile import TemporaryDirectory
-        from pathlib import Path
-        from web_backend.task_manager import TaskManager
-        from web_backend.app import app
-        self.folder = TemporaryDirectory()
-        self.manager = TaskManager(Path(self.folder.name) / "tasks")
-        self.output_patch = patch("platform_core.risk_control.fdi.runner.DEFAULT_OUTPUT_DIR", Path(self.folder.name) / "outputs")
-        self.output_patch.start()
-        manager_patch = patch("web_backend.app.task_manager", self.manager)
-        manager_patch.start()
-        self.addCleanup(manager_patch.stop)
-        self.client = TestClient(app)
-
-    def tearDown(self):
-        self.client.close()
-        self.manager._executor.shutdown(wait=True, cancel_futures=True)
-        self.manager.shutdown()
-        self.output_patch.stop()
-        self.folder.cleanup()
-
-    def wait_task(self, task_id):
-        deadline = time.monotonic() + 30
-        while time.monotonic() < deadline:
-            task = self.manager.get(task_id)
-            if task["status"] in ("succeeded", "failed", "cancelled"):
-                return task
-            time.sleep(.05)
-        self.fail("FDI task did not complete")
-
-    def test_fdi_validation_and_missing_artifacts(self):
-        self.assertEqual(self.client.get("/api/fdi/defaults").json(), {"sim_time": 10.})
-        for payload in ({"sim_time": 0}, {"sim_time": 11}, {"sim_time": True},
-                        {"sim_time": "10"}, {"unexpected": 1}):
-            self.assertEqual(self.client.post("/api/fdi/tasks", json=payload).status_code, 422)
-        self.assertEqual(self.client.get("/api/fdi/tasks/missing/images/tracking.svg").status_code, 404)
-        from web_backend.app import FdiTaskRequest
-        with self.assertRaises(ValidationError):
-            FdiTaskRequest(sim_time=float("nan"))
-        with self.assertRaises(ValidationError):
-            FdiTaskRequest(sim_time=float("inf"))
-
-    def test_fdi_task_images_downloads_and_failure(self):
-        created = self.client.post("/api/fdi/tasks", json={"sim_time": .2})
-        self.assertEqual(created.status_code, 200)
-        task_id = created.json()["task_id"]
-        task = self.wait_task(task_id)
-        self.assertEqual(task["status"], "succeeded", task)
-        self.assertEqual(task["progress"]["percent"], 100)
-        for name in ("tracking", "disturbance", "state_control", "gain_switching"):
-            response = self.client.get(f"/api/fdi/tasks/{task_id}/images/{name}.svg")
-            self.assertEqual(response.status_code, 200)
-            self.assertTrue(response.headers["content-type"].startswith("image/svg+xml"))
-            self.assertIn("<svg", response.text)
-        for name in ("signals.csv", "signals.npz", "result.json"):
-            response = self.client.get(f"/api/fdi/tasks/{task_id}/files/{name}")
-            self.assertEqual(response.status_code, 200)
-            self.assertIn("attachment", response.headers["content-disposition"])
-        self.assertEqual(self.client.get(f"/api/fdi/tasks/{task_id}/files/fdi_config.json").status_code, 404)
-        with patch("platform_core.risk_control.fdi.runner.run", side_effect=RuntimeError("expected FDI failure")):
-            failed_id = self.client.post("/api/fdi/tasks", json={}).json()["task_id"]
-            failed = self.wait_task(failed_id)
-        self.assertEqual(failed["status"], "failed")
-        self.assertIn("expected FDI failure", failed["error"])
-        self.assertEqual(self.client.get(f"/api/fdi/tasks/{failed_id}/images/tracking.svg").status_code, 409)
-
-
-class ReplayApiTests(unittest.TestCase):
-    def test_running_cancellation_preserves_preview_but_not_final_results(self):
-        check_running_control_images(self, "replay", cancel=True)
-
-    def test_running_images_are_published_before_final_exports(self):
-        check_running_control_images(self, "replay")
-
-    def setUp(self):
-        from tempfile import TemporaryDirectory
-        from pathlib import Path
-        from web_backend.task_manager import TaskManager
-        from web_backend.app import app
-        self.folder = TemporaryDirectory()
-        self.manager = TaskManager(Path(self.folder.name) / "tasks")
-        self.output_patch = patch("platform_core.risk_control.replay.runner.DEFAULT_OUTPUT_DIR", Path(self.folder.name) / "outputs")
-        self.output_patch.start()
-        manager_patch = patch("web_backend.app.task_manager", self.manager)
-        manager_patch.start()
-        self.addCleanup(manager_patch.stop)
-        self.client = TestClient(app)
-
-    def tearDown(self):
-        self.client.close()
-        self.manager._executor.shutdown(wait=True, cancel_futures=True)
-        self.manager.shutdown()
-        self.output_patch.stop()
-        self.folder.cleanup()
-
-    def wait_task(self, task_id):
-        deadline = time.monotonic() + 30
-        while time.monotonic() < deadline:
-            task = self.manager.get(task_id)
-            if task["status"] in ("succeeded", "failed", "cancelled"):
-                return task
-            time.sleep(.05)
-        self.fail("replay task did not complete")
-
-    def test_replay_validation_and_missing_artifacts(self):
-        self.assertEqual(self.client.get("/api/replay/defaults").json(), {"sim_time": 50.})
-        for payload in ({"sim_time": 0}, {"sim_time": 51}, {"sim_time": True},
-                        {"sim_time": "10"}, {"unexpected": 1}):
-            self.assertEqual(self.client.post("/api/replay/tasks", json=payload).status_code, 422)
-        self.assertEqual(self.client.get("/api/replay/tasks/missing/images/tracking.svg").status_code, 404)
-        from web_backend.app import ReplayTaskRequest
-        with self.assertRaises(ValidationError):
-            ReplayTaskRequest(sim_time=float("nan"))
-        with self.assertRaises(ValidationError):
-            ReplayTaskRequest(sim_time=float("inf"))
-
-    def test_replay_task_images_downloads_and_failure(self):
-        created = self.client.post("/api/replay/tasks", json={"sim_time": .2})
-        self.assertEqual(created.status_code, 200)
-        task_id = created.json()["task_id"]
-        task = self.wait_task(task_id)
-        self.assertEqual(task["status"], "succeeded", task)
-        self.assertEqual(task["progress"]["percent"], 100)
-        for name in ("tracking", "disturbance", "state_control", "switching_replay"):
-            response = self.client.get(f"/api/replay/tasks/{task_id}/images/{name}.svg")
-            self.assertEqual(response.status_code, 200)
-            self.assertTrue(response.headers["content-type"].startswith("image/svg+xml"))
-            self.assertIn("<svg", response.text)
-        for name in ("signals.csv", "signals.npz", "result.json"):
-            response = self.client.get(f"/api/replay/tasks/{task_id}/files/{name}")
-            self.assertEqual(response.status_code, 200)
-            self.assertIn("attachment", response.headers["content-disposition"])
-        self.assertEqual(self.client.get(f"/api/replay/tasks/{task_id}/files/replay_config.json").status_code, 404)
-        with patch("platform_core.risk_control.replay.runner.run", side_effect=RuntimeError("expected replay failure")):
-            failed_id = self.client.post("/api/replay/tasks", json={}).json()["task_id"]
-            failed = self.wait_task(failed_id)
-        self.assertEqual(failed["status"], "failed")
-        self.assertIn("expected replay failure", failed["error"])
-        self.assertEqual(self.client.get(f"/api/replay/tasks/{failed_id}/images/tracking.svg").status_code, 409)
 
 
 
 
-class SelfHealingApiTests(unittest.TestCase):
-    def setUp(self):
-        self.temp = TemporaryDirectory()
-        self.root = Path(self.temp.name)
-        self.manager = TaskManager(self.root / "tasks")
-        self.manager_patch = patch("web_backend.app.task_manager", self.manager)
-        self.output_patch = patch("platform_core.risk_control.self_healing.runner.DEFAULT_OUTPUT_DIR", self.root / "outputs")
-        self.manager_patch.start(); self.output_patch.start()
-        self.client = TestClient(app)
 
-    def tearDown(self):
-        self.manager.shutdown()
-        self.manager._executor.shutdown(wait=True)
-        self.manager_patch.stop(); self.output_patch.stop()
-        self.client.close()
-        self.temp.cleanup()
 
-    def wait_task(self, task_id):
-        deadline = time.monotonic() + 20
-        while time.monotonic() < deadline:
-            response = self.client.get(f"/api/tasks/{task_id}")
-            self.assertEqual(response.status_code, 200)
-            task = response.json()
-            if task["status"] in {"succeeded", "failed", "cancelled"}:
-                return task
-            time.sleep(.02)
-        self.fail("Self-healing task did not terminate")
 
-    def config(self):
-        from platform_core.risk_control.self_healing.config import defaults
-        return {**defaults(), "duration": 1., "fault_start": .3, "training_batches": 8, "training_hold": .2}
 
-    def test_defaults_validation_and_module_isolation(self):
-        from platform_core.risk_control.self_healing.config import catalog
-        self.assertEqual(self.client.get("/api/self-healing/defaults").json(), catalog())
-        modules = self.client.get("/api/modules").json()
-        self.assertTrue(any(module["id"] == "self-healing" for module in modules))
-        for config in ({"duration": True}, {"training_batches": 1}, {"fault_start": 1000},
-                       {"dt": .003}, {"bad": 1}, {"scenario": "missing"}, {"seed": 10**400}):
-            with self.subTest(config=config):
-                response = self.client.post("/api/self-healing/tasks", json={"config": config})
-                self.assertEqual(response.status_code, 422, response.text)
-        self.assertFalse((self.root / "outputs").exists())
-        for path in ("files/summary.json", "images/outputs.svg", "files/self_healing_config.json"):
-            self.assertEqual(self.client.get("/api/self-healing/tasks/missing/" + path).status_code, 404)
-
-    def test_result_downloads_progress_restart_and_cross_module_denial(self):
-        from platform_core.risk_control.self_healing.runner import ARTIFACT_NAMES
-        created = self.client.post("/api/self-healing/tasks", json={"config": self.config()})
-        self.assertEqual(created.status_code, 200, created.text)
-        task_id = created.json()["task_id"]
-        task = self.wait_task(task_id)
-        self.assertEqual(task["status"], "succeeded", task)
-        self.assertEqual(task["progress"]["percent"], 100)
-        for name in ARTIFACT_NAMES:
-            response = self.client.get(f"/api/self-healing/tasks/{task_id}/files/{name}")
-            self.assertEqual(response.status_code, 200, name)
-        for name in ("outputs.svg", "inputs.png"):
-            self.assertEqual(self.client.get(f"/api/self-healing/tasks/{task_id}/images/{name}").status_code, 200)
-        self.assertEqual(self.client.get(f"/api/replay/tasks/{task_id}/files/result.json").status_code, 404)
-        recovered = TaskManager(self.root / "tasks")
-        try:
-            with patch("web_backend.app.task_manager", recovered):
-                response = self.client.get(f"/api/self-healing/tasks/{task_id}/files/result.json")
-                self.assertEqual(response.status_code, 200)
-                self.assertEqual(response.json()["config"], self.config())
-        finally:
-            recovered.shutdown(); recovered._executor.shutdown(wait=True)
-
-    def test_worker_failure_and_cancellation_allow_retry(self):
-        with patch("platform_core.risk_control.self_healing.runner.run_experiment", side_effect=RuntimeError("test solver failure")):
-            task_id = self.client.post("/api/self-healing/tasks", json={"config": self.config()}).json()["task_id"]
-            task = self.wait_task(task_id)
-        self.assertEqual(task["status"], "failed")
-        self.assertIn("test solver failure", task["error"])
-        self.assertEqual(self.client.get(f"/api/self-healing/tasks/{task_id}/files/result.json").status_code, 409)
-        from platform_core.risk_control.self_healing.simulation import SimulationCancelled
-        ready = Event()
-        def cancellable(*args, cancelled, **kwargs):
-            ready.set()
-            deadline = time.monotonic() + 5
-            while not cancelled() and time.monotonic() < deadline:
-                time.sleep(.01)
-            raise SimulationCancelled("cancelled")
-        with patch("platform_core.risk_control.self_healing.runner.run_experiment", side_effect=cancellable):
-            task_id = self.client.post("/api/self-healing/tasks", json={"config": self.config()}).json()["task_id"]
-            self.assertTrue(ready.wait(5))
-            self.assertEqual(self.client.post(f"/api/tasks/{task_id}/cancel").status_code, 200)
-            self.assertEqual(self.wait_task(task_id)["status"], "cancelled")
-        task_id = self.client.post("/api/self-healing/tasks", json={"config": self.config()}).json()["task_id"]
-        self.assertEqual(self.wait_task(task_id)["status"], "succeeded")
 
 
 if __name__ == "__main__":

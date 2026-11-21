@@ -7,7 +7,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QStyle, QStyleOptionSpinBox, QVBoxLayout, QWidget
 
-from desktop.risk_control.dnn_mpc_plot_view import (
+from desktop.risk_control.controls import (
     ControlDoubleSpinBox, ControlSpinBox, control_page_style,
 )
 
