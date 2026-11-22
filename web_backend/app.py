@@ -22,6 +22,7 @@ if str(ROOT) not in sys.path:
 FRONTEND_DIST = ROOT / "web_frontend" / "dist"
 
 from web_backend.task_manager import TaskManager, TaskStateUnavailable
+from web_backend.services.healing import routes as healing_routes
 from web_backend.services import anomaly, cdq, classification, path_picker, scoring, sdg, sil
 from platform_core.risk_control.dnn_mpc.dataset import MAX_CSV_BYTES, example_csv
 from platform_core.risk_control.service import ControlService
@@ -256,11 +257,11 @@ def modules() -> list[dict[str, str]]:
         {"id": "sdg", "name": "SIS自主化检测 · SDG-HAZOP", "status": "available"},
         {"id": "sil", "name": "在线SIL验证", "status": "available"},
         {"id": "anomaly", "name": "异常行为检测", "status": "available"},
-        {"id": "dnn-mpc", "name": "深度神经网络优化控制", "status": "available"},
-        {"id": "fdi", "name": "虚假数据注入下的自适应控制仿真", "status": "placeholder"},
         {"id": "risk-overview", "name": "综合仿真展示", "status": "placeholder"},
+        {"id": "dnn-mpc", "name": "深度神经网络优化控制", "status": "available"},
+        {"id": "self-healing", "name": "多变量过程自愈控制", "status": "available"},
+        {"id": "fdi", "name": "虚假数据注入下的自适应控制仿真", "status": "placeholder"},
         {"id": "replay", "name": "重放攻击下的自适应控制仿真", "status": "placeholder"},
-        {"id": "self-healing", "name": "多变量过程自愈控制仿真", "status": "placeholder"},
     ]
 
 
@@ -454,6 +455,10 @@ def cstr_snapshot(identifier: str, after: int = -1, owner: str | None = Header(N
 @app.get("/api/cstr/sessions/{identifier}/presence")
 async def cstr_presence(identifier: str, request: Request, owner: str | None = Header(None, alias="X-Control-Owner")):
     session = _cstr_call(cstr_service.session, identifier, owner, True)
+    return _presence_stream(session, request)
+
+
+def _presence_stream(session, request):
 
     async def connected():
         session.owner_connected()
@@ -466,6 +471,9 @@ async def cstr_presence(identifier: str, request: Request, owner: str | None = H
 
     return StreamingResponse(connected(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+
+
+app.include_router(healing_routes(lambda: cstr_service.healing, _cstr_call, _presence_stream))
 
 
 @app.get("/api/cstr/sessions/{identifier}/history")

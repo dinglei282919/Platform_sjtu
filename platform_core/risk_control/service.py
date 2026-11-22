@@ -13,6 +13,7 @@ from .cstr import DEMO_INITIAL, TREND_INTERVALS, FEATURE_NAMES, NOMINAL, REFEREN
 from .dnn_mpc import dataset, model, training, validation
 from .dnn_mpc.mpc import Settings
 from .session import Session
+from .healing_session import HealingService
 from .disturbance import options as disturbance_options
 from . import NAVIGATION
 
@@ -47,6 +48,7 @@ class ControlService:
         self.root = Path(root or os.environ.get("PLATFORM_CSTR_RUNTIME")
                          or USER_DATA/"Platform_sjtu"/"cstr")
         self.record_root = tasks.register_record_root(self.root/"tasks")
+        self.healing = HealingService(self.root/"self-healing")
         self.lock = RLock()
         self.sessions = {}
 
@@ -280,6 +282,7 @@ class ControlService:
         s.close()
 
     def close(self):
+        self.healing.close()
         with self.lock:
             sessions = list(self.sessions.values())
             self.sessions.clear()
