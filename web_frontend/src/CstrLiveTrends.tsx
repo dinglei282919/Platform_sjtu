@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent } from 'react'
 import { getInstanceByDom, type EChartsOption, type LineSeriesOption } from 'echarts'
-import { Chart } from './PlatformUI'
+import { SampleChart } from './SampleChart'
 import { api } from './api'
 import type { Point } from './CstrWorkspace'
 
@@ -68,6 +68,7 @@ export function TrendChart({ title, series, axis, rows, domain, comparison, band
   vertical?: VerticalZoom
 }) {
   const [first, second] = series
+  const samples = useMemo(() => rows.filter(row => Number.isFinite(row[1])), [rows])
   const option = useMemo<EChartsOption>(() => {
     const lines: LineSeriesOption[] = [first, second].map((name, index) => ({
       name, type: 'line', showSymbol: rows.length === 1,
@@ -85,7 +86,6 @@ export function TrendChart({ title, series, axis, rows, domain, comparison, band
     return {
       animation: false,
       color: ['#69baff', '#f4bd73', '#c6a6ff'],
-      tooltip: { trigger: 'axis' },
       legend: { top: 0, textStyle: { color: '#d7e7f8' } },
       grid: domain ? liveGrid : { top: 32, left: 8, right: 14, bottom: 35, containLabel: true },
       xAxis: { type: 'value', scale: true, min: domain?.[0], max: domain?.[1],
@@ -105,7 +105,14 @@ export function TrendChart({ title, series, axis, rows, domain, comparison, band
   return <section aria-label={title} data-metric={metric}>
     <h4>{title}{vertical && <span className="cstr-y-scale">
       {vertical.level ? '纵轴 ×' + 2 ** vertical.level : '纵轴已平移'}</span>}</h4>
-    <Chart option={option} height={205} fill={!!metric} />
+    <SampleChart option={option} height={205} fill={!!metric} samples={samples} timeOf={row=>row[0]}
+      epoch={axis==='轮次'} unit={metric==='temperature' ? 'K' : metric==='flow' ? 'L/min' : ''}
+      readingsOf={row=>{
+        const values: [string, number][] = [[first, row[1]], [second, row[2]]]
+        const hold = comparison?.find(([t, v]) => Math.abs(t-row[0]) < 1e-9 && Number.isFinite(v))
+        if (hold) values.push(['恒流对照', hold[1]])
+        return values
+      }}/>
   </section>
 }
 

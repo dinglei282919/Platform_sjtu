@@ -1,8 +1,9 @@
 """Native cards and wrapping form rows for the risk-control workspace."""
 from html import escape
 
-from PySide6.QtCore import QRect, QSize, Qt
-from PySide6.QtWidgets import (QFrame, QGridLayout, QLabel, QLayout, QScrollArea,
+from PySide6.QtCore import QEvent, QRect, QSize, Qt
+from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel, QLayout, QPushButton, QScrollArea,
                                QSizePolicy, QVBoxLayout, QWidget)
 
 
@@ -12,6 +13,36 @@ def label(text, role="hint"):
     widget.setObjectName(role)
     widget.setWordWrap(True)
     return widget
+
+
+class RunningValue(QLabel):
+    """Show the effective session value underneath a locally edited parameter."""
+    def __init__(self, form, box):
+        super().__init__()
+        self.box = box
+        self.actual = None
+        self.setObjectName("hint")
+        self.setWordWrap(True)
+        form.fields[box].layout().addWidget(self)
+        self.hide()
+        box.valueChanged.connect(self._refresh)
+
+    def sync(self, value, *, restore=False):
+        if self.actual == value and not restore:
+            return
+        previous = self.actual
+        self.actual = value
+        if restore or previous is None or self.box.textFromValue(previous) == self.box.textFromValue(self.box.value()):
+            self.box.setValue(value)
+        self._refresh()
+
+    def _refresh(self):
+        if self.actual is None:
+            return
+        actual = self.box.textFromValue(self.actual)
+        pending = self.box.textFromValue(self.box.value()) != actual
+        self.setText(f"当前运行值 {actual}，修改待应用" if pending else "")
+        self.setVisible(pending)
 
 
 class StatusStrip(QLabel):
@@ -117,7 +148,7 @@ class FieldGrid(QWidget):
         self.entries.append((widget, wide))
         self.arrange()
 
-    def add_field(self, title, control, wide=False):
+    def add_field(self, title, control, wide=False, beside=None):
         cell = QWidget()
         column = QVBoxLayout(cell)
         column.setContentsMargins(0, 0, 0, 0)
@@ -128,9 +159,25 @@ class FieldGrid(QWidget):
         control.setMinimumWidth(0)
         control.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
         column.addWidget(name)
-        column.addWidget(control)
+        if beside is None:
+            column.addWidget(control)
+        else:
+            row = QHBoxLayout()
+            row.setSpacing(self.grid.horizontalSpacing())
+            row.addWidget(control, 1, Qt.AlignVCenter)
+            row.addWidget(beside, 1, Qt.AlignVCenter)
+            column.addLayout(row)
         self.fields[control] = cell
-        self.add_item(cell, wide)
+        cell.installEventFilter(self)
+        self.add_item(cell, wide or beside is not None)
+
+    def eventFilter(self, cell, event):
+        if event.type() in (QEvent.LayoutRequest, QEvent.Resize):
+            # Keep wrapped hints and newly visible running values inside the field.
+            height = cell.heightForWidth(cell.width())
+            if height >= 0 and height != cell.minimumHeight():
+                cell.setMinimumHeight(height)
+        return super().eventFilter(cell, event)
 
     def add_hint(self, control, text):
         hint = label(text)
@@ -172,6 +219,7 @@ class FieldGrid(QWidget):
 class StagePage(QScrollArea):
     def __init__(self):
         super().__init__()
+        self.simulation_bar = None
         self.setWidgetResizable(True)
         self.setFrameShape(QFrame.NoFrame)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -201,6 +249,32 @@ class StagePage(QScrollArea):
     def display(self):
         return self.panels[1].layout()
 
+    def add_simulation_bar(self, command):
+        self.simulation_bar = QFrame(self)
+        row = QHBoxLayout(self.simulation_bar)
+        row.setContentsMargins(4, 0, 4, 6)
+        self.simulation_clock = label("", "guide")
+        self.simulation_button = QPushButton("暂停仿真")
+        self.simulation_button.setToolTip("暂停或继续当前仿真（Pause 键）")
+        self.simulation_button.setEnabled(False)
+        self.simulation_button.clicked.connect(lambda: command(self.simulation_action))
+        self.pause_shortcut = QShortcut(QKeySequence(Qt.Key_Pause), self)
+        self.pause_shortcut.setContext(Qt.WindowShortcut)
+        self.pause_shortcut.setAutoRepeat(False)
+        self.pause_shortcut.activated.connect(self.simulation_button.click)
+        row.addWidget(self.simulation_clock, 1)
+        row.addWidget(self.simulation_button)
+        height = self.simulation_bar.sizeHint().height()
+        self.setViewportMargins(0, height, 0, 0)
+        self.simulation_bar.setGeometry(0, 0, self.width(), height)
+
+    def show_simulation_state(self, state, time_min):
+        self.simulation_action = "resume" if state in ("paused", "ready") else "pause"
+        self.simulation_button.setText("继续仿真" if self.simulation_action == "resume" else "暂停仿真")
+        self.simulation_button.setEnabled(state in ("running", "paused", "ready"))
+        title = {"paused": "已暂停", "running": "运行中", "ended": "已结束"}.get(state, "就绪")
+        self.simulation_clock.setText(f"{title}　仿真时间 {time_min:.1f} min")
+
     def set_columns(self, stacked):
         if stacked == self.stacked:
             return
@@ -215,5 +289,7 @@ class StagePage(QScrollArea):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        if self.simulation_bar is not None:
+            self.simulation_bar.resize(self.width(), self.viewportMargins().top())
         self.set_columns(self.width() <= 728)
 

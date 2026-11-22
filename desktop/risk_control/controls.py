@@ -1,5 +1,5 @@
 from PySide6.QtCore import QPointF, Qt
-from PySide6.QtGui import QColor, QPainter, QPen, QPolygonF
+from PySide6.QtGui import QColor, QPainter, QPen, QPolygonF, QValidator
 from PySide6.QtWidgets import (QAbstractSpinBox, QComboBox, QDoubleSpinBox, QSpinBox,
                                QStyle, QStyleOptionComboBox, QStyleOptionSpinBox, QTabBar, QTabWidget)
 
@@ -11,6 +11,21 @@ class _ScrollParameters:
 
 
 class _ControlSpinButtons(_ScrollParameters):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.setKeyboardTracking(False)
+        self.setCorrectionMode(QAbstractSpinBox.CorrectToPreviousValue)
+
+    def validate(self, text, pos):
+        state, text, pos = super().validate(text, pos)
+        # Keep the whole draft. Rejecting a final digit would commit a valid prefix instead.
+        if state == QValidator.Invalid:
+            state = QValidator.Intermediate
+        return state, text, pos
+
+    def preview_value(self):
+        return self.valueFromText(self.lineEdit().text()) if self.hasAcceptableInput() else self.value()
+
     def paintEvent(self, event):
         super().paintEvent(event)
         if self.buttonSymbols() == QAbstractSpinBox.NoButtons:

@@ -6,8 +6,8 @@ from unittest.mock import Mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QPoint, QPointF, QSignalBlocker, Qt
-from PySide6.QtGui import QWheelEvent
+from PySide6.QtCore import QEvent, QPoint, QPointF, QSignalBlocker, Qt
+from PySide6.QtGui import QMouseEvent, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QScrollArea
 
@@ -61,6 +61,38 @@ class DesktopTrendTests(unittest.TestCase):
         QTest.mouseMove(view, end)
         QTest.mouseRelease(view, Qt.LeftButton, Qt.NoModifier, end)
         self.app.processEvents()
+
+    def test_hover_keeps_one_sample_through_redraws_until_pointer_moves_or_leaves(self):
+        w = self.workspace
+        w._pin_window(115)
+        chart = w.temp
+        self.app.processEvents()
+
+        def hover(fraction):
+            viewport = chart.viewport()
+            pos = self.plot_position(chart, fraction)
+            event = QMouseEvent(QEvent.MouseMove, QPointF(pos), QPointF(viewport.mapToGlobal(pos)),
+                                Qt.NoButton, Qt.NoButton, Qt.NoModifier)
+            self.app.sendEvent(viewport, event)
+
+        hover((135-115)/TREND_INTERVALS)
+        self.assertTrue(chart.sample_tip.isVisible())
+        selected = chart.sample_time
+        text = chart.sample_tip.text()
+        self.assertIn(f"仿真时间 {selected:.1f} min", text)
+        self.assertIn("恒流对照　434 K", text)
+        self.assertIn("设定值　433 K", text)
+        for start in (125, 240, 400):
+            w._pin_window(start)
+            self.app.processEvents()
+            self.assertEqual(chart.sample_time, selected)
+            self.assertEqual(chart.sample_tip.text(), text)
+            self.assertTrue(chart.sample_tip.isVisible())
+        hover(.7)
+        self.assertNotEqual(chart.sample_time, selected)
+        self.assertNotIn("恒流对照", chart.sample_tip.text())
+        self.app.sendEvent(chart.viewport(), QEvent(QEvent.Leave))
+        self.assertTrue(chart.sample_tip.isHidden())
 
     def test_plain_wheel_scrolls_page_and_toolbar_keeps_time_window_synchronized(self):
         w = self.workspace
@@ -130,6 +162,8 @@ class DesktopTrendTests(unittest.TestCase):
         self.assertEqual(w.pinned, first)
         self.assertIsNotNone(w.flow.manual_y_range)
         before = w.last_run, w.last_seq, list(w.rows)
+        QTest.mouseDClick(w.flow.viewport(), Qt.LeftButton, Qt.NoModifier, QPoint(2, 2))
+        self.assertEqual(w.pinned, first)
         QTest.mouseDClick(w.flow.viewport(), Qt.LeftButton, Qt.NoModifier, self.plot_position(w.flow))
         self.app.processEvents()
         self.assertIsNone(w.pinned)

@@ -1,17 +1,19 @@
 """Qt adapter for the shared live CSTR service."""
 import json
 import math
+from bisect import bisect_left
+from operator import itemgetter
 from pathlib import Path
 from uuid import uuid4
 
 from PySide6.QtCharts import QChart, QChartView, QLineSeries, QValueAxis
-from PySide6.QtCore import QCoreApplication, QMargins, QPointF, QRectF, QSignalBlocker, Qt, QTimer, Signal
+from PySide6.QtCore import QCoreApplication, QEvent, QMargins, QPointF, QRectF, QSignalBlocker, Qt, QTimer, Signal
 from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import (QCheckBox, QFileDialog, QFrame, QHBoxLayout, QLabel,
                                QProgressBar, QPushButton, QScrollArea, QSizePolicy, QSlider,
                                QStackedWidget, QVBoxLayout, QWidget)
 from platform_core.task_manager import TaskManager
-from platform_core.risk_control import presentation
+from platform_core.risk_control import HEALING_TITLE, presentation
 from platform_core.risk_control.cstr import SAMPLE_MIN, TREND_INTERVALS, TREND_MAX_INTERVALS
 from platform_core.risk_control.disturbance import options as disturbance_options
 from platform_core.risk_control.dnn_mpc import dataset
@@ -36,10 +38,22 @@ class Trend(QChartView):
     restore_live = Signal()
     scale_changed = Signal()
 
-    def __init__(self, title, names, x_title):
+    def __init__(self, title, names, x_title, unit=""):
         chart = QChart()
         super().__init__(chart)
         self.pan_origin = None
+        self.sample_unit = unit
+        self.sample_digits = None
+        self.sample_time = None
+        self.sample_context = None
+        self.sample_rows = self.sample_groups = ()
+        self.sample_tip = QLabel(self.viewport())
+        self.sample_tip.setTextFormat(Qt.PlainText)
+        self.sample_tip.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.sample_tip.setStyleSheet("background: #10243a; color: #e6f2ff; border: 1px solid #476986;"
+                                     "border-radius: 5px; padding: 4px 8px; font-size: 12px;")
+        self.sample_tip.hide()
+        self.setMouseTracking(True)
         self.domain = None
         self.y_zoom_level = 0
         self.manual_y_range = None
@@ -77,8 +91,8 @@ class Trend(QChartView):
         for i, name in enumerate(names):
             series = QLineSeries()
             series.setName(name)
-            series.setPen(QPen(QColor(("#69baff", "#f4bd73")[i]),
-                          2, Qt.SolidLine if i == 0 else Qt.DashLine))
+            color = ("#69baff", "#f4bd73")[i % 2]
+            series.setPen(QPen(QColor(color), 2, Qt.SolidLine if i == 0 else Qt.DashLine))
             chart.addSeries(series)
             for axis in self.axes:
                 series.attachAxis(axis)
@@ -87,7 +101,54 @@ class Trend(QChartView):
         self.setMinimumHeight(135)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
+    def clear_sample(self):
+        if self.sample_time is not None:
+            self.sample_time = None
+            self.sample_tip.hide()
+            self.viewport().update()
+
+    def viewportEvent(self, event):
+        if event.type() in (QEvent.Leave, QEvent.Hide) and hasattr(self, "sample_tip"):
+            self.clear_sample()
+        return super().viewportEvent(event)
+
+    def inspect_sample(self, position):
+        chart = self.chart()
+        plot = chart.plotArea()
+        point = chart.mapFromScene(self.mapToScene(position.toPoint()))
+        rows = self.sample_rows
+        if not rows or plot.isEmpty() or not plot.contains(point):
+            return self.clear_sample()
+        axis = self.axes[0]
+        step = (axis.max()-axis.min()) / plot.width()
+        at = axis.min() + (point.x()-plot.left()) * step
+        if not rows[0][0]-6*step <= at <= rows[-1][0]+6*step:
+            return self.clear_sample()
+        i = min(bisect_left(rows, at, key=itemgetter(0)), len(rows)-1)
+        if i and at-rows[i-1][0] <= rows[i][0]-at:
+            i -= 1
+        row = rows[i]
+        self.sample_time = row[0]
+        values = [(line.name(), value) for line, value in zip(self.lines, row[1:])]
+        for group in self.sample_groups:
+            j = bisect_left(group, row[0]-1e-9, key=itemgetter(0))
+            if j < len(group) and abs(group[j][0]-row[0]) < 1e-9:
+                values.append(("恒流对照", group[j][1]))
+                break
+        title = f"轮次 {row[0]:g}" if axis.titleText()=="轮次" else f"仿真时间 {row[0]:.1f} min"
+        fmt = ".7g" if self.sample_digits is None else f".{self.sample_digits}f"
+        unit = " "+self.sample_unit if self.sample_unit else ""
+        self.sample_tip.setText("\n".join([title, *(f"{name}　{value:{fmt}}{unit}" for name, value in values if math.isfinite(value))]))
+        self.sample_tip.adjustSize()
+        top = self.mapFromScene(chart.mapToScene(plot.topLeft())).y()
+        side = 8 if point.x() > plot.center().x() else max(0, self.viewport().width()-self.sample_tip.width()-8)
+        self.sample_tip.move(side, top)
+        self.sample_tip.show()
+        self.sample_tip.raise_()
+        self.viewport().update()
+
     def mousePressEvent(self, event):
+        self.clear_sample()
         if self.domain and event.button() == Qt.LeftButton:
             chart = self.chart()
             plot = chart.plotArea()
@@ -113,6 +174,8 @@ class Trend(QChartView):
                 self.pan_to.emit(left - delta.x() * (right-left) / plot.width())
             event.accept()
             return
+        if not event.buttons():
+            self.inspect_sample(event.position())
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
@@ -124,7 +187,9 @@ class Trend(QChartView):
         super().mouseReleaseEvent(event)
 
     def mouseDoubleClickEvent(self, event):
-        if self.domain and event.button() == Qt.LeftButton:
+        chart = self.chart()
+        point = chart.mapFromScene(self.mapToScene(event.position().toPoint()))
+        if self.domain and event.button() == Qt.LeftButton and chart.plotArea().contains(point):
             self.restore_live.emit()
             event.accept()
             return
@@ -179,6 +244,7 @@ class Trend(QChartView):
         self._apply_y_range()
 
     def reset_y_scale(self):
+        self.clear_sample()
         self.pan_origin = None
         if self.domain:
             self.viewport().setCursor(Qt.OpenHandCursor)
@@ -202,19 +268,30 @@ class Trend(QChartView):
 
     def drawForeground(self, painter, rect):
         super().drawForeground(painter, rect)
-        if not getattr(self, "pulse_bands", None) or not self.domain:
+        at = getattr(self, "sample_time", None)
+        if not getattr(self, "pulse_bands", None) and at is None:
             return
         area = self.chart().mapRectToScene(self.chart().plotArea())
-        left, right = self.domain
+        left, right = self.axes[0].min(), self.axes[0].max()
+        if area.isEmpty() or right <= left:
+            return
         scale = area.width() / (right-left)
         painter.save()
         painter.setClipRect(area, Qt.IntersectClip)
         for start, end in self.pulse_bands:
             band = QRectF(area.left() + (start-left)*scale, area.top(), (end-start)*scale, area.height())
             painter.fillRect(band, QColor(237, 185, 103, 34))
+        if at is not None and left <= at <= right:
+            x = area.left() + (at-left)*scale
+            painter.setPen(QPen(QColor("#c2d5e6"), 1, Qt.DashLine))
+            painter.drawLine(QPointF(x, area.top()), QPointF(x, area.bottom()))
         painter.restore()
 
-    def draw(self, rows, domain=None, groups=(), bands=()):
+    def draw(self, rows, domain=None, groups=(), bands=(), *, context=None):
+        if context != self.sample_context or not rows:
+            self.clear_sample()
+        self.sample_context = context
+        self.sample_rows, self.sample_groups = rows, groups
         if domain and self.domain is None:
             self.viewport().setCursor(Qt.OpenHandCursor)
         self.domain = domain
@@ -264,7 +341,7 @@ def deferred_page(overview):
     texts = (("综合仿真展示待接入" if overview else "仿真界面待接入", "heading"),
              ("四种控制算法接入后，这里将展示统一 CSTR 的仿真结果。" if overview
               else "该子模块的仿真界面将在后续阶段接入。", "guide"),
-             ("当前可从顶部“风险管控优化决策”菜单选择“深度神经网络优化控制”，进入模型训练或在线仿真。", "guide"))
+             ("从顶部“风险管控优化决策”菜单可进入深度神经网络优化控制或多变量过程自愈控制。", "guide"))
     for text, role in texts:
         line = label(text, role)
         line.setAlignment(Qt.AlignCenter)
@@ -295,14 +372,14 @@ def describe_number(form, key, box):
         form.add_hint(box, template.format(**bounds))
 
 
-def field(form, label, lo, hi, value, step=1, decimals=0):
+def field(form, label, lo, hi, value, step=1, decimals=0, *, beside=None, wide=False):
     box = ControlDoubleSpinBox() if decimals else ControlSpinBox()
     if decimals:
         box.setDecimals(decimals)
     box.setRange(lo, hi)
     box.setSingleStep(step)
     box.setValue(value)
-    form.add_field(label, box)
+    form.add_field(label, box, beside=beside, wide=wide)
     return box
 
 
@@ -337,6 +414,7 @@ class RiskWorkspace(QWidget):
         self.workflow = ControlTabWidget()
         self.pages.addWidget(deferred_page(True))
         self.pages.addWidget(self.workflow)
+        self.healing_page = None
         for _ in NAVIGATION[2:]:
             self.pages.addWidget(deferred_page(False))
         self._training_page()
@@ -349,9 +427,18 @@ class RiskWorkspace(QWidget):
         self.timer.start(300)
 
     def select_page(self, name):
+        index = NAVIGATION.index(name) if name in NAVIGATION else 0
+        if name == HEALING_TITLE and self.healing_page is None:
+            from .healing_page import HealingPage
+            page = HealingPage(self.service.healing)
+            previous = self.pages.widget(index)
+            self.pages.removeWidget(previous)
+            previous.deleteLater()
+            self.pages.insertWidget(index, page)
+            self.healing_page = page
         if name == NAVIGATION[1]:
             self.workflow.setCurrentIndex(1)
-        self.pages.setCurrentIndex(NAVIGATION.index(name) if name in NAVIGATION else 0)
+        self.pages.setCurrentIndex(index)
 
     def _button(self, text, fn, role="primary"):
         button = QPushButton(text)
@@ -539,8 +626,8 @@ class RiskWorkspace(QWidget):
         pane.addLayout(FlowRow(self.history_label, self.history_slider, span_group, self.reset_scale, self.follow,
                                grow=self.history_slider))
         pane.addWidget(label("左键拖动平移曲线，双击恢复默认实时视图。滚轮滚动页面，Shift + 滚轮缩放当前纵轴。", "guide"))
-        self.temp = Trend("釜内温度 (K)", ("实际釜温", "设定值"), "仿真时间 (min)")
-        self.flow = Trend("冷却液流量 (L/min)", ("实际施加", "控制指令"), "仿真时间 (min)")
+        self.temp = Trend("釜内温度 (K)", ("实际釜温", "设定值"), "仿真时间 (min)", "K")
+        self.flow = Trend("冷却液流量 (L/min)", ("实际施加", "控制指令"), "仿真时间 (min)", "L/min")
         for chart in (self.temp, self.flow):
             chart.setMinimumHeight(260)
             chart.pan_to.connect(self._drag_time)
@@ -717,7 +804,7 @@ class RiskWorkspace(QWidget):
         self.pulse_key.setVisible(bool(bands or groups))
         for chart, actual, target, column in ((self.temp, "T", "T_ref", 1), (self.flow, "Qc", "Qc_cmd", 2)):
             curves = [[(point[0], point[column]) for point in group] for group in groups]
-            chart.draw([(r["t"], r[actual], r[target]) for r in rows], domain, curves, bands)
+            chart.draw([(r["t"], r[actual], r[target]) for r in rows], domain, curves, bands, context=self.last_run)
         self.history_slider.blockSignals(True)
         self.history_slider.setRange(1-span, max(0, self.last_seq-1))
         self.history_slider.setValue(first)
@@ -739,7 +826,7 @@ class RiskWorkspace(QWidget):
                 self.loss.setVisible(bool(history))
                 self.loss.heading.setVisible(bool(history))
                 if history:
-                    self.loss.draw(history)
+                    self.loss.draw(history, context=self.training_id)
                 state = task["status"]
                 self.train_msg.show_state(state, STATUS.get(state, state), task.get("error") or progress.get("message"))
                 if state in ("succeeded", "failed", "cancelled"):
@@ -830,6 +917,8 @@ class RiskWorkspace(QWidget):
 
     def shutdown(self):
         self.closed = True
+        if self.healing_page is not None:
+            self.healing_page.stop_display()
         self.timer.stop()
         self.svg.set_running(False)
         if self.training_id:

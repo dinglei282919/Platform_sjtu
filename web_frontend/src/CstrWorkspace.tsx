@@ -6,7 +6,9 @@ import { FormNumber, Page } from './PlatformUI'
 import parameterHelp from '../../assets/cstr/parameter-help.json'
 import { api, ApiError, post } from './api'
 import { useTask } from './useTask'
-import { readSession, writeSession, useStoredState } from './taskSession'
+import { useStoredState } from './taskSession'
+import { dnnOwner, emptyHandle, healingOwner, useLivePresence } from './cstrOwner'
+import { HealingPage } from './HealingPage'
 
 export type RiskId =
   | 'risk-overview'
@@ -17,9 +19,9 @@ export type RiskId =
 export const riskEntries: { id: RiskId; name: string }[] = [
   { id: 'risk-overview', name: '综合仿真展示' },
   { id: 'dnn-mpc', name: '深度神经网络优化控制' },
+  { id: 'self-healing', name: '多变量过程自愈控制' },
   { id: 'fdi', name: '虚假数据注入下的自适应控制仿真' },
   { id: 'replay', name: '重放攻击下的自适应控制仿真' },
-  { id: 'self-healing', name: '多变量过程自愈控制仿真' },
 ]
 const stages = [
   '风险场景下控制系统智能模型训练算法',
@@ -75,7 +77,6 @@ type Config = {
   training: Train
   models: { id: string; version: string; label: string }[]
 }
-type Handle = { id: string; owner: string }
 export type Point = {
   seq: number
   t: number
@@ -138,88 +139,10 @@ type Task = {
     validation?: { reasons: string[] }
   }
 }
-const sessionKey = 'cstr-control-owner'
-const emptyHandle: Handle = { id: '', owner: '' }
-function storedHandle(): Handle | null {
-  const handle = readSession(sessionKey, emptyHandle)
-  return handle.id && handle.owner ? handle : null
-}
-function owned<T>(
-  h: Handle,
-  path: string,
-  body?: unknown,
-  keepalive = false,
-): Promise<T> {
-  const headers: Record<string, string> = {
-    'X-Control-Owner': h.owner,
-    'Content-Type': 'application/json',
-  }
-  return api<T>('/cstr/sessions/' + h.id + path, {
-    headers,
-    keepalive,
-    method: body === undefined ? 'GET' : 'POST',
-    body: body === undefined ? undefined : JSON.stringify(body),
-  })
-}
-function saveHandle(handle: Handle) {
-  writeSession(sessionKey, handle)
-  window.dispatchEvent(new Event('cstr-owner-changed'))
-}
-
-// This connection belongs to the platform shell, which stays mounted across navigation.
+const { ensure: ensureHandle, request: owned, save: saveHandle } = dnnOwner
 export function useCstrPresence() {
-  useEffect(() => {
-    let connection: AbortController | undefined
-    let timer: number
-    function connect() {
-      connection?.abort()
-      clearTimeout(timer)
-      const handle = storedHandle()
-      if (!handle) return
-      const controller = new AbortController()
-      connection = controller
-      async function listen(h: Handle) {
-        try {
-          const response = await fetch('/api/cstr/sessions/' + h.id + '/presence', {
-            headers: { 'X-Control-Owner': h.owner }, signal: controller.signal,
-          })
-          if (response.status === 404 && storedHandle()?.id === h.id && !controller.signal.aborted) {
-            saveHandle(emptyHandle)
-            return
-          }
-          if (!response.ok || !response.body) throw new Error('连接已断开')
-          const reader = response.body.getReader()
-          try { while (!(await reader.read()).done) { /* The open stream holds the owner's lease. */ } }
-          finally { reader.releaseLock() }
-        } catch { /* Reconnect after a temporary network failure. */ }
-        if (!controller.signal.aborted) timer = window.setTimeout(connect, 1500)
-      }
-      void listen(handle)
-    }
-    connect()
-    window.addEventListener('cstr-owner-changed', connect)
-    return () => {
-      window.removeEventListener('cstr-owner-changed', connect)
-      connection?.abort()
-      clearTimeout(timer)
-    }
-  }, [])
-}
-
-let creating: Promise<Handle> | null = null
-async function ensureHandle(): Promise<Handle> {
-  const saved = storedHandle()
-  if (saved) return saved
-  if (!creating)
-    creating = post<Handle>('/cstr/sessions', { auto_start: true })
-      .then((h) => {
-        saveHandle({ id: h.id, owner: h.owner })
-        return h
-      })
-      .finally(() => {
-        creating = null
-      })
-  return creating
+  useLivePresence(dnnOwner)
+  useLivePresence(healingOwner)
 }
 async function loadConfig(): Promise<Config> {
   const config = await api<Config | null>('/cstr/config')
@@ -510,6 +433,7 @@ function CstrPage({ active }: { active: RiskId }) {
   }
   const error = message || (stage === 0 ? trainingError : '')
   if (!isDnn) {
+    if (active === 'self-healing') return <HealingPage />
     const overview = active === 'risk-overview'
     return <Page title={riskEntries.find(entry => entry.id === active)?.name ?? '风险管控优化决策'}>
       <section className="deferred">
@@ -517,7 +441,7 @@ function CstrPage({ active }: { active: RiskId }) {
         <p>{overview
           ? '四种控制算法接入后，这里将展示统一 CSTR 的仿真结果。'
           : '该子模块的 Web 仿真界面将在后续阶段接入。'}</p>
-        <p>当前可从顶部“风险管控优化决策”菜单选择“深度神经网络优化控制”，进入模型训练或在线仿真。</p>
+        <p>从顶部“风险管控优化决策”菜单可进入深度神经网络优化控制或多变量过程自愈控制。</p>
       </section>
     </Page>
   }
