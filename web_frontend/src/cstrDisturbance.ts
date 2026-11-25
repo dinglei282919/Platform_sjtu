@@ -1,3 +1,13 @@
+export const speedLimits = [0.25, 10] as const
+
+export function pulseDurationHint(minutes: number, speed: number, appliedSpeed?: number) {
+  if (!(speed >= speedLimits[0] && speed <= speedLimits[1])) return '—'
+  const pending = appliedSpeed !== undefined && speed !== appliedSpeed
+  const seconds = Math.round(minutes * 600 / speed) / 10
+  return `${minutes.toFixed(1)} 仿真分钟，按设定 ${speed}× 约 ${seconds.toFixed(1)} 秒`
+    + (pending ? '（待应用）' : '')
+}
+
 export type PulseReceipt = {
   kind: 'disturbance' | 'clear_disturbance'
   key: string

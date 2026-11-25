@@ -1,4 +1,5 @@
 import { Chart, FormNumber, Page } from './PlatformUI'
+import { ErrorDialog } from './ErrorDialog'
 import { CstrWorkspace, riskEntries, useCstrPresence, type RiskId } from './CstrWorkspace'
 import { useCallback, useEffect, useMemo, useRef, useState, type FocusEvent } from 'react'
 import * as echarts from 'echarts'
@@ -242,22 +243,6 @@ function TaskPanel({ task }: { task: Task | null }) {
     <div className="task-title"><span className={`status-dot ${task.status}`} />{task.title}：{task.status}</div>
     <pre>{task.logs.join('\n')}{task.error ? `\n错误：${task.error}` : ''}</pre>
   </section>
-}
-
-function ErrorDialog({ title, message, onClose }: { title: string; message: string; onClose: () => void }) {
-  const dialogRef = useRef<HTMLDialogElement>(null)
-  useEffect(() => {
-    const dialog = dialogRef.current
-    if (dialog && !dialog.open) dialog.showModal()
-    return () => {
-      if (dialog?.open) dialog.close()
-    }
-  }, [])
-  return <dialog ref={dialogRef} className="anomaly-error-dialog" role="alertdialog" aria-modal="true" aria-labelledby="anomaly-error-dialog-title" aria-describedby="anomaly-error-dialog-message" onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); onClose() } }} onCancel={event => { event.preventDefault(); onClose() }}>
-    <header><h3 id="anomaly-error-dialog-title">{title}</h3><button type="button" className="anomaly-dialog-close" aria-label="关闭错误弹窗" onClick={onClose}>×</button></header>
-    <div id="anomaly-error-dialog-message" className="anomaly-dialog-message">{message}</div>
-    <footer><button type="button" autoFocus onClick={onClose}>确定</button></footer>
-  </dialog>
 }
 
 function AnomalyPage() {

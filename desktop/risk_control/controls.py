@@ -1,6 +1,6 @@
 from PySide6.QtCore import QPointF, Qt
 from PySide6.QtGui import QColor, QPainter, QPen, QPolygonF, QValidator
-from PySide6.QtWidgets import (QAbstractSpinBox, QComboBox, QDoubleSpinBox, QSpinBox,
+from PySide6.QtWidgets import (QAbstractSpinBox, QComboBox, QDoubleSpinBox, QMessageBox, QSpinBox,
                                QStyle, QStyleOptionComboBox, QStyleOptionSpinBox, QTabBar, QTabWidget)
 
 
@@ -13,6 +13,7 @@ class _ScrollParameters:
 class _ControlSpinButtons(_ScrollParameters):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self._input_warning = None
         self.setKeyboardTracking(False)
         self.setCorrectionMode(QAbstractSpinBox.CorrectToPreviousValue)
 
@@ -25,6 +26,50 @@ class _ControlSpinButtons(_ScrollParameters):
 
     def preview_value(self):
         return self.valueFromText(self.lineEdit().text()) if self.hasAcceptableInput() else self.value()
+
+    def _invalid_message(self):
+        if self._input_warning is not None or self.hasAcceptableInput():
+            return None
+        draft = self.cleanText().strip()
+        reason = f"输入值 {draft} 无效" if draft else "输入不能为空"
+        digits = self.decimals() if isinstance(self, QDoubleSpinBox) else 0
+        kind = f"数值，最多 {digits} 位小数" if digits else "整数"
+        return (f"{self.accessibleName() or '参数'}\n{reason}。允许范围为 {self.textFromValue(self.minimum())}"
+                f" 至 {self.textFromValue(self.maximum())}，请填写{kind}。\n"
+                f"已恢复为上一次确认的值 {self.textFromValue(self.value())}。")
+
+    def _show_input_warning(self, message):
+        dialog = QMessageBox(QMessageBox.Warning, "参数输入无效", message, QMessageBox.Ok, self)
+        self._input_warning = dialog
+        dialog.setTextFormat(Qt.PlainText)
+        dialog.setAttribute(Qt.WA_DeleteOnClose)
+        dialog.button(QMessageBox.Ok).setText("确定")
+        dialog.finished.connect(self._dismiss_input_warning)
+        dialog.open()
+
+    def _dismiss_input_warning(self):
+        self._input_warning = None
+        if self.isVisible():
+            self.window().activateWindow()
+            self.setFocus(Qt.OtherFocusReason)
+            self.selectAll()
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+            message = self._invalid_message()
+            if message:
+                self.interpretText()
+                self._show_input_warning(message)
+                event.accept()
+                return
+        super().keyPressEvent(event)
+
+    def focusOutEvent(self, event):
+        # Qt replaces an intermediate draft during focusOutEvent. Read it before correction.
+        message = self._invalid_message() if self.isVisible() and event.reason() != Qt.ActiveWindowFocusReason else None
+        super().focusOutEvent(event)
+        if message:
+            self._show_input_warning(message)
 
     def paintEvent(self, event):
         super().paintEvent(event)
@@ -124,9 +169,6 @@ def control_page_style(root):
     QWidget#ROOT QPushButton:focus, QWidget#ROOT QAbstractSpinBox:focus, QWidget#ROOT QComboBox:focus { border-color: #79baff; }
     QWidget#ROOT QProgressBar { color: #d7e7f8; background: #203043; border: 1px solid #456078; border-radius: 4px; max-height: 8px; }
     QWidget#ROOT QProgressBar::chunk { background: #68bfff; border-radius: 3px; }
-    QWidget#ROOT QSlider::groove:horizontal { height: 6px; border-radius: 3px; background: #30465d; }
-    QWidget#ROOT QSlider::sub-page:horizontal, QWidget#ROOT QSlider::handle:horizontal { background: #68bfff; border-radius: 3px; }
-    QWidget#ROOT QSlider::handle:horizontal { width: 14px; margin: -4px 0; border-radius: 7px; }
     QWidget#ROOT QScrollBar:vertical { background: #10223a; width: 9px; }
     QWidget#ROOT QScrollBar::handle:vertical { background: #395570; min-height: 28px; border-radius: 4px; }
     QWidget#ROOT QScrollBar::add-line:vertical, QWidget#ROOT QScrollBar::sub-line:vertical { height: 0; }

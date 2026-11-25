@@ -1,5 +1,7 @@
-import { useEffect, useId, useRef, useState, type FocusEvent, type ReactNode } from 'react'
+import { useEffect, useId, useRef, useState, type FocusEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import * as echarts from 'echarts'
+import { ErrorDialog } from './ErrorDialog'
 
 export function Page({ title, subtitle, className, children }: {
   title: string
@@ -13,6 +15,30 @@ export function Page({ title, subtitle, className, children }: {
     {subtitle && <p className="page-subtitle">{subtitle}</p>}
     {children}
   </main>
+}
+
+export function StageSwitch({id, label, tabs, selected, select}: {
+  id: string; label: string; tabs: readonly string[]; selected: number; select: (index: number) => void
+}) {
+  function onKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>, index: number) {
+    let next: number
+    switch (event.key) {
+      case 'ArrowRight': next = (index + 1) % tabs.length; break
+      case 'ArrowLeft': next = (index + tabs.length - 1) % tabs.length; break
+      case 'Home': next = 0; break
+      case 'End': next = tabs.length - 1; break
+      default: return
+    }
+    event.preventDefault()
+    select(next)
+    document.getElementById(id + '-' + next)?.focus()
+  }
+  return <div className="view-switches" role="tablist" aria-label={label}>
+    {tabs.map((name, index) => <button type="button" role="tab" key={name} id={id + '-' + index}
+      aria-controls={id + '-panel'} aria-selected={selected === index} tabIndex={selected === index ? 0 : -1}
+      className={selected === index ? 'active' : ''} onClick={() => select(index)}
+      onKeyDown={event => onKeyDown(event, index)}>{name}</button>)}
+  </div>
 }
 
 export function SimulationBar({state, time, busy, command}: {
@@ -36,7 +62,7 @@ export function SimulationBar({state, time, busy, command}: {
     <span>{title}　仿真时间 {time?.toFixed(1) ?? '—'} min</span>
     <button ref={button} type="button" className="secondary" aria-keyshortcuts="Pause" title="暂停或继续当前仿真（Pause 键）"
       disabled={busy || !(resume || state==='running')} onClick={()=>command(resume?'resume':'pause')}>
-      {resume?'继续仿真':'暂停仿真'}</button>
+      {state==='ready'?'开始仿真':resume?'继续仿真':'暂停仿真'}</button>
   </div>
 }
 
@@ -62,10 +88,13 @@ type NumericEditorProps = Pick<NumberFieldProps, 'value' | 'min' | 'max' | 'step
 
 function NumericEditor({ value, min, max, step, decimals, disabled, onChange, onPreview, ...aria }: NumericEditorProps) {
   const [text, setText] = useState<string | null>(null)
+  const [warning, setWarning] = useState('')
+  const field = useRef<HTMLInputElement>(null)
   const rejected = useRef(false)
+  const pendingKey = useRef<string | null>(null)
   function checkInsertion(event: { preventDefault(): void }, inserted: string) {
-    // A native number input can silently discard letters from an otherwise valid prefix.
-    if (/[^0-9.eE+-]/.test(inserted)) {
+    // Permit an unfinished numeric fragment, including a sign or exponent while editing.
+    if (!/^[+-]?\d*\.?\d*(?:[eE][+-]?\d*)?$/.test(inserted)) {
       event.preventDefault()
       rejected.current = true
       onPreview?.(null)
@@ -75,14 +104,19 @@ function NumericEditor({ value, min, max, step, decimals, disabled, onChange, on
     const n = input.valueAsNumber
     return !rejected.current && Number.isFinite(n) && n >= min && n <= max && Number(n.toFixed(decimals)) === n ? n : null
   }
-  return <input type="number" {...aria} value={text ?? value} min={min} max={max} step={step} disabled={disabled}
+  return <><input ref={field} type="number" {...aria} value={text ?? value} min={min} max={max} step={step} disabled={disabled}
     onBeforeInput={event => checkInsertion(event, event.data ?? '')}
     onPaste={event => checkInsertion(event, event.clipboardData.getData('text'))}
+    onInput={() => { pendingKey.current = null }}
     onChange={event => {
       setText(event.currentTarget.value)
       onPreview?.(read(event.currentTarget))
     }}
     onKeyDown={event => {
+      if (event.key.length === 1 && !event.ctrlKey && !event.altKey && !event.metaKey && !event.nativeEvent.isComposing) {
+        checkInsertion(event, event.key)
+        pendingKey.current = event.defaultPrevented ? null : event.key
+      }
       if (event.key === 'Delete' || event.key === 'Backspace' || ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'a')) {
         rejected.current = false
       }
@@ -91,14 +125,36 @@ function NumericEditor({ value, min, max, step, decimals, disabled, onChange, on
         event.currentTarget.blur()
       }
     }}
+    onKeyUp={event => {
+      // Chromium silently drops a second decimal point or exponent without an input event.
+      if (pendingKey.current === event.key) {
+        rejected.current = true
+        onPreview?.(null)
+      }
+      pendingKey.current = null
+    }}
     onBlur={event => {
-      const next = read(event.currentTarget)
+      const input = event.currentTarget
+      if (pendingKey.current !== null) rejected.current = true
+      pendingKey.current = null
+      const next = read(input)
+      if (next === null && (text !== null || rejected.current || input.validity.badInput)) {
+        const reason = rejected.current || input.validity.badInput ? '请输入有效数字' :
+          input.value === '' ? '输入不能为空' : '输入值 '+input.value+' 无效'
+        const format = decimals === 0 ? '整数' : '数值，最多 '+decimals+' 位小数'
+        setWarning(aria['aria-label']+'\n'+reason+'。允许范围为 '+min+' 至 '+max+'，请填写'+format+'。\n已恢复为上一次确认的值 '+value+'。')
+      }
       if (text !== null && next !== null && next !== value) onChange(next)
-      event.currentTarget.value = String(next ?? value)
+      input.value = String(next ?? value)
       rejected.current = false
       setText(null)
       onPreview?.(null)
     }} />
+    {warning && createPortal(<ErrorDialog title="参数输入无效" message={warning} onClose={() => {
+      setWarning('')
+      requestAnimationFrame(()=>{field.current?.focus();field.current?.select()})
+    }}/>, document.body)}
+  </>
 }
 
 export function FormNumber({ label, value, min, max, step, onChange, onBlur, hint, describedBy, aside, decimals,

@@ -5,7 +5,7 @@ import { readSession, writeSession } from './taskSession'
 type Handle = { id: string; owner: string }
 export const emptyHandle: Handle = { id: '', owner: '' }
 
-function liveOwner(path: string, storage: string, event: string) {
+function liveOwner(path: string, storage: string, event: string, initial: object = {auto_start:true}) {
   let creating: Promise<Handle> | null = null
   function stored() {
     const h = readSession(storage, emptyHandle)
@@ -18,7 +18,7 @@ function liveOwner(path: string, storage: string, event: string) {
   async function ensure() {
     const h = stored()
     if (h) return h
-    if (!creating) creating = post<Handle>(path, { auto_start: true })
+    if (!creating) creating = post<Handle>(path, initial)
       .then(next => { save(next); return next })
       .finally(() => { creating = null })
     return creating
@@ -34,8 +34,15 @@ function liveOwner(path: string, storage: string, event: string) {
 
 export const dnnOwner = liveOwner('/cstr/sessions', 'cstr-control-owner', 'cstr-owner-changed')
 export const healingOwner = liveOwner('/cstr/healing/sessions', 'cstr-healing-owner', 'cstr-healing-owner-changed')
+export const replayOwner = liveOwner('/cstr/replay/sessions', 'cstr-replay-owner', 'cstr-replay-owner-changed')
+export const fdiOwners = {
+  measurement: liveOwner('/cstr/fdi/sessions', 'cstr-fdi-measurement', 'cstr-fdi-measurement-changed',
+    {auto_start:true, settings:{side:'measurement'}}),
+  execution: liveOwner('/cstr/fdi/sessions', 'cstr-fdi-execution', 'cstr-fdi-execution-changed',
+    {auto_start:true, settings:{side:'execution'}}),
+}
 
-// Both connections belong to the platform shell and survive navigation away from the module.
+// Connections belong to the platform shell and survive navigation away from a module.
 export function useLivePresence(owner: typeof dnnOwner) {
   useEffect(() => {
     let controller: AbortController | undefined

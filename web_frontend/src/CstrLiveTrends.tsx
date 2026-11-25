@@ -178,6 +178,8 @@ export function CstrLiveTrends({ session, run, samples, period, intervals }: {
   const wheelMotion = useRef({ mode: '', delta: 0, at: 0 })
   const latest = samples[samples.length - 1]?.seq ?? 0
   const first = pinned === null ? Math.max(0, latest - span) : manualStart(pinned, span, latest)
+  const earliestStart = 1 - span
+  const latestStart = Math.max(0, latest - 1)
   const last = first + span
   const archiveFirst = Math.max(0, first)
   const availableLast = Math.min(last, latest)
@@ -305,8 +307,8 @@ export function CstrLiveTrends({ session, run, samples, period, intervals }: {
   return <section aria-label="在线趋势回看">
     <div className="cstr-history-tools">
       <span>{pinned === null ? '跟随实时' : '历史回看'}　{domain[0].toFixed(1)}–{domain[1].toFixed(1)} min</span>
-      <input aria-label="历史时间窗口起点" type="range" min={1 - span} max={Math.max(0, latest - 1)} value={first}
-        disabled={!samples.length} onChange={e => pin(Number(e.target.value))} />
+      <progress aria-label="历史时间窗口位置" max={latestStart - earliestStart}
+        value={samples.length ? first - earliestStart : 0} />
       <label className="cstr-window-size">时间窗口
         <select aria-label="时间窗口" value={span} onChange={e => {
           const next = Number(e.currentTarget.value)
@@ -319,7 +321,7 @@ export function CstrLiveTrends({ session, run, samples, period, intervals }: {
         disabled={span === defaultSpan && !vertical.temperature && !vertical.flow}>重置比例尺</button>
       <button type="button" className="small secondary" disabled={pinned === null} onClick={() => pin(null)}>回到实时</button>
     </div>
-    <p className="cstr-chart-help">左键拖动平移曲线，双击恢复默认实时视图。滚轮滚动页面，Shift + 滚轮缩放当前纵轴。</p>
+    <p className="cstr-chart-help">在绘图区内按住左键拖动可平移曲线，双击恢复默认实时视图。滚轮滚动页面，Shift + 滚轮缩放当前纵轴。</p>
     {error && <div role="alert" className="error">{error} <button onClick={() => setAttempt(n => n + 1)}>重试</button></div>}
     <div className="cstr-plots cstr-history-plots" ref={plots} onPointerDown={begin} onPointerMove={move}
       onPointerUp={end} onPointerCancel={end} onLostPointerCapture={end}

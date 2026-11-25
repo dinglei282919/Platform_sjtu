@@ -10,16 +10,16 @@ from PySide6.QtCharts import QChart, QChartView, QLineSeries, QValueAxis
 from PySide6.QtCore import QCoreApplication, QEvent, QMargins, QPointF, QRectF, QSignalBlocker, Qt, QTimer, Signal
 from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import (QCheckBox, QFileDialog, QFrame, QHBoxLayout, QLabel,
-                               QProgressBar, QPushButton, QScrollArea, QSizePolicy, QSlider,
+                               QProgressBar, QPushButton, QScrollArea, QSizePolicy,
                                QStackedWidget, QVBoxLayout, QWidget)
 from platform_core.task_manager import TaskManager
-from platform_core.risk_control import HEALING_TITLE, presentation
+from platform_core.risk_control import FDI_TITLE, HEALING_TITLE, REPLAY_TITLE, presentation
 from platform_core.risk_control.cstr import SAMPLE_MIN, TREND_INTERVALS, TREND_MAX_INTERVALS
 from platform_core.risk_control.disturbance import options as disturbance_options
 from platform_core.risk_control.dnn_mpc import dataset
 from platform_core.risk_control.dnn_mpc.mpc import Settings
 from platform_core.risk_control.service import ControlService, NAVIGATION, STAGES, TRAIN_DEFAULTS
-from .layout import FieldGrid, FlowRow, StagePage, StatusStrip, label
+from .layout import FieldGrid, FlowRow, RunningValue, StagePage, StatusStrip, label
 from .process_diagram import ProcessDiagram
 from .controls import ControlComboBox, ControlDoubleSpinBox, ControlSpinBox, ControlTabWidget, control_page_style
 
@@ -138,7 +138,7 @@ class Trend(QChartView):
         title = f"轮次 {row[0]:g}" if axis.titleText()=="轮次" else f"仿真时间 {row[0]:.1f} min"
         fmt = ".7g" if self.sample_digits is None else f".{self.sample_digits}f"
         unit = " "+self.sample_unit if self.sample_unit else ""
-        self.sample_tip.setText("\n".join([title, *(f"{name}　{value:{fmt}}{unit}" for name, value in values if math.isfinite(value))]))
+        self.sample_tip.setText("\n".join([title, *(f"{name}　{value:{fmt}}{unit}" for name, value in values if value is not None and math.isfinite(value))]))
         self.sample_tip.adjustSize()
         top = self.mapFromScene(chart.mapToScene(plot.topLeft())).y()
         side = 8 if point.x() > plot.center().x() else max(0, self.viewport().width()-self.sample_tip.width()-8)
@@ -316,13 +316,15 @@ class Trend(QChartView):
         if not rows:
             return
         x = [float(row[0]) for row in rows]
-        values = [float(v) for row in rows for v in row[1:]]
+        values = [float(v) for row in rows for v in row[1:] if v is not None]
         values.extend(v for points in groups for _, v in points)
         for i, series in enumerate(self.lines, 1):
             series.setPointsVisible(len(rows) == 1)
-            series.replace([QPointF(t, float(row[i])) for t, row in zip(x, rows)])
-        delta = max(0.001, (max(values)-min(values))*0.1)
+            series.replace([QPointF(t, float(row[i])) for t, row in zip(x, rows) if row[i] is not None])
         self.axes[0].setRange(*(domain or (x[0], max(x[-1], x[0]+0.1))))
+        if not values:
+            return
+        delta = max(0.001, (max(values)-min(values))*0.1)
         self.auto_y_range = min(values)-delta, max(values)+delta
         if domain:
             self._apply_y_range()
@@ -341,7 +343,7 @@ def deferred_page(overview):
     texts = (("综合仿真展示待接入" if overview else "仿真界面待接入", "heading"),
              ("四种控制算法接入后，这里将展示统一 CSTR 的仿真结果。" if overview
               else "该子模块的仿真界面将在后续阶段接入。", "guide"),
-             ("从顶部“风险管控优化决策”菜单可进入深度神经网络优化控制或多变量过程自愈控制。", "guide"))
+             ("从顶部“风险管控优化决策”菜单可进入 DNN-MPC、自愈控制、FDI 或重放控制试验。", "guide"))
     for text, role in texts:
         line = label(text, role)
         line.setAlignment(Qt.AlignCenter)
@@ -415,6 +417,8 @@ class RiskWorkspace(QWidget):
         self.pages.addWidget(deferred_page(True))
         self.pages.addWidget(self.workflow)
         self.healing_page = None
+        self.fdi_page = None
+        self.replay_page = None
         for _ in NAVIGATION[2:]:
             self.pages.addWidget(deferred_page(False))
         self._training_page()
@@ -428,14 +432,22 @@ class RiskWorkspace(QWidget):
 
     def select_page(self, name):
         index = NAVIGATION.index(name) if name in NAVIGATION else 0
-        if name == HEALING_TITLE and self.healing_page is None:
-            from .healing_page import HealingPage
-            page = HealingPage(self.service.healing)
+        if ((name == HEALING_TITLE and self.healing_page is None) or
+                (name == FDI_TITLE and self.fdi_page is None) or
+                (name == REPLAY_TITLE and self.replay_page is None)):
+            if name == HEALING_TITLE:
+                from .healing_page import HealingPage
+                page = self.healing_page = HealingPage(self.service.healing)
+            elif name == FDI_TITLE:
+                from .fdi_page import FdiPage
+                page = self.fdi_page = FdiPage(self.service.fdi)
+            else:
+                from .replay_page import ReplayPage
+                page = self.replay_page = ReplayPage(self.service.replay)
             previous = self.pages.widget(index)
             self.pages.removeWidget(previous)
             previous.deleteLater()
             self.pages.insertWidget(index, page)
-            self.healing_page = page
         if name == NAVIGATION[1]:
             self.workflow.setCurrentIndex(1)
         self.pages.setCurrentIndex(index)
@@ -528,6 +540,8 @@ class RiskWorkspace(QWidget):
 
     def _control_page(self):
         page = StagePage()
+        self.simulation_page = page
+        page.add_simulation_bar(lambda kind: self._perform(lambda: self._command(kind)))
         self.workflow.addTab(page, STAGES[1])
         left, pane = page.parameters, page.display
         left.addWidget(label("工况扰动", "heading"))
@@ -538,10 +552,10 @@ class RiskWorkspace(QWidget):
             title = f"{option['label']}（{option['nominal']:g} → {option['target']:g} {option['unit']}）"
             self.disturbance_combo.addItem(title, option["id"])
         pulse.add_hint(self.disturbance_combo, PARAMETER_HELP["preset"])
-        self.disturbance_cycles = field(pulse, "持续周期", 1, scenarios["max_cycles"], scenarios["default_cycles"])
-        describe_number(pulse, "duration", self.disturbance_cycles)
         self.pulse_hint = label("", "guide")
-        pulse.add_item(self.pulse_hint)
+        self.disturbance_cycles = field(pulse, "持续周期", 1, scenarios["max_cycles"], scenarios["default_cycles"],
+                                        beside=self.pulse_hint)
+        describe_number(pulse, "duration", self.disturbance_cycles)
         self.apply_pulse = self._button("施加扰动", lambda: self._command("disturbance"))
         self.clear_pulse = self._button("提前撤除", lambda: self._command("clear_disturbance"), "secondary")
         self.clear_pulse.setEnabled(False)
@@ -569,7 +583,19 @@ class RiskWorkspace(QWidget):
             "reference": field(form, "釜温设定 (K)", 428, 434, cfg.reference, 0.25, 3)}
         for key, box in self.controls.items():
             describe_number(form, key, box)
-        commands = (("model", "应用所选模型"), ("pause", "暂停"), ("resume", "继续"),
+        self.running_values = {key: RunningValue(form, box) for key, box in self.controls.items()}
+        self.reload_controls = False
+        self.reference_queue = label("")
+        form.fields[self.controls["reference"]].layout().addWidget(self.reference_queue)
+        self.reference_queue.hide()
+        self.applied_speed = None
+        for box in (self.disturbance_cycles, self.controls["speed"]):
+            box.lineEdit().textChanged.connect(self._update_pulse_hint)
+            box.valueChanged.connect(self._update_pulse_hint)
+            box.editingFinished.connect(self._update_pulse_hint)
+        self._update_pulse_hint()
+        left.addWidget(label(PARAMETER_HELP["apply"], "guide"))
+        commands = (("model", "应用所选模型"),
                     ("reset", "应用配置并复位"), ("end", "结束"), ("reference", "更新设定值"))
         self.command_buttons = {key: self._button(title, lambda k=key: self._command(k)) for key, title in commands}
         left.addLayout(FlowRow(*self.command_buttons.values()))
@@ -597,6 +623,10 @@ class RiskWorkspace(QWidget):
         pane.addWidget(label("在线闭环仿真", "heading"))
         self.status_label = StatusStrip()
         pane.addWidget(self.status_label)
+        self.control_alarm = label("")
+        self.control_alarm.setWordWrap(True)
+        self.control_alarm.hide()
+        pane.addWidget(self.control_alarm)
         self.svg = ProcessDiagram()
         pane.addWidget(self.svg)
         self.trial_label = label("", "statusStrip")
@@ -604,10 +634,10 @@ class RiskWorkspace(QWidget):
         pane.addWidget(self.trial_label)
         self.history_label = QLabel()
         self.history_label.setObjectName("guide")
-        self.history_slider = QSlider(Qt.Horizontal)
-        self.history_slider.setMinimumWidth(72)
-        self.history_slider.setAccessibleName("历史时间窗口起点")
-        self.history_slider.valueChanged.connect(self._pin_window)
+        self.history_position = QProgressBar()
+        self.history_position.setMinimumWidth(72)
+        self.history_position.setTextVisible(False)
+        self.history_position.setAccessibleName("历史时间窗口位置")
         self.span_selector = ControlComboBox()
         self.span_selector.setAccessibleName("时间窗口")
         for intervals in WINDOW_INTERVALS:
@@ -623,9 +653,9 @@ class RiskWorkspace(QWidget):
         self.reset_scale = self._button("重置比例尺", self._reset_scales, "small")
         self.reset_scale.setEnabled(False)
         self.follow = self._button("回到实时", lambda: self._pin_window(None), "small")
-        pane.addLayout(FlowRow(self.history_label, self.history_slider, span_group, self.reset_scale, self.follow,
-                               grow=self.history_slider))
-        pane.addWidget(label("左键拖动平移曲线，双击恢复默认实时视图。滚轮滚动页面，Shift + 滚轮缩放当前纵轴。", "guide"))
+        pane.addLayout(FlowRow(self.history_label, self.history_position, span_group, self.reset_scale, self.follow,
+                               grow=self.history_position))
+        pane.addWidget(label("在绘图区内按住左键拖动可平移曲线，双击恢复默认实时视图。滚轮滚动页面，Shift + 滚轮缩放当前纵轴。", "guide"))
         self.temp = Trend("釜内温度 (K)", ("实际釜温", "设定值"), "仿真时间 (min)", "K")
         self.flow = Trend("冷却液流量 (L/min)", ("实际施加", "控制指令"), "仿真时间 (min)", "L/min")
         for chart in (self.temp, self.flow):
@@ -641,6 +671,15 @@ class RiskWorkspace(QWidget):
         self.control_msg = label("", "guide")
         self.control_msg.hide()
         pane.addWidget(self.control_msg)
+
+    def _update_pulse_hint(self):
+        minutes = self.disturbance_cycles.preview_value() * SAMPLE_MIN
+        speed = self.controls["speed"].preview_value()
+        pending = self.applied_speed is not None and speed != self.applied_speed
+        # Both clients round half a tenth of a second up.
+        seconds = math.floor(minutes * 600 / speed + 0.5) / 10
+        self.pulse_hint.setText(f"{minutes:.1f} 仿真分钟，按设定 {speed:g}× 约 {seconds:.1f} 秒"
+                               + ("（待应用）" if pending else ""))
 
     def _sync_scale_button(self):
         self.reset_scale.setEnabled(self.window_intervals != TREND_INTERVALS
@@ -724,6 +763,8 @@ class RiskWorkspace(QWidget):
                              settings=config if kind == "reset" else None,
                              preset=self.disturbance_combo.currentData() if kind == "disturbance" else None,
                              duration_cycles=self.disturbance_cycles.value() if kind == "disturbance" else None)
+        if kind in ("reference", "reset"):
+            self.reload_controls = True
         self.control_msg.clear()
         self.control_msg.hide()
         self.refresh()
@@ -805,10 +846,8 @@ class RiskWorkspace(QWidget):
         for chart, actual, target, column in ((self.temp, "T", "T_ref", 1), (self.flow, "Qc", "Qc_cmd", 2)):
             curves = [[(point[0], point[column]) for point in group] for group in groups]
             chart.draw([(r["t"], r[actual], r[target]) for r in rows], domain, curves, bands, context=self.last_run)
-        self.history_slider.blockSignals(True)
-        self.history_slider.setRange(1-span, max(0, self.last_seq-1))
-        self.history_slider.setValue(first)
-        self.history_slider.blockSignals(False)
+        self.history_position.setRange(1-span, max(0, self.last_seq-1))
+        self.history_position.setValue(first)
         self.follow.setEnabled(self.pinned is not None)
         mode = "跟随实时" if self.pinned is None else "历史回看"
         self.history_label.setText(f"{mode}  {domain[0]:.1f}–{domain[1]:.1f} min")
@@ -855,6 +894,16 @@ class RiskWorkspace(QWidget):
         if snap["run"] != self.last_run or snap["resync"]:
             snap = self.session.snapshot()
             self.rows = []
+        restore = self.reload_controls or snap["run"] != self.last_run
+        for key, hint in self.running_values.items():
+            value = snap["reference"] if key == "reference" else snap["config"][key]
+            hint.sync(value, restore=restore)
+        self.reload_controls = False
+        last_reference = next((e for e in reversed(snap["events"]) if e["event"].startswith("reference_")), None)
+        queued = (last_reference and last_reference["event"] == "reference_queued"
+                  and snap["status"] != "ended" and last_reference["value"] != snap["reference"])
+        self.reference_queue.setText(PARAMETER_HELP["referenceQueued"].format(value=f"{last_reference['value']:g}") if queued else "")
+        self.reference_queue.setVisible(bool(queued))
         self.last_run, self.last_seq = snap["run"], snap["seq"]
         self.rows = (self.rows+snap["samples"])[-(TREND_MAX_INTERVALS+1):]
         live = snap["latest"]
@@ -866,10 +915,10 @@ class RiskWorkspace(QWidget):
         self.apply_pulse.setEnabled(state != "ended" and phase not in ("queued", "active", "recovery"))
         self.clear_pulse.setEnabled(phase in ("queued", "active") and not trial["clear_requested"])
         display = presentation.trial_status(trial)
-        minutes = self.disturbance_cycles.value()*SAMPLE_MIN
         speed = snap["config"]["speed"]
-        hint = f"{minutes:.1f} 仿真分钟，按当前 {speed:g}× 约 {60*minutes/speed:.1f} 秒"
-        self.pulse_hint.setText(hint)
+        if self.applied_speed != speed:
+            self.applied_speed = speed
+            self._update_pulse_hint()
         self.pulse_state.setText(display["status"] if display else "")
         self.pulse_state.setVisible(bool(self.pulse_state.text()))
         results = "   ·   ".join(filter(None, (display["timing"], display["metrics"]))) if display else ""
@@ -878,11 +927,16 @@ class RiskWorkspace(QWidget):
             self.trial_label.setText(results)
             self.trial_label.setToolTip("阴影为扰动施加区间。恒流对照保持施加前的冷却液流量。")
         model_title = "默认 CSTR 模型" if snap["model"] == self.default_model_version else "当前模型"
+        control = presentation.control_status(snap)
+        self.control_alarm.setText(control["message"])
+        self.control_alarm.setStyleSheet("color: #ffbe78;" if control["active"] else "")
+        self.control_alarm.setVisible(bool(control["message"]))
         self.status_label.show_state(state, STATUS[state], f"仿真时间 {live['t']:.2f} min",
                                      f"温度偏差 {live['T']-live['T_ref']:.2f} K",
-                                     f"{model_title}　{snap['model']}", f"求解 {live.get('solve_ms', 0):.1f} ms")
-        allowed = {"ready": {"model", "reset", "reference", "end"}, "running": {"model", "pause", "reset", "reference", "end"},
-                   "paused": {"model", "resume", "reset", "reference", "end"}, "ended": {"reset"}}
+                                     f"{model_title}　{snap['model']}", control["timing"])
+        self.simulation_page.show_simulation_state(state, live["t"])
+        allowed = {"ready": {"model", "reset", "reference", "end"}, "running": {"model", "reset", "reference", "end"},
+                   "paused": {"model", "reset", "reference", "end"}, "ended": {"reset"}}
         for key, button in self.command_buttons.items():
             button.setEnabled(key in allowed[state])
         online = snap["online_update"]
@@ -919,6 +973,10 @@ class RiskWorkspace(QWidget):
         self.closed = True
         if self.healing_page is not None:
             self.healing_page.stop_display()
+        if self.fdi_page is not None:
+            self.fdi_page.stop_display()
+        if self.replay_page is not None:
+            self.replay_page.stop_display()
         self.timer.stop()
         self.svg.set_running(False)
         if self.training_id:

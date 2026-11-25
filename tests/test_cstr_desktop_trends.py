@@ -1,5 +1,8 @@
 """Exercise viewport gestures, archived samples and chart layout through Qt."""
 import os
+from pathlib import Path
+from tempfile import TemporaryDirectory
+import time
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -190,6 +193,70 @@ class DesktopTrendTests(unittest.TestCase):
         self.assertEqual(w.temp.manual_y_range, manual)
         self.assertAlmostEqual(w.temp.domain[1], w.last_seq*SAMPLE_MIN)
 
+    def test_fdi_and_replay_drag_linked_windows_and_restore_the_live_run(self):
+        from desktop.risk_control.fdi_page import FdiTrialPage
+        from desktop.risk_control.replay_page import ReplayPage
+        from platform_core.risk_control.fdi_session import FdiService
+        from platform_core.risk_control.replay_session import ReplayService
+
+        with TemporaryDirectory() as root:
+            for side in ("measurement", "execution", "replay"):
+                with self.subTest(side=side):
+                    replay = side == "replay"
+                    service = (ReplayService if replay else FdiService)(Path(root)/side)
+                    page = ReplayPage(service) if replay else FdiTrialPage(side, service)
+                    try:
+                        settings = {"speed":1200} if replay else {"side":side, "speed":1200}
+                        session = page.session = service.create(settings)
+                        get_seq = (lambda:session.last_published) if replay else (lambda:session.seq)
+                        deadline = time.monotonic()+30
+                        while get_seq()<250 and time.monotonic()<deadline:
+                            time.sleep(.02)
+                        self.assertGreaterEqual(get_seq(),250)
+                        run = session.run
+                        session.command("pause","test-pause",run)
+                        page.setAttribute(Qt.WA_DontShowOnScreen)
+                        page.resize(1100,760)
+                        page.show()
+                        page.stop_display()
+                        page.refresh()
+                        self.app.processEvents()
+                        charts = page.charts if replay else [c for c,_ in page.charts]
+                        first, second = charts[:2]
+                        live_domain = first.domain
+                        self.drag(first,0,18)
+                        self.assertFalse(page.follow.isEnabled())
+                        self.assertIsNotNone(first.manual_y_range)
+                        self.assertIsNone(second.manual_y_range)
+                        self.drag(second,60,0)
+                        self.assertTrue(page.follow.isEnabled())
+                        self.assertLess(first.domain[0],live_domain[0])
+                        self.assertTrue(all(chart.domain==first.domain for chart in charts))
+                        at = page.position.value()
+                        self.assertAlmostEqual(first.sample_rows[-1][0],at*SAMPLE_MIN)
+                        self.wheel(second,120,modifiers=Qt.ShiftModifier)
+                        self.assertEqual(second.y_zoom_level,1)
+                        page.inspect(20)
+                        self.drag(first,50,0)
+                        self.assertLess(first.domain[0],0)
+                        self.assertGreaterEqual(first.sample_rows[0][0],0)
+                        session.command("reset","test-reset",run)
+                        if replay:
+                            page.live()
+                        else:
+                            page.refresh()
+                        selector = page.records if replay else page.runs
+                        selector.setCurrentIndex(selector.findData(run))
+                        self.drag(first,50,0)
+                        self.assertEqual(selector.currentData(),run)
+                        QTest.mouseDClick(first.viewport(),Qt.LeftButton,Qt.NoModifier,self.plot_position(first))
+                        self.assertFalse(selector.currentData())
+                        self.assertFalse(page.follow.isEnabled())
+                        self.assertTrue(all(chart.manual_y_range is None for chart in charts))
+                    finally:
+                        page.close()
+                        service.close()
+
     def test_startup_drag_into_blank_time_and_archived_edge_use_only_real_samples(self):
         w = self.workspace
         w.rows = self.rows[:5]
@@ -201,16 +268,56 @@ class DesktopTrendTests(unittest.TestCase):
         self.assertIsNotNone(w.temp.manual_y_range)
         self.assertIsNone(w.flow.manual_y_range)
         self.assertEqual(w.temp.domain, w.flow.domain)
-        self.assertEqual(w.history_slider.value(), w.pinned)
-        self.assertEqual(w.history_slider.minimum(), 1-TREND_INTERVALS)
-        self.assertEqual(w.history_slider.maximum(), 3)
+        self.assertEqual(w.history_position.value(), w.pinned)
+        self.assertEqual(w.history_position.minimum(), 1-TREND_INTERVALS)
+        self.assertEqual(w.history_position.maximum(), 3)
         self.assertEqual([p.x() for p in w.temp.lines[0].points()], [r["t"] for r in w.rows])
         w.session.sample_window.assert_not_called()
-        w.history_slider.setValue(3)
+        self.drag(w.temp, -int(w.temp.chart().plotArea().width()), 0)
         self.assertEqual([p.x() for p in w.temp.lines[0].points()], [r["t"] for r in w.rows[3:]])
         w.rows = self.rows[-(TREND_MAX_INTERVALS+1):]
         w.last_seq = self.rows[-1]["seq"]
         w.span_selector.setCurrentIndex(w.span_selector.findData(TREND_MAX_INTERVALS))
-        w.history_slider.setValue(1-TREND_MAX_INTERVALS)
+        self.drag(w.flow, int(w.flow.chart().plotArea().width()), 0)
         w.session.sample_window.assert_called_with(w.last_run, 0, 2)
         self.assertEqual([p.x() for p in w.flow.lines[0].points()], [0., SAMPLE_MIN])
+
+    def test_history_indicator_leaves_pointer_input_to_page_and_plots(self):
+        w = self.workspace
+        bar = w.history_position
+        page = w.workflow.currentWidget()
+        for first in (None, 115):
+            w._pin_window(first)
+            domain = w.temp.domain
+            page.ensureWidgetVisible(bar)
+            self.app.processEvents()
+            before = page.verticalScrollBar().value()
+            QTest.wheelEvent(w.windowHandle(), bar.mapTo(w, bar.rect().center()), QPoint(0, -120))
+            self.app.processEvents()
+            self.assertGreater(page.verticalScrollBar().value(), before)
+            QTest.mousePress(bar, Qt.LeftButton, pos=bar.rect().center())
+            QTest.mouseMove(bar, QPoint(1, bar.height()//2))
+            QTest.mouseRelease(bar, Qt.LeftButton, pos=QPoint(1, bar.height()//2))
+            self.assertEqual(w.pinned, first)
+            self.assertEqual(w.temp.domain, domain)
+            self.assertEqual(w.flow.domain, domain)
+
+    def test_pulse_estimate_follows_input_and_aligns_with_the_spin_box(self):
+        w = self.workspace
+        w.applied_speed = 4
+        w.controls["speed"].setValue(8)
+        self.assertEqual(w.pulse_hint.text(), "2.0 仿真分钟，按设定 8× 约 15.0 秒（待应用）")
+        w.disturbance_cycles.setValue(15)
+        self.assertIn("11.3 秒", w.pulse_hint.text())
+        w.disturbance_cycles.setValue(5)
+        self.assertIn("0.5 仿真分钟", w.pulse_hint.text())
+        w.controls["speed"].setValue(4)
+        self.assertEqual(w.pulse_hint.text(), "0.5 仿真分钟，按设定 4× 约 7.5 秒")
+        for width in (1440, 1180, 930):
+            w.resize(width, 760)
+            self.app.processEvents()
+            spin = w.disturbance_cycles
+            hint = w.pulse_hint
+            self.assertGreater(hint.mapTo(w, QPoint()).x(), spin.mapTo(w, spin.rect().topRight()).x())
+            self.assertLessEqual(abs(hint.mapTo(w, hint.rect().center()).y() -
+                                     spin.mapTo(w, spin.rect().center()).y()), 1)

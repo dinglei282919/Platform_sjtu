@@ -23,11 +23,14 @@ FRONTEND_DIST = ROOT / "web_frontend" / "dist"
 
 from web_backend.task_manager import TaskManager, TaskStateUnavailable
 from web_backend.services.healing import routes as healing_routes
+from web_backend.services.fdi import routes as fdi_routes
+from web_backend.services.replay import routes as replay_routes
 from web_backend.services import anomaly, cdq, classification, path_picker, scoring, sdg, sil
+from platform_core.risk_control import FDI_TITLE, REPLAY_TITLE
 from platform_core.risk_control.dnn_mpc.dataset import MAX_CSV_BYTES, example_csv
 from platform_core.risk_control.service import ControlService
 from platform_core.risk_control.presentation import (tokens as cstr_tokens, template as cstr_template,
-                                                     trial_status as cstr_trial_status, online_update_status)
+                                                     trial_status as cstr_trial_status, online_update_status, control_status)
 
 
 task_manager = TaskManager()
@@ -260,8 +263,8 @@ def modules() -> list[dict[str, str]]:
         {"id": "risk-overview", "name": "综合仿真展示", "status": "placeholder"},
         {"id": "dnn-mpc", "name": "深度神经网络优化控制", "status": "available"},
         {"id": "self-healing", "name": "多变量过程自愈控制", "status": "available"},
-        {"id": "fdi", "name": "虚假数据注入下的自适应控制仿真", "status": "placeholder"},
-        {"id": "replay", "name": "重放攻击下的自适应控制仿真", "status": "placeholder"},
+        {"id": "fdi", "name": FDI_TITLE, "status": "available"},
+        {"id": "replay", "name": REPLAY_TITLE, "status": "available"},
     ]
 
 
@@ -448,7 +451,7 @@ def cstr_snapshot(identifier: str, after: int = -1, owner: str | None = Header(N
     s = _cstr_call(cstr_service.session, identifier)
     data = s.snapshot(after, owner)
     online = data["online_update"]
-    return {**data, "display": cstr_tokens(data["latest"]), "disturbance_display": cstr_trial_status(data["disturbance"]),
+    return {**data, "control_display": control_status(data), "display": cstr_tokens(data["latest"]), "disturbance_display": cstr_trial_status(data["disturbance"]),
             "online_update": {**online, **online_update_status(online)}}
 
 
@@ -474,6 +477,8 @@ def _presence_stream(session, request):
 
 
 app.include_router(healing_routes(lambda: cstr_service.healing, _cstr_call, _presence_stream))
+app.include_router(fdi_routes(lambda: cstr_service.fdi, _cstr_call, _presence_stream))
+app.include_router(replay_routes(lambda: cstr_service.replay, _cstr_call, _presence_stream))
 
 
 @app.get("/api/cstr/sessions/{identifier}/history")

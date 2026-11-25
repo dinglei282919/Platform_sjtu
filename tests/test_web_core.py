@@ -21,6 +21,115 @@ from web_backend.task_manager import TaskManager, TaskStateUnavailable
 from web_backend.app import AnomalyTaskRequest, SDGNodeRequest, SILTaskRequest, app
 
 
+class ComparisonEndpointTests(unittest.TestCase):
+    def test_owned_session_routes_and_module_specific_commands(self):
+        from platform_core.risk_control.fdi_session import FdiService
+        from platform_core.risk_control.healing_session import HealingService
+        from platform_core.risk_control.replay_session import ReplayService
+
+        cases = (("healing", HealingService, "begin"), ("fdi", FdiService, "cancel"),
+                 ("replay", ReplayService, "degrade"))
+        with TemporaryDirectory() as directory:
+            for module, service_type, invalid_kind in cases:
+                with self.subTest(module=module):
+                    service = service_type(Path(directory) / module)
+                    try:
+                        with patch(f"web_backend.app.cstr_service.{module}", service):
+                            client = TestClient(app)
+                            self.addCleanup(client.close)
+                            base = f"/api/cstr/{module}/sessions"
+                            response = client.post(base, json={"auto_start": False})
+                            self.assertEqual(response.status_code, 200)
+                            handle = response.json()
+                            path = f"{base}/{handle['id']}"
+                            owner = {"X-Control-Owner": handle["owner"]}
+                            self.assertEqual(client.get(path).status_code, 200)
+                            request = dict(kind="reset", run=handle["run"], key="reset-once")
+                            self.assertEqual(client.post(path+"/commands", json=request).status_code, 403)
+                            invalid = client.post(path+"/commands", headers=owner, json={**request, "kind":invalid_kind})
+                            self.assertEqual(invalid.status_code, 422)
+                            if module == "replay":
+                                begin = dict(kind="begin", run=handle["run"], key="manual")
+                                self.assertEqual(client.post(path+"/commands", json=begin).status_code, 403)
+                                for fields in ({"scenario": "delay"}, {"scenario": []}, {"speed": 600}):
+                                    bad = client.post(path+"/commands", headers=owner, json={**begin, "settings":fields})
+                                    self.assertEqual(bad.status_code, 400)
+                                receipt = client.post(path+"/commands", headers=owner, json=begin).json()
+                                self.assertEqual(receipt["pending"], "begin")
+                                self.assertEqual(client.post(path+"/commands", headers=owner, json=begin).json(), receipt)
+                                self.assertEqual(client.get(path).json()["pending"], "begin")
+                            first = client.post(path+"/commands", headers=owner, json=request)
+                            self.assertEqual(first.status_code, 200)
+                            self.assertNotEqual(first.json()["run"], handle["run"])
+                            retry = client.post(path+"/commands", headers=owner, json=request)
+                            self.assertEqual(retry.json(), first.json())
+                            self.assertEqual(client.delete(path).status_code, 403)
+                            self.assertEqual(client.delete(path, headers=owner).json(), {"released": True})
+                            self.assertEqual(client.get(path).status_code, 404)
+                    finally:
+                        service.close()
+
+
+class FdiEndpointTests(unittest.TestCase):
+    def test_fdi_owned_run_and_archived_export(self):
+        from platform_core.risk_control.fdi_session import FdiService
+        temporary = TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        service = FdiService(Path(temporary.name)/"fdi")
+        try:
+            with patch("web_backend.app.cstr_service.fdi", service):
+                client = TestClient(app)
+                base = "/api/cstr/fdi/sessions"
+                self.assertEqual(next(m for m in client.get("/api/modules").json() if m["id"]=="fdi")["status"],"available")
+                self.assertEqual(client.post(base,json={"settings":{"side":"execution","scenario":"readout"}}).status_code,400)
+                handle = client.post(base,json={"settings":{"side":"execution"}}).json()
+                path = base+"/"+handle["id"]
+                header = {"X-Control-Owner":handle["owner"]}
+                self.assertEqual(client.get(path, headers=header).json()["status"], "running")
+                req = dict(kind="begin", key="once", run=handle["run"])
+                self.assertEqual(client.post(path+"/commands",json=req).status_code,403)
+                for invalid in ({"scenario": "readout"}, {"scenario": "mixed", "speed": 100}):
+                    self.assertEqual(client.post(path+"/commands", json={**req, "settings": invalid},
+                                                 headers=header).status_code, 400)
+                receipt = client.post(path+"/commands",json=req,headers=header).json()
+                self.assertEqual(receipt["pending"],"begin")
+                self.assertEqual(client.post(path+"/commands",json=req,headers=header).json(),receipt)
+
+                def await_segment(number):
+                    deadline = time.monotonic() + 30
+                    while time.monotonic() < deadline:
+                        frame = client.get(path, params={"after": 0}, headers=header).json()
+                        if frame["segment"] == number:
+                            return frame
+                        time.sleep(.02)
+                    self.fail(f"FDI segment {number} did not start")
+
+                first = await_segment(1)
+                repeat = {**req, "key": "again", "settings": {"scenario": "mixed"}}
+                self.assertEqual(client.post(path+"/commands", json=repeat, headers=header).status_code, 200)
+                second = await_segment(2)
+                self.assertEqual((second["run"], second["scenario"], len(second["bands"])), (first["run"], "mixed", 2))
+                sample = client.get(path+"/history", params={"run": first["run"], "first": first["start_seq"],
+                                                             "count": 1}).json()
+                self.assertEqual((sample["segment"], sample["scenario"]), (1, "delivery"))
+                reset = {**req, "kind":"reset", "key":"next"}
+                restarted = client.post(path+"/commands",json=reset,headers=header).json()
+                self.assertNotEqual(restarted["run"],handle["run"])
+                self.assertEqual(restarted["status"], "running")
+                self.assertEqual(client.post(path+"/commands",json={**req,"key":"stale"},headers=header).status_code,400)
+                report = client.get(path+"/export",params={"run":handle["run"]}).json()
+                self.assertEqual(report["casebook"],"cstr-fdi-qa-v1")
+                self.assertEqual([s["scenario"] for s in report["segments"]], ["delivery", "mixed"])
+                self.assertEqual(report["case"], report["cases"]["delivery"])
+                self.assertEqual(set(report["cases"]), {"delivery", "mixed"})
+                self.assertTrue(any(e.get("event")=="begin_queued" for e in report["records"]))
+                self.assertEqual(client.get(path+"/export",params={"run":"unknown"}).status_code,404)
+                self.assertEqual(client.delete(path,headers=header).status_code,200)
+                self.assertEqual(client.get(path).status_code,404)
+        finally:
+            service.close()
+
+
 class TaskManagerPersistenceTests(unittest.TestCase):
     def setUp(self):
         self.temporary = TemporaryDirectory()
@@ -248,6 +357,14 @@ class SharedScoringTests(unittest.TestCase):
 
 class LocalApiTests(unittest.TestCase):
     def setUp(self) -> None:
+        temporary = TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        manager = TaskManager(Path(temporary.name) / "tasks")
+        self.addCleanup(manager._executor.shutdown, wait=True)
+        self.addCleanup(manager.shutdown)
+        registry = patch("web_backend.app.task_manager", manager)
+        registry.start()
+        self.addCleanup(registry.stop)
         self.client = TestClient(app)
 
     def tearDown(self) -> None:
@@ -535,16 +652,6 @@ class LocalApiTests(unittest.TestCase):
             time.sleep(0.1)
         self.assertEqual(task["status"], "succeeded", task)
         self.assertIn("pfdavg", task["result"])
-
-
-
-
-
-
-
-
-
-
 
 
 if __name__ == "__main__":

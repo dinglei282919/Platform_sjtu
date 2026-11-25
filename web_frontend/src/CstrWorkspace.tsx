@@ -1,14 +1,16 @@
-import { Component, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
+import { Component, useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { CstrLiveTrends, TrendChart } from './CstrLiveTrends'
 import { CstrProcessDiagram } from './CstrProcessDiagram'
-import { pulseControls, type PulseReceipt } from './cstrDisturbance'
-import { FormNumber, Page } from './PlatformUI'
+import { pulseControls, pulseDurationHint, speedLimits, type PulseReceipt } from './cstrDisturbance'
+import { FormNumber, Page, SimulationBar, StageSwitch } from './PlatformUI'
 import parameterHelp from '../../assets/cstr/parameter-help.json'
 import { api, ApiError, post } from './api'
 import { useTask } from './useTask'
 import { useStoredState } from './taskSession'
-import { dnnOwner, emptyHandle, healingOwner, useLivePresence } from './cstrOwner'
+import { dnnOwner, emptyHandle, fdiOwners, healingOwner, replayOwner, useLivePresence } from './cstrOwner'
 import { HealingPage } from './HealingPage'
+import { FDI_TITLE, FdiPage } from './FdiPage'
+import { REPLAY_TITLE, ReplayPage } from './ReplayPage'
 
 export type RiskId =
   | 'risk-overview'
@@ -20,8 +22,8 @@ export const riskEntries: { id: RiskId; name: string }[] = [
   { id: 'risk-overview', name: '综合仿真展示' },
   { id: 'dnn-mpc', name: '深度神经网络优化控制' },
   { id: 'self-healing', name: '多变量过程自愈控制' },
-  { id: 'fdi', name: '虚假数据注入下的自适应控制仿真' },
-  { id: 'replay', name: '重放攻击下的自适应控制仿真' },
+  { id: 'fdi', name: FDI_TITLE },
+  { id: 'replay', name: REPLAY_TITLE },
 ]
 const stages = [
   '风险场景下控制系统智能模型训练算法',
@@ -88,7 +90,7 @@ export type Point = {
   disturbance_phase?: 'active' | 'recovery'
   T_hold?: number | null
   Qc_hold?: number
-  solve_ms?: number
+  solve_ms?: number | null
 }
 type LogEvent = {
   key?: string
@@ -108,6 +110,7 @@ type OnlineUpdate = {
   result: string
 }
 type Snapshot = {
+  control_display?: { active: boolean; timing: string; message: string }
   online_update?: OnlineUpdate
   disturbance?: { phase: string; clear_requested: boolean } | null
   disturbance_display?: { status: string; timing: string; metrics: string } | null
@@ -143,6 +146,9 @@ const { ensure: ensureHandle, request: owned, save: saveHandle } = dnnOwner
 export function useCstrPresence() {
   useLivePresence(dnnOwner)
   useLivePresence(healingOwner)
+  useLivePresence(fdiOwners.measurement)
+  useLivePresence(fdiOwners.execution)
+  useLivePresence(replayOwner)
 }
 async function loadConfig(): Promise<Config> {
   const config = await api<Config | null>('/cstr/config')
@@ -151,29 +157,6 @@ async function loadConfig(): Promise<Config> {
     throw new Error('CSTR 配置接口返回了不兼容的数据，请确认本机平台服务版本。')
   }
   return config
-}
-
-function StageSwitch({ stage, select }: { stage: number; select: (index: number) => void }) {
-  function onKeyDown(event: KeyboardEvent<HTMLButtonElement>, index: number) {
-    let next: number
-    switch (event.key) {
-      case 'ArrowRight': next = (index + 1) % stages.length; break
-      case 'ArrowLeft': next = (index + stages.length - 1) % stages.length; break
-      case 'Home': next = 0; break
-      case 'End': next = stages.length - 1; break
-      default: return
-    }
-    event.preventDefault()
-    select(next)
-    document.getElementById(`cstr-stage-${next}`)?.focus()
-  }
-  return <div className="view-switches" role="tablist" aria-label="深度神经网络优化控制工作流程">
-    {stages.map((name, index) => <button type="button" role="tab" key={name}
-      id={`cstr-stage-${index}`} aria-controls="cstr-stage-panel"
-      aria-selected={stage === index} tabIndex={stage === index ? 0 : -1}
-      className={stage === index ? 'active' : ''} onClick={() => select(index)}
-      onKeyDown={event => onKeyDown(event, index)}>{name}</button>)}
-  </div>
 }
 
 function Device({
@@ -228,8 +211,10 @@ export function CstrWorkspace({ active }: { active: RiskId }) {
 function CstrPage({ active }: { active: RiskId }) {
   const [stage, setStage] = useState(1),
     [cfg, setCfg] = useState<Config | null>(null)
-  const [settings, setSettings] = useState<Settings | null>(null),
-    [train, setTrain] = useState<Train | null>(null)
+  const [edits, setEdits] = useState<Partial<Settings>>({})
+  const [train, setTrain] = useState<Train | null>(null)
+  const [speedPreview, setSpeedPreview] = useState<number | null>(null)
+  const [cyclesPreview, setCyclesPreview] = useState<number | null>(null)
   const [model, setModel] = useState('default')
   const csvInput = useRef<HTMLInputElement>(null)
   const [csvFile, setCsvFile] = useState<File | null>(null)
@@ -246,6 +231,9 @@ function CstrPage({ active }: { active: RiskId }) {
     [busy, setBusy] = useState(false)
   const [pendingPolicy, setPendingPolicy] = useState<Pick<OnlineUpdate, 'enabled' | 'device'> | null>(null)
   const lastSnapshot = useRef<Snapshot | null>(null)
+  const commandRevision = useRef(0)
+  const runningSettings = snap ? { ...snap.config, reference: snap.reference } : null
+  const settings = cfg ? { ...(runningSettings ?? cfg.settings), ...edits } : null
   const visibleSamples = useRef<{ run: string; rows: Point[] }>({
     run: '',
     rows: [],
@@ -263,6 +251,25 @@ function CstrPage({ active }: { active: RiskId }) {
     setSamples(rows)
   }
   const live = active === 'dnn-mpc' && stage === 1
+  useEffect(() => {
+    setSpeedPreview(null)
+    setCyclesPreview(null)
+  }, [live, snap?.run])
+
+  function receiveSnapshot(v: Snapshot, replace: boolean) {
+    const previous = lastSnapshot.current
+    if (previous?.run === v.run) {
+      if (previous.seq > v.seq ||
+          (previous.events[previous.events.length - 1]?.event_id ?? 0) > (v.events[v.events.length - 1]?.event_id ?? 0)) return
+    } else {
+      setEdits({})
+      const original = cfg?.models.find(m => m.version === v.model)
+      if (original) setModel(original.id)
+    }
+    lastSnapshot.current = v
+    setSnap(v)
+    showSamples(v, replace)
+  }
   const { task, pollingError: trainingError } = useTask<Task>(
     trainId,
     setTrainId,
@@ -283,7 +290,6 @@ function CstrPage({ active }: { active: RiskId }) {
     loadConfig().then(config => {
       if (!current) return
       setCfg(config)
-      setSettings(previous => previous ?? config.settings)
       setTrain(previous => previous ?? config.training)
     }).catch(error => {
       if (current) setConfigError(error instanceof Error ? error.message : String(error))
@@ -306,6 +312,7 @@ function CstrPage({ active }: { active: RiskId }) {
     async function poll() {
       try {
         const h = await ensureHandle()
+        const ticket = commandRevision.current
         let v = await owned<Snapshot>(h, '?after=' + cursor)
         if (!alive) return
         if (v.status === 'ready') {
@@ -319,24 +326,22 @@ function CstrPage({ active }: { active: RiskId }) {
           if (!alive) return
           v.resync = true
         }
-        if (cursor < 0 && lastSnapshot.current?.run !== v.run) {
-          setSettings({ ...v.config, reference: v.reference })
-          const original = cfg?.models.find(
-            (m) => m.version === v.model,
-          )
-          if (original) setModel(original.id)
+        if (ticket !== commandRevision.current) {
+          timer = window.setTimeout(poll, 0)
+          return
         }
         const replace = cursor < 0 || v.resync || v.run !== run
         cursor = v.seq
         run = v.run
-        lastSnapshot.current = v
-        setSnap(v)
-        showSamples(v, replace)
+        receiveSnapshot(v, replace)
         timer = window.setTimeout(poll, 350)
       } catch (e) {
         if (!alive) return
         if (e instanceof ApiError && e.status === 404) {
           saveHandle(emptyHandle)
+          lastSnapshot.current = null
+          setSnap(null)
+          setEdits({})
           cursor = -1
           run = ''
         } else setMessage(String(e))
@@ -382,10 +387,11 @@ function CstrPage({ active }: { active: RiskId }) {
       setPulseReceipt({ ...receipt, kind })
       return
     }
+    commandRevision.current++
+    if (kind === 'reference' || kind === 'reset') setEdits({})
     const v = await owned<Snapshot>(h, '?after=-1')
-    lastSnapshot.current = v
-    setSnap(v)
-    showSamples(v, true)
+    commandRevision.current++
+    receiveSnapshot(v, true)
   }
   const online = snap?.online_update
   async function setUpdatePolicy(enabled: boolean, device: string) {
@@ -399,6 +405,9 @@ function CstrPage({ active }: { active: RiskId }) {
     }
   }
   const state = snap?.status ?? 'ready'
+  const lastReference = snap?.events.filter(e => e.event.startsWith('reference_')).slice(-1)[0]
+  const queuedReference = state !== 'ended' && lastReference?.event === 'reference_queued' &&
+    lastReference.value !== snap?.reference ? lastReference.value : undefined
   const allowed: Record<string, string[]> = {
     ready: ['reset', 'model', 'reference', 'end'],
     running: ['model', 'pause', 'reference', 'reset', 'end'],
@@ -407,8 +416,6 @@ function CstrPage({ active }: { active: RiskId }) {
   }
   const cmdLabels: Record<string, string> = {
     model: '应用所选模型',
-    pause: '暂停',
-    resume: '继续',
     reset: '应用配置并复位',
     end: '结束',
     reference: '更新设定值',
@@ -434,6 +441,8 @@ function CstrPage({ active }: { active: RiskId }) {
   const error = message || (stage === 0 ? trainingError : '')
   if (!isDnn) {
     if (active === 'self-healing') return <HealingPage />
+    if (active === 'fdi') return <FdiPage />
+    if (active === 'replay') return <ReplayPage />
     const overview = active === 'risk-overview'
     return <Page title={riskEntries.find(entry => entry.id === active)?.name ?? '风险管控优化决策'}>
       <section className="deferred">
@@ -441,15 +450,17 @@ function CstrPage({ active }: { active: RiskId }) {
         <p>{overview
           ? '四种控制算法接入后，这里将展示统一 CSTR 的仿真结果。'
           : '该子模块的 Web 仿真界面将在后续阶段接入。'}</p>
-        <p>从顶部“风险管控优化决策”菜单可进入深度神经网络优化控制或多变量过程自愈控制。</p>
+        <p>从顶部“风险管控优化决策”菜单可进入 DNN-MPC、自愈控制、FDI 或重放控制试验。</p>
       </section>
     </Page>
   }
 
   return (
     <Page title="深度神经网络优化控制" className="cstr-page">
-      <StageSwitch stage={stage} select={setStage} />
+      <StageSwitch id="cstr-stage" label="深度神经网络优化控制工作流程" tabs={stages} selected={stage} select={setStage}/>
       <section id="cstr-stage-panel" role="tabpanel" aria-labelledby={`cstr-stage-${stage}`} className="cstr-stage">
+        {live && cfg && <SimulationBar state={state} time={snap?.latest.t} busy={busy || !snap}
+          command={kind=>void action(()=>command(kind))}/>}
         {configError && <div role="alert" className="error">
           <strong>CSTR 配置加载失败</strong>　{configError}
           <div className="actions"><button type="button" className="small secondary"
@@ -487,6 +498,7 @@ function CstrPage({ active }: { active: RiskId }) {
                       min={lo}
                       max={hi}
                       step={st}
+                      decimals={k === 'lr' ? 5 : 0}
                       value={train[k]}
                       hint={numberHint(k, lo, hi, cfg.period, train[k])}
                       onChange={(v) => setTrain({ ...train, [k]: v })}
@@ -534,7 +546,7 @@ function CstrPage({ active }: { active: RiskId }) {
                   <span>{task?.error ?? task?.progress.message ?? ''}</span>
                 </header>
                 <progress aria-label="模型训练进度" max={100} value={task?.progress.percent ?? 0} />
-                {task?.progress.history?.length ? <TrendChart
+                {task?.progress.history?.length ? <TrendChart key={trainId}
                   title="预测模型训练误差"
                   series={['训练 MSE', '验证 MSE']}
                   axis="轮次"
@@ -581,11 +593,10 @@ function CstrPage({ active }: { active: RiskId }) {
                       </select>
                       <small id="cstr-preset-hint" className="parameter-hint">{parameterHelp.preset}</small>
                     </label>
-                    <FormNumber label="持续周期" value={cycles} min={1} max={scenarios.max_cycles} step={1}
+                    <FormNumber label="持续周期" value={cycles} min={1} max={scenarios.max_cycles} step={1} decimals={0}
+                      onPreview={setCyclesPreview}
+                      aside={pulseDurationHint((cyclesPreview ?? cycles) * cfg.period, speedPreview ?? settings.speed, snap?.config.speed)}
                       hint={numberHint('duration', 1, scenarios.max_cycles, cfg.period, cycles)} onChange={setDuration} />
-                    {snap && validCycles && <span className="muted">
-                      {(cycles * cfg.period).toFixed(1)} 仿真分钟，按当前 {snap.config.speed}× 约 {(cycles * cfg.period * 60 / snap.config.speed).toFixed(1)} 秒
-                    </span>}
                   </div>
                   <div className="actions">
                     <button type="button" disabled={busy || !pulse.canApply || !validCycles}
@@ -614,26 +625,36 @@ function CstrPage({ active }: { active: RiskId }) {
                   </label>
                   {(
                     [
-                      ['horizon', '预测时域', 3, 40, 1],
-                      ['flow_min', '最小流量 (L/min)', 95, 148.55, 1],
-                      ['flow_max', '最大流量 (L/min)', 148.56, 200, 1],
-                      ['move_weight', '流量变化权重', 0.005, 5, 0.01],
-                      ['speed', '推进倍率', 0.25, 10, 0.25],
-                      ['reference', '釜温设定 (K)', 428, 434, 0.25],
+                      ['horizon', '预测时域', 3, 40, 1, 0],
+                      ['flow_min', '最小流量 (L/min)', 95, 148.55, 1, 2],
+                      ['flow_max', '最大流量 (L/min)', 148.56, 200, 1, 2],
+                      ['move_weight', '流量变化权重', 0.005, 5, 0.01, 3],
+                      ['speed', '推进倍率', ...speedLimits, 0.25, 2],
+                      ['reference', '釜温设定 (K)', 428, 434, 0.25, 3],
                     ] as const
-                  ).map(([k, l, lo, hi, st]) => (
+                  ).map(([k, l, lo, hi, st, decimals]) => (
                     <FormNumber
-                      key={k}
+                      key={`${snap?.run}-${k}-${runningSettings?.[k]}`}
                       label={l}
                       min={lo}
                       max={hi}
                       step={st}
+                      decimals={decimals}
+                      disabled={!snap || busy}
+                      runningValue={runningSettings?.[k]}
+                      onPreview={k === 'speed' ? setSpeedPreview : undefined}
                       value={settings[k]}
-                      hint={numberHint(k, lo, hi, cfg.period, settings[k])}
-                      onChange={(v) => setSettings({ ...settings, [k]: v })}
+                      hint={numberHint(k, lo, hi, cfg.period, settings[k]) + (k === 'reference' && queuedReference !== undefined
+                        ? '\n' + parameterHelp.referenceQueued.replace('{value}', String(queuedReference)) : '')}
+                      onChange={v => setEdits(previous => {
+                        const next = { ...previous, [k]: v }
+                        if (v === runningSettings?.[k]) delete next[k]
+                        return next
+                      })}
                     />
                   ))}
                 </div>
+                <p className="cstr-data-help">{parameterHelp.apply}</p>
                 <div className="actions">
                   {Object.entries(cmdLabels).map(([k, v]) => (
                     <button
@@ -686,9 +707,16 @@ function CstrPage({ active }: { active: RiskId }) {
                   <span>温度偏差 {snap ? (snap.latest.T - snap.latest.T_ref).toFixed(2) : '—'} K</span>
                   <span>{cfg.models.find(entry => entry.id === 'default')?.version === snap?.model ? '默认 CSTR 模型' : '当前模型'}　{snap?.model ?? '—'}</span>
                   <span>
-                    求解 {(snap?.latest.solve_ms ?? 0).toFixed(1)} ms
+                    {snap?.control_display?.timing ?? (snap?.latest.solve_ms != null
+                      ? `MPC 求解 ${snap.latest.solve_ms.toFixed(1)} ms` : '等待首个控制周期')}
                   </span>
                 </header>
+                {snap?.control_display?.message && (
+                  <p role={snap.control_display.active ? 'alert' : 'status'}
+                    className={snap.control_display.active ? 'error' : 'muted'}>
+                    {snap.control_display.message}
+                  </p>
+                )}
                 {snap && <CstrProcessDiagram key={'diagram-' + snap.run} display={snap.display}
                   appliedFlow={snap.latest.Qc} running={snap.status === 'running'} />}
                 {trialDisplay && (trialDisplay.timing || trialDisplay.metrics) && <section className="module-status-bar cstr-trial-status" aria-label="扰动试验结果">

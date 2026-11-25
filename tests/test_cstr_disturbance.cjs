@@ -11,7 +11,15 @@ const compiled = ts.transpileModule(fs.readFileSync(file, 'utf8'), {
 })
 const moduleExports = {}
 vm.runInNewContext(compiled.outputText, { exports: moduleExports })
-const { pulseControls } = moduleExports
+const { pulseControls, pulseDurationHint } = moduleExports
+
+test('duration preview uses the edited speed and marks unapplied changes', () => {
+  assert.equal(pulseDurationHint(2, 8, 4), '2.0 仿真分钟，按设定 8× 约 15.0 秒（待应用）')
+  assert.equal(pulseDurationHint(1.5, 8, 4), '1.5 仿真分钟，按设定 8× 约 11.3 秒（待应用）')
+  assert.equal(pulseDurationHint(.5, 10, 10), '0.5 仿真分钟，按设定 10× 约 3.0 秒')
+  assert.equal(pulseDurationHint(2, 4), '2.0 仿真分钟，按设定 4× 约 30.0 秒')
+  for (const speed of [0, 11, NaN]) assert.equal(pulseDurationHint(2, speed, 4), '—')
+})
 
 const before = { run: 'run-a', seq: 22, status: 'running', events: [], disturbance: null }
 const apply = { run: before.run, seq: 22, key: 'pulse', kind: 'disturbance' }

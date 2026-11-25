@@ -14,6 +14,8 @@ from .dnn_mpc import dataset, model, training, validation
 from .dnn_mpc.mpc import Settings
 from .session import Session
 from .healing_session import HealingService
+from .fdi_session import FdiService
+from .replay_session import ReplayService
 from .disturbance import options as disturbance_options
 from . import NAVIGATION
 
@@ -49,6 +51,8 @@ class ControlService:
                          or USER_DATA/"Platform_sjtu"/"cstr")
         self.record_root = tasks.register_record_root(self.root/"tasks")
         self.healing = HealingService(self.root/"self-healing")
+        self.fdi = FdiService(self.root/"fdi")
+        self.replay = ReplayService(self.root/"replay")
         self.lock = RLock()
         self.sessions = {}
 
@@ -283,6 +287,8 @@ class ControlService:
 
     def close(self):
         self.healing.close()
+        self.fdi.close()
+        self.replay.close()
         with self.lock:
             sessions = list(self.sessions.values())
             self.sessions.clear()

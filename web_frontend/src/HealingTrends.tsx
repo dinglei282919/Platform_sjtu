@@ -1,12 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type PointerEvent } from 'react'
-import { getInstanceByDom, type EChartsOption, type LineSeriesOption, type ScatterSeriesOption } from 'echarts'
+import { useEffect, useMemo, useState } from 'react'
+import type { EChartsOption, LineSeriesOption, ScatterSeriesOption } from 'echarts'
+import {trendGrid as grid, useTrendGestures, type Range} from './trendGestures'
 import { SampleChart } from './SampleChart'
 import { api } from './api'
 import { healingColors as colors, inputs, outputs, type Group, type Method, type Options, type Output, type Row, type Signal, type Snapshot } from './healingTypes'
 
 const span = 600
-const grid = {left:68, right:18, top:46, bottom:42}
-type Range = [number,number]
 
 export function HealingEffect({snap, method, select}: {snap: Snapshot; method: Method; select:(value:Method)=>void}) {
   const display = snap.view.effect
@@ -61,51 +60,7 @@ function Plot({signal,rows,cfg,snap,group,domain,pan,restore}: {
   signal: Signal; rows: Row[]; cfg: Options; snap: Snapshot; group: Group; domain: Range
   pan: (at:number)=>void; restore: ()=>void
 }) {
-  const host = useRef<HTMLDivElement>(null)
-  const drag = useRef<{x:number; y:number; domain:Range; range:Range; width:number; height:number} | null>(null)
-  const [vertical,setVertical] = useState<Range | undefined>()
-  function coords(x:number,y:number) {
-    const rect=host.current!.getBoundingClientRect()
-    const width=rect.width-grid.left-grid.right, height=rect.height-grid.top-grid.bottom
-    const fx=(x-rect.left-grid.left)/width, fy=(rect.bottom-grid.bottom-y)/height
-    if (width>0 && height>0 && fx>=0 && fx<=1 && fy>=0 && fy<=1) return {width,height,fy}
-  }
-  function range(): Range | undefined {
-    const el=host.current?.querySelector<HTMLElement>('.chart')
-    const chart=el && getInstanceByDom(el)
-    if (!chart || !el) return
-    return [Number(chart.convertFromPixel({yAxisIndex:0},el.clientHeight-grid.bottom)),Number(chart.convertFromPixel({yAxisIndex:0},grid.top))]
-  }
-  useEffect(()=>{
-    const el=host.current!
-    function wheel(e:WheelEvent) {
-      if (!e.shiftKey) return
-      const pos=coords(e.clientX,e.clientY), r=range()
-      if (!pos || !r) return
-      e.preventDefault()
-      const size=(r[1]-r[0])*(e.deltaY<0 ? .5 : 2)
-      const low=r[0]+pos.fy*(r[1]-r[0]-size)
-      if (Number.isFinite(low) && size>1e-12) setVertical([low,low+size])
-    }
-    el.addEventListener('wheel',wheel,{passive:false})
-    return ()=>el.removeEventListener('wheel',wheel)
-  },[])
-  function start(e:PointerEvent<HTMLDivElement>) {
-    const pos=coords(e.clientX,e.clientY), r=range()
-    if (e.button!==0 || !pos || !r) return
-    drag.current={x:e.clientX,y:e.clientY,domain,range:r,width:pos.width,height:pos.height}
-    e.currentTarget.setPointerCapture(e.pointerId)
-  }
-  function move(e:PointerEvent<HTMLDivElement>) {
-    const d=drag.current
-    if (!d) return
-    const dx=e.clientX-d.x, dy=e.clientY-d.y
-    if (Math.abs(dx)>=4) pan(d.domain[0]-dx*(d.domain[1]-d.domain[0])/d.width)
-    if (Math.abs(dy)>=4) {
-      const delta=dy*(d.range[1]-d.range[0])/d.height
-      setVertical([d.range[0]+delta,d.range[1]+delta])
-    }
-  }
+  const {vertical, plotProps} = useTrendGestures(domain, pan, restore)
   const index=outputs.indexOf(signal as Output)
   const keys=useMemo(()=>index>=0 ? Object.keys(cfg.groups) as Group[] : [group], [index,cfg.groups,group])
   const center=snap.config.references[index]
@@ -124,9 +79,7 @@ function Plot({signal,rows,cfg,snap,group,domain,pan,restore}: {
       yAxis:{type:'value',scale:true,min:vertical?.[0],max:vertical?.[1],axisLabel:{color:'#a9c1d5'},splitLine:{lineStyle:{color:'#30465d'}}},series:lines}
   },[cfg.groups,domain,group,rows,signal,vertical,index,keys,center,bounds])
   const [name,unit]=cfg.signals[signal]
-  return <section><h3>{name} ({unit})</h3><div ref={host} className="healing-plot" onPointerDown={start} onPointerMove={move}
-    onPointerUp={()=>{drag.current=null}} onLostPointerCapture={()=>{drag.current=null}}
-    onDoubleClick={e=>{if(coords(e.clientX,e.clientY)) restore()}}>
+  return <section className="cstr-trend-panel"><h3>{name} ({unit})</h3><div {...plotProps}>
     <SampleChart key={group} option={option} height={235} samples={rows} timeOf={r=>r.t} unit={unit}
       readingsOf={r=>{
         const values: [string,number][] = keys.map(key=>[cfg.groups[key],r.groups[key][signal]])
