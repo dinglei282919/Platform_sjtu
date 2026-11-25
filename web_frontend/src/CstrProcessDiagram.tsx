@@ -10,7 +10,7 @@ type Props = { display: Record<string, string>; appliedFlow: number; running: bo
 export function CstrProcessDiagram({ display, appliedFlow, running }: Props) {
   const host = useRef<HTMLDivElement>(null)
   const labels = useRef<Label[]>([])
-  const liquid = useRef<SVGRectElement | null>(null)
+  const attributes = useRef<{node: Element; name: string; key: string}[]>([])
 
   // Keep one SVG tree for this run so updating a reading never restarts the moving stripes.
   useLayoutEffect(() => {
@@ -19,7 +19,12 @@ export function CstrProcessDiagram({ display, appliedFlow, running }: Props) {
     labels.current = Array.from(root.querySelectorAll<SVGTextElement>('text'))
       .map(node => ({ node, format: node.textContent ?? '' }))
       .filter(label => label.format.includes('@@'))
-    liquid.current = root.querySelector<SVGRectElement>('[fill="@@COLOR@@"]')
+    for (const node of root.querySelectorAll('[fill], [opacity], [stroke-width], [stroke-dasharray]')) {
+      for (const name of ['fill','opacity','stroke-width','stroke-dasharray']) {
+        const match = /^@@([A-Z]+)@@$/.exec(node.getAttribute(name) ?? '')
+        if (match) attributes.current.push({node, name, key: match[1]})
+      }
+    }
     const layer = root.querySelector('#pipe-motion')!
     const pattern = layer.getAttribute('stroke-dasharray')!.split(/\s+/).map(Number)
     const pitch = pattern.reduce((sum, value) => sum + value, 0)
@@ -31,7 +36,10 @@ export function CstrProcessDiagram({ display, appliedFlow, running }: Props) {
       const text = format.replace(token, (_, key: string) => display[key] ?? '—')
       if (node.textContent !== text) node.textContent = text
     }
-    if (display.COLOR) liquid.current?.setAttribute('fill', display.COLOR)
+    for (const {node, name, key} of attributes.current) {
+      const value = display[key] ?? (name === 'opacity' ? '0' : '')
+      if (node.getAttribute(name) !== value) node.setAttribute(name, value)
+    }
   }, [display])
 
   useLayoutEffect(() => {
@@ -43,6 +51,6 @@ export function CstrProcessDiagram({ display, appliedFlow, running }: Props) {
   }, [appliedFlow])
 
   return <div ref={host} className="cstr-diagram" role="img" aria-label="夹套式 CSTR 实时工艺图"
-    aria-description={`釜内温度 ${display.TEMP} K，夹套出口温度 ${display.JACKET} K，实际冷却液流量 ${display.FLOW} L/min`}
+    aria-description={`釜内温度 ${display.TEMP} K，夹套出口温度 ${display.JACKET} K，实际冷却液流量 ${display.FLOW} L/min　${display.SIGNALLABEL??''}`}
     data-running={running} dangerouslySetInnerHTML={diagram} />
 }

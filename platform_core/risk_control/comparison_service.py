@@ -1,6 +1,23 @@
 """Registry shared by the independently owned CSTR comparison sessions."""
 from threading import RLock
 
+from .cstr import SAMPLE_MIN
+
+
+def sample_bands(rows):
+    """Half-open exposed intervals in the supplied sampling window, in minutes."""
+    bands = []
+    previous = None
+    for row in rows:
+        if row["phase"] == "active":
+            end = round((row["seq"] + 1) * SAMPLE_MIN, 10)
+            if previous is not None and previous["phase"] == "active" and previous.get("segment") == row.get("segment"):
+                bands[-1][1] = end
+            else:
+                bands.append([row["t"], end])
+        previous = row
+    return bands
+
 
 class ComparisonService:
     def __init__(self, root):

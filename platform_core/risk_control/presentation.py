@@ -9,12 +9,29 @@ def template():
     return (Path(__file__).resolve().parents[2]/"assets/cstr/process.svg").read_text(encoding="utf-8")
 
 
+def marker_tokens(marker):
+    active = marker.get("active", False)
+    return {"MEASUREMARK": "1" if marker.get("link") == "measurement" else "0",
+            "EXECMARK": "1" if marker.get("link") == "execution" else "0",
+            "OBSBRANCH": "1" if marker.get("link") == "observer" else "0",
+            "OBSPREVIEW": "1" if marker.get("link") == "observer" and marker.get("preview") else "0",
+            "OBSACTIVE": "1" if marker.get("link") == "observer" and active else "0",
+            "SIGNALWIDTH": "5" if active else "3", "SIGNALDASH": "none" if active else "3 3",
+            "SIGNALLABEL": marker.get("label", "")}
+
+
 def tokens(sample):
     value = sample["T"]
     palette = np.array([[145, 197, 224], [244, 221, 186], [227, 141, 112]])
     channels = [int(round(np.interp(value, [424, 431, 438], channel))) for channel in palette.T]
-    return {"COLOR": "#%02x%02x%02x" % tuple(channels), "TEMP": f"{value:.2f}",
-            "JACKET": f"{sample['Tc']:.2f}", "FLOW": f"{sample['Qc']:.2f}", "C": f"{sample['C']:.4f}",
+    read = sample.get("flow_read_previous")
+    return {**marker_tokens(sample.get("signal_marker") or {}),
+            "FDISENSORS": "1" if sample.get("loop_side") or sample.get("show_sensors") else "0",
+            "METERFLAG": "1" if sample.get("loop_side") == "measurement" else "0",
+            "METERREAD": "—" if read is None else f"{read:.2f}",
+            "COLOR": "#%02x%02x%02x" % tuple(channels), "TEMP": f"{value:.2f}",
+            "JACKET": f"{sample['Tc']:.2f}", "FLOW": f"{sample['Qc']:.2f}",
+            "C": "—" if sample.get("C") is None else f"{sample['C']:.4f}",
             "REF": f"{sample['T_ref']:.2f}", "CI": f"{sample['Ci']:.2f}",
             "TI": f"{sample['Ti']:.1f}", "TCI": f"{sample['Tci']:.1f}"}
 

@@ -1,0 +1,24 @@
+{
+  "version": "cstr-fdi-qa-v1",
+  "sample_min": 0.1,
+  "length": 50,
+  "profiles": {
+    "flat": [[0, 1], [49, 1]],
+    "gradual": [[0, 0], [14, 1], [35, 1], [49, 0.4]]
+  },
+  "cases": {
+    "healthy": {"label": "健康对照"},
+    "inlet": {"label": "正常进料升温", "feed_K": 2},
+    "readout": {"label": "主釜温仪表示值偏高", "readout_K": 0.55},
+    "readout_soft": {"label": "主釜温仪表反向缓变", "profile": "gradual", "readout_K": -0.45},
+    "delivery": {"label": "冷却流量交付偏差", "delivery_L_min": -2},
+    "delivery_soft": {"label": "冷却流量反向缓变", "profile": "gradual", "delivery_L_min": 1.6},
+    "heat_only": {"label": "独立釜侧热负荷", "heat_K_min": 0.65},
+    "mixed": {"label": "冷却偏差与釜侧热负荷", "delivery_L_min": -2, "heat_K_min": 0.65},
+    "mismatch_clean": {"label": "边界试验 · 健康换热失配", "exchange": 0.99},
+    "mismatch_event": {"label": "边界试验 · 换热失配与偏差", "exchange": 0.99, "readout_K": 0.55, "delivery_L_min": -2},
+    "noisy_event": {"label": "双倍测温噪声与偏差", "noise_scale": 2, "readout_K": 0.55, "delivery_L_min": -2},
+    "headroom": {"label": "边界试验 · 冷却余量不足", "headroom_L_min": 0.75, "delivery_L_min": -2},
+    "missing_jacket": {"label": "可信夹套测温缺失一拍", "missing_jacket_at": 4}
+  }
+}

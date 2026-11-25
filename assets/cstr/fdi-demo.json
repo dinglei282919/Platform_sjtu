@@ -1,0 +1,73 @@
+{
+  "measurement": {
+    "presets": {"readout": "主釜温度计读数偏高 0.55 K"},
+    "preset_notes": {
+      "readout": "样本生效时，主釜温度计的上报值比本拍原始读数高 0.55 K。例如，原始读数为 430.88 K（含测量噪声），图中的观测值就显示 431.43 K。真实值取自反应釜的仿真状态。"
+    },
+    "controller_note": "釜内物料温度计读数 T<sub>m</sub>（K）可能受注入影响。已补偿组用夹套冷却液出口实测温度 T<sub>c,m</sub>（K）和上一拍阀后流量计读数估计釜温，再把校验后的釜温反馈送给 PI。",
+    "protected_group": "guard",
+    "comparison": "两组 PI 参数相同。未补偿组直接使用主釜温读数，已补偿组使用校验后的反馈。阴影标出样本生效区间。",
+    "charts": [
+      {
+        "title": "釜温观测与估计", "unit": "K",
+        "note": "取已补偿组同一时刻的主釜温读数、仿真真值和由夹套测温校正的独立估计。",
+        "signals": [
+          {"name": "观测值", "group": "guard", "key": "Tm", "color": "#ffbd72"},
+          {"name": "真实值", "group": "guard", "key": "T", "color": "#97dca0"},
+          {"name": "估计值", "group": "guard", "key": "witness", "color": "#79baff", "dashed": true}
+        ]
+      },
+      {
+        "title": "控制作用 · 冷却阀流量指令", "unit": "L/min",
+        "signals": [
+          {"name": "未补偿", "group": "raw", "key": "Qc_cmd", "color": "#ffbd72", "dashed": true},
+          {"name": "已补偿", "group": "guard", "key": "Qc_cmd", "color": "#79baff"}
+        ]
+      },
+      {
+        "title": "被控目标 · 真实釜温", "unit": "K",
+        "signals": [
+          {"name": "未补偿", "group": "raw", "key": "T", "color": "#ffbd72", "dashed": true},
+          {"name": "已补偿", "group": "guard", "key": "T", "color": "#79baff"},
+          {"name": "设定值", "group": "guard", "key": "T_ref", "color": "#a5b6c6", "dashed": true}
+        ]
+      }
+    ]
+  },
+  "execution": {
+    "presets": {"delivery": "冷却流量少 2.0 L/min", "mixed": "冷却流量少 2.0 L/min，釜侧放热 +0.65 K/min"},
+    "preset_notes": {
+      "delivery": "样本生效时，若本拍冷却阀指令为 150.0 L/min，阀后实际流量为 148.0 L/min。此工况的釜侧额外热负荷为 0 K/min。",
+      "mixed": "样本生效时，从本拍冷却阀指令扣减 2.0 L/min，再按阀门上下限得到实际流量。釜内物料还受到额外放热，其对釜温变化率的贡献为 +0.65 K/min。"
+    },
+    "controller_note": "两层控制器读取釜内物料实测温度 T<sub>m</sub> 和夹套冷却液出口实测温度 T<sub>c,m</sub>（均为 K）。外层计算夹套目标温度，内层结合出口测温、入口条件和上一拍阀指令，修正冷却阀流量指令。阀后实际流量（L/min）仅供仿真评测。",
+    "protected_group": "full",
+    "comparison": "两组使用相同的两层控制器。未补偿组关闭釜侧和夹套侧补偿，已补偿组同时启用两项。阴影标出样本生效区间。",
+    "charts": [
+      {
+        "title": "夹套出口温度观测与估计", "unit": "K",
+        "note": "取已补偿组同一时刻的夹套测温与仿真真值。估计值是上一拍对本拍的名义预测，首拍留空。",
+        "signals": [
+          {"name": "观测值", "group": "full", "key": "Tcm", "color": "#ffbd72"},
+          {"name": "真实值", "group": "full", "key": "Tc", "color": "#97dca0"},
+          {"name": "估计值", "group": "full", "key": "prior_dnn_Tc", "color": "#79baff", "dashed": true}
+        ]
+      },
+      {
+        "title": "控制作用 · 冷却阀流量指令", "unit": "L/min",
+        "signals": [
+          {"name": "未补偿", "group": "bare", "key": "Qc_cmd", "color": "#ffbd72", "dashed": true},
+          {"name": "已补偿", "group": "full", "key": "Qc_cmd", "color": "#79baff"}
+        ]
+      },
+      {
+        "title": "被控目标 · 真实釜温", "unit": "K",
+        "signals": [
+          {"name": "未补偿", "group": "bare", "key": "T", "color": "#ffbd72", "dashed": true},
+          {"name": "已补偿", "group": "full", "key": "T", "color": "#79baff"},
+          {"name": "设定值", "group": "full", "key": "T_ref", "color": "#a5b6c6", "dashed": true}
+        ]
+      }
+    ]
+  }
+}

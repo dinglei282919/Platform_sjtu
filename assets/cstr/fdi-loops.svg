@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="218" viewBox="0 0 760 218">
+ <rect width="760" height="218" rx="6" fill="#f7fafc"/>
+ <g font-family="Microsoft YaHei, Segoe UI, sans-serif" font-size="13" text-anchor="middle" fill="#263f51">
+  <g opacity="@@MEASURELOOP@@">
+   <g fill="#edf4f8" stroke="#728a99" stroke-width="1.5">
+    <rect x="14" y="42" width="112" height="36" rx="6"/><rect x="241" y="42" width="130" height="36" rx="6"/>
+    <rect x="464" y="42" width="86" height="36" rx="6"/><rect x="644" y="42" width="96" height="36" rx="6"/>
+    <rect x="14" y="130" width="112" height="36" rx="6"/><rect x="241" y="130" width="130" height="36" rx="6"/>
+   </g>
+   <g stroke="#607b8e" stroke-width="1.7" fill="none">
+    <path d="M126 60H239 m-7 -4 7 4 -7 4 M371 60H462 m-7 -4 7 4 -7 4 M550 60H642 m-7 -4 7 4 -7 4"/>
+    <path d="M70 130V80 m-4 7 4 -7 4 7 M126 148H239 m-7 -4 7 4 -7 4 M306 130V80 m-4 7 4 -7 4 7"/>
+    <path d="M692 78V196H70V168 m-4 7 4 -7 4 7 M306 196V168 m-4 7 4 -7 4 7 M507 111V80 m-4 7 4 -7 4 7"/>
+   </g>
+   <text x="70" y="65">釜温测点</text><text x="306" y="65">@@SELECTMODE@@</text>
+   <text x="507" y="65">温控 PI</text><text x="692" y="65">冷却阀</text>
+   <text x="70" y="153">反应釜与夹套</text><text x="306" y="153">夹套测温 EKF</text>
+   <g font-size="12"><text x="183" y="51">主釜温读数</text><text x="417" y="51">有效反馈</text><text x="598" y="51">流量指令</text>
+    <text x="182" y="140">夹套出口测温</text><text x="349" y="108">独立估计</text><text x="507" y="125">釜温设定</text>
+    <text x="395" y="187">上一拍阀后流量回读</text><text x="588" y="213">实际冷却流量</text></g>
+   <g opacity="@@MEASUREMARK@@"><path d="M126 60H239" fill="none" stroke="#b54f2d" stroke-width="@@SIGNALWIDTH@@" stroke-dasharray="@@SIGNALDASH@@"/>
+    <text x="183" y="26" fill="#923c21">@@SIGNALLABEL@@</text></g>
+  </g>
+  <g opacity="@@EXECLOOP@@">
+   <g fill="#edf4f8" stroke="#728a99" stroke-width="1.5">
+    <rect x="14" y="25" width="108" height="40" rx="6"/><rect x="205" y="25" width="130" height="40" rx="6"/>
+    <rect x="423" y="25" width="150" height="40" rx="6"/><rect x="14" y="101" width="108" height="40" rx="6"/>
+    <rect x="205" y="101" width="130" height="40" rx="6"/><rect x="423" y="101" width="150" height="40" rx="6"/>
+    <rect x="674" y="101" width="72" height="40" rx="6"/><rect x="205" y="168" width="130" height="32" rx="6"/>
+   </g>
+   <g stroke="#607b8e" stroke-width="1.7" fill="none">
+    <path d="M68 101V67 m-4 7 4 -7 4 7 M122 45H203 m-7 -4 7 4 -7 4 M335 45H421 m-7 -4 7 4 -7 4 M474 10H498V23 m-4 -7 4 7 4 -7"/>
+    <path d="M498 65V99 m-4 -7 4 7 4 -7 M270 65V99 m-4 -7 4 7 4 -7 M335 121H421 m-7 -4 7 4 -7 4"/>
+    <path d="M270 141V166 m-4 -7 4 7 4 -7 M335 184H498V143 m-4 7 4 -7 4 7"/>
+    <path d="M573 121H672 m-7 -4 7 4 -7 4 M710 141V210H68V143 m-4 7 4 -7 4 7"/>
+   </g>
+   <text x="68" y="42">可信釜温</text><text x="68" y="58">可信夹套测温</text>
+   <text x="270" y="50">物料与热平衡观测</text><text x="498" y="42">釜侧控制与目标滤波</text><text x="498" y="58" font-size="11">@@OUTERMODE@@</text>
+   <text x="68" y="126">反应釜与夹套</text><text x="270" y="118">冻结 DNN</text><text x="270" y="134" font-size="11">测温与本地指令</text>
+   <text x="498" y="126">夹套侧控制与限幅</text><text x="710" y="126">冷却阀</text><text x="270" y="189">RBF 与鲁棒补偿</text>
+   <g font-size="11"><text x="443" y="14">釜温设定</text><text x="165" y="37">两路测温</text><text x="378" y="38">热负荷估计</text><text x="312" y="87">浓度估计</text>
+    <text x="549" y="87">下一拍夹套目标</text><text x="379" y="109">预测、斜率</text><text x="347" y="157">上拍预测与本拍测温</text>
+    <text x="420" y="177">@@INNERMODE@@</text><text x="623" y="111">流量指令</text><text x="615" y="202">实际冷却流量</text></g>
+   <g opacity="@@EXECMARK@@"><path d="M573 121H672" fill="none" stroke="#b54f2d" stroke-width="@@SIGNALWIDTH@@" stroke-dasharray="@@SIGNALDASH@@"/>
+    <text x="642" y="88" fill="#923c21">@@SIGNALLABEL@@</text></g>
+  </g>
+  <g opacity="@@PILOOP@@">
+   <g fill="#edf4f8" stroke="#728a99" stroke-width="1.5">
+    <rect x="18" y="72" width="108" height="42" rx="6"/><rect x="225" y="72" width="106" height="42" rx="6"/>
+    <rect x="442" y="72" width="84" height="42" rx="6"/><rect x="624" y="72" width="116" height="42" rx="6"/>
+   </g>
+   <g stroke="#607b8e" stroke-width="1.7" fill="none">
+    <path d="M126 93H223 m-7 -4 7 4 -7 4 M331 93H440 m-7 -4 7 4 -7 4 M526 93H622 m-7 -4 7 4 -7 4"/>
+    <path d="M682 114V165H72V116 m-4 7 4 -7 4 7 M278 45V70 m-4 -7 4 7 4 -7"/>
+   </g>
+   <text x="72" y="98">釜温测点</text><text x="278" y="98">普通 PI</text><text x="484" y="98">冷却阀</text><text x="682" y="98">反应釜与夹套</text>
+   <g font-size="12"><text x="175" y="80">主釜温读数</text><text x="385" y="80">流量指令</text><text x="575" y="80">实际流量</text><text x="278" y="36">釜温设定</text></g>
+   <g opacity="@@MEASUREMARK@@"><path d="M126 93H223" stroke="#b54f2d" stroke-width="@@SIGNALWIDTH@@" stroke-dasharray="@@SIGNALDASH@@"/><text x="164" y="59" fill="#923c21">@@SIGNALLABEL@@</text></g>
+   <g opacity="@@EXECMARK@@"><path d="M331 93H440" stroke="#b54f2d" stroke-width="@@SIGNALWIDTH@@" stroke-dasharray="@@SIGNALDASH@@"/><text x="387" y="59" fill="#923c21">@@SIGNALLABEL@@</text></g>
+  </g>
+ </g>
+</svg>

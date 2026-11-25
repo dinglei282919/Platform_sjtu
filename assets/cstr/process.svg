@@ -42,8 +42,31 @@
  <path d="M192 168L207 176 192 184Z M222 168L207 176 222 184Z" fill="#fff" stroke="#247f91" stroke-width="2"/>
  <path d="M207 176V163 M201 163H213" stroke="#247f91" fill="none" stroke-width="1.5"/>
  <circle cx="207" cy="115" r="15" stroke="#78658c" fill="#f2edf6" stroke-width="2"/>
- <path d="M318 115H222 M207 130V161" fill="none" stroke="#78658c" stroke-width="2" stroke-dasharray="5 4"/>
+ <g fill="none" stroke="#78658c" stroke-width="2" stroke-dasharray="5 4">
+  <path id="temperature-feedback" d="M318 115H222"/>
+  <path id="valve-command" d="M207 130V161"/>
+ </g>
+ <g fill="#923c21" stroke="#b54f2d" stroke-width="@@SIGNALWIDTH@@" stroke-dasharray="@@SIGNALDASH@@">
+  <g id="measurement-marker" opacity="@@MEASUREMARK@@">
+   <use xlink:href="#temperature-feedback"/><text x="215" y="96" stroke="none" font-size="12">@@SIGNALLABEL@@</text>
+  </g>
+  <g id="execution-marker" opacity="@@EXECMARK@@">
+   <use xlink:href="#valve-command"/><text x="198" y="133" text-anchor="end" stroke="none" font-size="12">@@SIGNALLABEL@@</text>
+  </g>
+ </g>
  <circle cx="318" cy="115" r="3" fill="#78658c"/>
+ <g opacity="@@FDISENSORS@@" font-size="11" fill="#42596c">
+  <text x="317" y="83">釜温测点</text>
+  <circle cx="487" cy="106" r="4" fill="#fbfdfe" stroke="#247f91" stroke-width="2"/>
+  <text x="498" y="126">夹套出口测温</text>
+ </g>
+ <g id="downstream-flowmeter" opacity="@@METERFLAG@@" fill="#247f91">
+  <path d="M253 175V161" stroke="#247f91" stroke-width="1.8"/>
+  <circle cx="253" cy="151" r="10" fill="#fbfdfe" stroke="#247f91" stroke-width="1.8"/>
+  <text x="253" y="155" text-anchor="middle" font-size="10">FT</text>
+  <text x="205" y="210" font-size="11">独立流量计（上一拍）</text>
+  <text x="205" y="226" font-size="11">@@METERREAD@@ L/min</text>
+ </g>
  <text x="207" y="120" text-anchor="middle" fill="#665078">TC</text>
  <text x="32" y="32">进料 · @@CI@@ mol/L · @@TI@@ K</text>
  <text x="32" y="151" fill="#247f91">冷却液入口 · @@TCI@@ K</text>
@@ -53,6 +76,24 @@
  <text x="504" y="199">釜温设定 · @@REF@@ K</text>
  <text x="378" y="144" text-anchor="middle" font-size="12">釜内温度</text>
  <text x="378" y="167" text-anchor="middle" font-weight="bold" font-size="18">@@TEMP@@ K</text>
+ <g id="replay-observer-branch" opacity="@@OBSBRANCH@@" font-size="12">
+  <rect x="461" y="21" width="94" height="26" rx="5" fill="#eef4f7" stroke="#698190"/>
+  <text x="508" y="38" text-anchor="middle">两路测温副本</text>
+  <path d="M555 34H644" fill="none" stroke="#667f8e" stroke-width="2"/>
+  <path d="M638 29L647 34L638 39Z" fill="#667f8e"/>
+  <g opacity="@@OBSPREVIEW@@">
+   <path d="M555 34H644" fill="none" stroke="#a65023" stroke-width="2"/>
+   <path d="M638 29L647 34L638 39Z" fill="#a65023"/>
+  </g>
+  <g opacity="@@OBSACTIVE@@">
+   <rect x="555" y="29" width="83" height="10" fill="#fbfdfe"/>
+   <path d="M555 34H642" fill="none" stroke="#a65023" stroke-width="4" stroke-dasharray="7 4"/>
+   <path d="M638 28L647 34L638 40Z" fill="#a65023"/>
+  </g>
+  <rect x="647" y="21" width="96" height="26" rx="5" fill="#eef4f7" stroke="#698190"/>
+  <text x="695" y="38" text-anchor="middle">热负荷观测器</text>
+  <text x="601" y="62" text-anchor="middle" fill="#486171">@@SIGNALLABEL@@</text>
+ </g>
  <rect x="320" y="220" width="102" height="6" rx="3" fill="url(#temp)"/>
  <text x="306" y="228" text-anchor="end" font-size="11">424 K</text><text x="432" y="228" font-size="11">438 K</text>
 </g></svg>

@@ -75,6 +75,25 @@ class PipeDiagramTests(unittest.TestCase):
             self.assertGreater(bore, wall+10)
             self.assertLess(bore, 170)
 
+    def test_fdi_preview_effective_and_cancelled_lines_on_a_paused_sample(self):
+        def marked_pixels(side, active, visible=True):
+            marker = dict(link=side, active=active, label="FDI") if visible else {}
+            sample = dict(self.sample, loop_side=side, signal_marker=marker, flow_read_previous=148.)
+            self.diagram.set_sample(sample, "trial", False)
+            image = self.frame()
+            def marked(x, y):
+                color = image.pixelColor(x,y)
+                return color.red() > 1.5*color.green() and color.red()>120
+            return (sum(marked(x,115) for x in range(226,308)),
+                    sum(marked(207,y) for y in range(132,160)))
+        for side, selected in (("measurement",0), ("execution",1)):
+            preview = marked_pixels(side,False)
+            active = marked_pixels(side,True)
+            self.assertGreater(active[selected],preview[selected])
+            self.assertGreater(preview[selected],0)
+            self.assertEqual(active[1-selected],0)
+            self.assertEqual(marked_pixels(side,False,visible=False),(0,0))
+
     def test_zero_coolant_pause_hide_resume_and_new_run(self):
         self.diagram.set_sample({**self.sample, "seq": 2, "Qc": 0.}, "first", True)
         before = self.frame()

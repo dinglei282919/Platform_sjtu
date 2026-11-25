@@ -59,11 +59,14 @@ class ProcessDiagram(QWidget):
     def set_sample(self, sample, run, running):
         if self._timer.isActive():
             self._tick()
-        key = (run, sample["seq"])
+        key = (run, sample["seq"], sample.get("signal_marker"))
         if self._sample_key != key:
             if self._sample_key is None or self._sample_key[0] != run:
                 self._phase = dict(material=0., coolant=0.)
             self._renderer.load(QByteArray(presentation.render(sample).encode("utf-8")))
+            marker = (sample.get("signal_marker") or {}).get("label", "")
+            self.setAccessibleDescription((f"釜内温度 {sample['T']:.2f} K，夹套出口温度 {sample['Tc']:.2f} K，"
+                                           f"实际冷却液流量 {sample['Qc']:.2f} L/min　{marker}").rstrip())
             self._sample_key = key
         self._coolant_rate = max(0., sample["Qc"])/self._reference_flow
         self.set_running(running)
