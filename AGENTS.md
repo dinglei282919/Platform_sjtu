@@ -20,11 +20,11 @@ Framework.py -> main_interface.py -> 各功能 QWidget 页面
 | 潜在安全威胁识别与自动分类 | `error_classification.py` |
 | 多评估准则融合的风险学习分析 | `auto_score.py` |
 | 风险场景动态匹配与适配方案生成算法 | `cdq_risk_matching.py` |
-| 深度神经网络优化控制 | `desktop/risk_control/process_control_dnn_mpc.py` |
+| 深度神经网络优化控制 | `desktop/risk_control/dnn_mpc_page.py` 的模型训练与在线控制视图 |
 | 虚假数据注入下的自适应控制 | `desktop/risk_control/fdi_page.py` |
 | 重放攻击下的自适应控制 | `desktop/risk_control/replay_page.py` |
-| 多变量过程自愈控制仿真 | `desktop/risk_control/self_healing_page.py` |
-| 化学反应器自适应控制仿真 | `desktop/risk_control/reactor_page.py` |
+| 多变量过程自愈控制 | `desktop/risk_control/healing_page.py` |
+| 综合仿真展示 | `desktop/risk_control/workspace.py` 的综合页占位 |
 | SDG-HAZOP | `sdg_hazop.py` |
 | 基于 GSPN-MC 模型的动态化 SIL 验证方法 | `sil_validation.py` |
 
@@ -42,11 +42,11 @@ BS（浏览器/服务端）由 React 前端和 FastAPI 后端组成：
 | 层 | 目录/文件 | 技术 |
 | --- | --- | --- |
 | 页面和导航 | `web_frontend/src/App.tsx` | React + TypeScript |
-| 风险管控页面、组件与样式 | `web_frontend/src/`、`styles.css` | React + TypeScript + CSS |
+| 风险管控页面、组件与样式 | `web_frontend/src/risk-control/`（页面、共享组件与 `risk-control.css`） | React + TypeScript + CSS |
 | 页面样式 | `web_frontend/src/styles.css` | CSS |
 | 前端构建和开发服务器 | `web_frontend/package.json`、`web_frontend/vite.config.ts` | Vite |
-| API、请求模型、任务和结果接口 | `web_backend/app.py` | FastAPI |
-| 长任务协调 | `web_backend/task_manager.py` | 单工作线程任务管理 |
+| 应用入口、全局任务和结果接口 | `web_backend/app.py` | FastAPI |
+| 长任务协调 | `platform_core/task_manager.py`，`web_backend/task_manager.py` 提供兼容导入 | 任务、持久化与取消 |
 | 算法/Runtime 适配 | `web_backend/services/` | BS 后端服务层 |
 | 本机启动脚本 | `scripts/run_web_local.ps1` | PowerShell + Uvicorn |
 
@@ -65,21 +65,21 @@ BS 启动入口是：
 ### 1.3 共享层和运行生成物
 
 - `platform_core/`：保存不依赖 PySide6、React 或 FastAPI 的公共算法逻辑。CS 和 BS 都需要使用的纯 Python 数学逻辑优先放在这里。
-- `platform_core/risk_control/`：DNN/MPC、FDI、重放、自愈控制、化学反应器及其共用路径与绘图；各子模块保持独立，桌面和 Web 复用此计算层。
+- `platform_core/risk_control/` 实现共享 CSTR、各控制算法、会话和日志。四个模块独立运行，桌面直接调用服务，Web 通过 FastAPI 调用同一套服务。
 - `input_data/`：CSV、Excel、MAT 等输入数据。当前模块依赖的文件名和相对路径是接口约定，不要随意重命名或移动。
 - `output_figures/`：通用算法生成的图片和结果。
 - `gridattackpkg_core_output/`：异常检测 Runtime 相关输出。
-- `dnn_mpc/output/`：DNN/MPC 训练和仿真输出，例如 `training_performance.png`、`prediction_error.png`、`progress.json`。
+- `PLATFORM_CSTR_RUNTIME` 可指定 CSTR 任务、模型和各模块采样日志的位置。默认运行目录与回看方式见[操作手册](RISK_CONTROL_MANUAL.md#development)。`dnn_mpc/python_output/` 中已有历史结果应保留。
 - `web_runtime/`：BS 本机任务运行期间的临时任务和结果目录。
 
 输出目录中的文件通常是运行生成物。除非任务明确要求更新样例结果，否则不要把临时输出当作源码修改。
 
 ### 1.4 MATLAB Runtime 导出包
 
-以下目录是 MATLAB 编译导出的 Python 包，不属于 BS 或 CS 页面源码：
+当前异常行为检测依赖 MATLAB 编译导出的 Python 包。历史 DNN-MPC 编译包可按其原工程单独安装。
 
 - `build_python/`：`gridattackpkg`，供异常行为检测使用。
-- `dnn_mpc/build_python/`：`dnnmpcpkg`，用于历史 DNN-MPC 算法的独立调用；当前 DNN/MPC 页面使用 Python 共享核心。
+- 历史 `dnnmpcpkg` 的重新导出与独立调用见[旧 DNN-MPC 包说明](dnn_mpc/DNN_MPC_PYTHON_PACKAGE_SETUP.md)。当前四个 CSTR 模块使用 Python 共享核心。
 
 不要直接修改这些目录中的生成文件，尤其是导出的 `__init__.py`、`.ctf` 和其他编译产物。需要改变底层 MATLAB 算法时，应修改 MATLAB 源工程并重新导出，再同步安装说明和版本信息。
 
@@ -93,87 +93,34 @@ BS 启动入口是：
 | 潜在安全威胁识别与自动分类 | `error_classification.py` | `ClassificationPage` | `web_backend/services/classification.py`；`/api/classification/*` | `input_data/error_classification_*.csv` |
 | 多评估准则融合的风险学习分析 | `auto_score.py` | `ScorePage` | `platform_core/scoring.py`、`web_backend/services/scoring.py`；`/api/score/*` | 公共评分逻辑 |
 | 风险场景动态匹配与适配方案生成算法 | `cdq_risk_matching.py` | `CdqPageReplica` | `web_backend/services/cdq.py`；`/api/cdq/*` | `input_data/cdq_data.xlsx` |
-| 深度神经网络优化控制 | `desktop/risk_control/process_control_dnn_mpc.py` 的 `DnnMpcWorkflowWidget` | `DnnMpcPage.tsx` | `web_backend/services/training.py`、`mpc.py`；`/api/training/*`、`/api/mpc/*` | `platform_core/risk_control/dnn_mpc`、NPZ 模型与仿真输出 |
-| 虚假数据注入下的自适应控制 | `desktop/risk_control/fdi_page.py` | `FdiPage.tsx` | `web_backend/services/fdi.py`；`/api/fdi/*` | `platform_core/risk_control/fdi` |
-| 重放攻击下的自适应控制 | `desktop/risk_control/replay_page.py` | `ReplayPage.tsx` | `web_backend/services/replay.py`；`/api/replay/*` | `platform_core/risk_control/replay` |
-| 多变量过程自愈控制仿真 | `desktop/risk_control/self_healing_page.py` | `SelfHealingPage.tsx` | `web_backend/services/self_healing.py`；`/api/self-healing/*` | `platform_core/risk_control/self_healing`；见 `RISK_CONTROL_MANUAL.md` |
-| 化学反应器自适应控制仿真 | `desktop/risk_control/reactor_page.py` | `ReactorPage.tsx` | `web_backend/services/reactor.py`；`/api/reactor/*` | `platform_core/risk_control/reactor` |
+| 深度神经网络优化控制 | `desktop/risk_control/dnn_mpc_page.py` | `DnnMpcPage.tsx` | `web_backend/services/dnn_mpc.py`，`/api/cstr/config`、`/api/cstr/training`、`/api/cstr/sessions` | `platform_core/risk_control/dnn_mpc/`、`service.py`、`session.py`、`assets/cstr/default_model.npz` |
+| 虚假数据注入下的自适应控制 | `desktop/risk_control/fdi_page.py` | `FdiPage.tsx` | `web_backend/services/fdi.py`、`/api/cstr/fdi/*` | `platform_core/risk_control/fdi.py` 与同目录的控制和会话实现。三张趋势图与演示样本共用 `assets/cstr/fdi-demo.json` |
+| 重放攻击下的自适应控制 | `desktop/risk_control/replay_page.py` | `ReplayPage.tsx` | `web_backend/services/replay.py`，`/api/cstr/replay/*` | `platform_core/risk_control/{replay,replay_session,replay_display}.py` |
+| 多变量过程自愈控制 | `desktop/risk_control/healing_page.py` | `HealingPage.tsx` | `web_backend/services/healing.py`，`/api/cstr/healing/*` | `platform_core/risk_control/{healing,healing_display,healing_metrics,healing_session}.py` |
+| 综合仿真展示 | `desktop/risk_control/workspace.py` | `CstrWorkspace.tsx` | 共享导航，综合运行器待接入 | 各模块的独立结果见[操作手册](RISK_CONTROL_MANUAL.md#scope) |
 | SDG-HAZOP | `sdg_hazop.py` | `SdgPage` | `web_backend/services/sdg.py`；`/api/sdg/*` | SDG 示例/分析数据 |
 | 基于 GSPN-MC 模型的动态化 SIL 验证方法 | `sil_validation.py` | `SilPage` | `web_backend/services/sil.py`；`/api/sil/*` | GSPN-MC 仿真参数和结果 |
 
 CS 菜单名称和 BS 菜单名称应保持业务含义一致。当前 CS 菜单定义在 `main_interface.py`，BS 菜单和 `ModuleId` 定义在 `web_frontend/src/App.tsx`，后端模块列表在 `web_backend/app.py` 的 `/api/modules` 接口中。
 
-## 3. 从零安装依赖
+### 2.1 风险管控的调用边界
 
-### 3.1 基础环境
+Qt 的 `desktop/risk_control/workspace.py` 和 Web 的 `web_frontend/src/risk-control/CstrWorkspace.tsx` 负责选页。四个模块各自拥有页面、运行状态和 HTTP 适配器。Web 仿真页在 `SimulationLayout.tsx` 中组合控制面板与结果区。Qt 仿真页从 `layout.py` 和 `trends.py` 引入通用控件与趋势图。
 
-当前项目以 Windows、Conda、Python 3.10.20 为基准。推荐使用名为 `Platform` 的环境：
+| 职责 | 文件 | 修改时核对 |
+| --- | --- | --- |
+| 模块入口 | `platform_core/risk_control/__init__.py`、`desktop/risk_control/workspace.py`、`web_frontend/src/risk-control/CstrWorkspace.tsx`、`web_backend/app.py` | 菜单名称、可用状态及页面选择 |
+| 数值参数输入 | Web 的 `PlatformUI.tsx`、`ErrorDialog.tsx` 与 Qt 的 `desktop/risk_control/controls.py` | 使用各字段已有的范围与精度，在确认无效输入时弹窗、恢复上次确认值，并将焦点交还原字段 |
+| 对象与会话 | `platform_core/risk_control/cstr.py`、`thermal.py`、`service.py`、`comparison_service.py`、`session_lifecycle.py`、`journal.py` | 有效采样、运行标识、控制权、历史记录。算法状态由各分支持有 |
+| HTTP 会话接口 | `web_backend/services/control_http.py`、`comparison.py` | 四个模块共用控制者请求头、错误映射和在线连接。自愈、FDI、重放也共用创建与释放路由。各模块适配器声明自己的指令、回看和导出接口 |
+| CSTR 动态工艺图 | `assets/cstr/process.svg`、`platform_core/risk_control/presentation.py`、Qt 的 `ProcessDiagram` 和 Web 的 `CstrProcessDiagram` | 从同一运行、分支和采样点取真实状态与实际冷却流量。模块 4 在 `replay_display.diagram_sample` 映射读数，历史测温只显示在观测支路。暂停和历史回看时停下管线动画 |
+| FDI 与重放曲线 | Web 的 `ComparisonTrend.tsx`、`trendGestures.ts`、`SampleChart.tsx` 和 Qt 的 `desktop/risk_control/comparison_trends.py`、`trends.Trend` | Web 与自愈共用绘图区手势，Qt 使用在线趋势图类。同一运行的图共用时间窗口，纵轴逐图调整。按窗口内最后一个已发布采样点读取工艺图与详情，保留实际注入区间 |
 
-```powershell
-conda create -n Platform python=3.10.20 -y
-conda activate Platform
-python -m pip install --upgrade pip setuptools wheel
-```
+## 3. 环境、数据与输出约定
 
-Python 依赖以根目录 `requirements.txt` 为准，安装命令为：
+依赖版本以 `requirements.txt` 与 `web_frontend/package-lock.json` 为准。桌面和 API 使用同一个 Python 环境。修改依赖时同时更新相应清单及安装说明。开发前端使用 Node.js 和 `npm ci`，启动已构建的本机服务时直接读取 `web_frontend/dist`。异常行为检测的编译包及 Runtime DLL 路径需单独核对。[安装与环境验证](INSTALL_AND_USAGE.md) · [异常检测 Runtime](GRIDATTACKPKG_NEW_ENV_SETUP.md)
 
-```powershell
-python -m pip install --upgrade --force-reinstall -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cu130
-```
-
-该文件同时包含 PySide6、Matplotlib、NumPy、Pandas、PyTorch、FastAPI、Uvicorn 和测试所需的 Python 包。不要只在本机手动安装新依赖而不更新 `requirements.txt`。
-
-### 3.2 BS 前端依赖
-
-BS 前端需要 Node.js LTS 和 npm。依赖声明在 `web_frontend/package.json`，锁定版本在 `web_frontend/package-lock.json`。安装和构建：
-
-```powershell
-cd web_frontend
-npm install
-npm run build
-cd ..
-```
-
-如果只是运行已经存在的 `web_frontend/dist`，不需要启动 Vite 开发服务器；修改前端源码后必须重新构建，或使用启动脚本的 `-Rebuild` 参数。
-
-### 3.3 MATLAB Runtime 和导出包
-
-要跑通依赖 MATLAB 的完整功能，需要 MATLAB Runtime R2024b。典型安装根目录为：
-
-```text
-C:\path\to\MATLAB_Runtime\R2024b
-```
-
-必须确认以下 DLL 存在：
-
-```text
-C:\path\to\MATLAB_Runtime\R2024b\runtime\win64\mclmcrrt24_2.dll
-```
-
-在同一个 `Platform` Python 环境中安装两个本地导出包：
-
-```powershell
-python -m pip install --upgrade --force-reinstall --no-build-isolation .\build_python
-python -m pip install --upgrade --force-reinstall --no-build-isolation .\dnn_mpc\build_python
-python -m pip check
-```
-
-`build_python` 和 `dnn_mpc/build_python` 不在 PyPI 上，不能用普通 `pip install gridattackpkg` 或 `pip install dnnmpcpkg` 替代。也可以在对应页面填写本机包目录，但部署和调试时应确保服务实际使用的 Python 环境与页面/脚本使用的环境一致。
-
-运行时可在当前 PowerShell 会话配置：
-
-```powershell
-$env:MCR_ROOT = 'C:\path\to\MATLAB_Runtime\R2024b'
-$env:Path = "$env:MCR_ROOT\runtime\win64;$env:MCR_ROOT\bin\win64;$env:MCR_ROOT\extern\bin\win64;$env:Path"
-```
-
-完整 MATLAB 只在重新编译导出包时需要，目标运行机器不需要安装完整 MATLAB：
-
-- DNNTrain 重新编译需要 Deep Learning Toolbox。
-- MPC 重新编译需要 Optimization Toolbox。
-- 具体导出流程参考 `GRIDATTACKPKG_NEW_ENV_SETUP.md` 和 `dnn_mpc/DNN_MPC_PYTHON_PACKAGE_SETUP.md`。
-
-### 3.4 数据和输出约定
+### 3.1 数据和输出约定
 
 以下文件是当前功能的输入或样例数据，缺失时不要用空文件静默替代，应提示用户补齐：
 
@@ -185,9 +132,9 @@ $env:Path = "$env:MCR_ROOT\runtime\win64;$env:MCR_ROOT\bin\win64;$env:MCR_ROOT\e
 - `input_data/error_classification_hard_train.csv`
 - `input_data/error_classification_hard_test.csv`
 
-常用结果目录是 `output_figures/`、`gridattackpkg_core_output/` 和 `dnn_mpc/output/`。结果图片、JSON、进度文件的名称需要与现有前端和后端约定保持一致。
+通用算法与 Runtime 结果位于 `output_figures/`、`gridattackpkg_core_output/`。在线 CSTR 使用第 1.3 节的运行目录。结果图片、JSON、进度文件的名称需要与现有前端和后端约定保持一致。
 
-### 3.5 本机启动脚本的环境路径
+### 3.2 本机启动脚本的环境路径
 
 `scripts/run_web_local.ps1` 依次从 `-PythonExe` 参数或 `PLATFORM_PYTHON` 环境变量、已激活的 Conda 环境、系统 PATH 选择 Python，并从 PATH 查找 `npm.cmd`。无需修改脚本中的机器路径；也可激活环境后手动启动：
 
@@ -200,85 +147,19 @@ python -m uvicorn web_backend.app:app --host 127.0.0.1 --port 8000
 
 ## 4. 启动、验证和排错
 
-### 4.1 CS 启动
+在仓库根目录运行与改动相应的检查。使用平台 Conda 环境，纯数值及接口回归可设置 `QT_QPA_PLATFORM=offscreen`。
 
 ```powershell
-conda activate Platform
-python Framework.py
+python -B -m unittest discover -s tests -p "test_*.py"
+node --test tests/*.cjs
+npm --prefix web_frontend run build
 ```
 
-### 4.2 BS 启动
+桌面从 `Framework.py` 进入实际菜单，Web 检查 `/api/health`、`/api/modules` 以及模块配置。会话改动要核对控制权限、重复指令、复位后的历史读取和释放。涉及编译包时再执行对应 Runtime 初始化检查。[本机启动与故障排查](INSTALL_AND_USAGE.md) · [CSTR 接口与记录](RISK_CONTROL_MANUAL.md#development)
 
-普通启动（首次运行会安装前端依赖、构建前端并启动 FastAPI）：
+运行 HTTP 任务的测试在临时目录创建 `TaskManager`。测试结束时先等待工作线程退出，再释放临时目录。`web_runtime/tasks/` 保存本机平台的真实任务历史。
 
-```powershell
-.\scripts\run_web_local.ps1
-```
-
-前端源码发生变化后强制重建：
-
-```powershell
-.\scripts\run_web_local.ps1 -Rebuild
-```
-
-重建但不自动打开浏览器：
-
-```powershell
-.\scripts\run_web_local.ps1 -Rebuild -NoBrowser
-```
-
-访问：
-
-```text
-http://127.0.0.1:8000
-```
-
-前端开发模式：
-
-```powershell
-cd web_frontend
-npm install
-npm run dev
-```
-
-开发模式访问 Vite 地址（通常为 `http://127.0.0.1:5173`），API 请求会通过 `vite.config.ts` 代理到 `http://127.0.0.1:8000`。
-
-### 4.3 基础验证
-
-在项目根目录、已激活的 `Platform` 环境中执行：
-
-```powershell
-python -m pip check
-python -m unittest discover -s tests -p "test_*.py"
-python -m py_compile Framework.py main_interface.py
-```
-
-BS 前端构建验证：
-
-```powershell
-Push-Location web_frontend
-npm run build
-Pop-Location
-```
-
-Runtime 最小初始化验证：
-
-```powershell
-python -c "import gridattackpkg, matlab; h=gridattackpkg.initialize(); print('gridattackpkg ok'); h.terminate()"
-python -c "import dnnmpcpkg; h=dnnmpcpkg.initialize(); print('dnnmpcpkg ok'); h.terminate()"
-```
-
-### 4.4 常见问题
-
-- 报 `mclmcrrt24_2.dll` 找不到：检查 MATLAB Runtime 是否为 R2024b，以及 `MCR_ROOT`、页面 Runtime 路径和系统 `PATH` 是否指向同一安装目录。
-- `gridattackpkg` 或 `dnnmpcpkg` 不可导入：确认两个本地包安装在当前 `python` 对应的 `Platform` 环境中，执行 `python -m pip show ...` 和 `python -c "import sys; print(sys.executable)"`。
-- BS 页面仍是旧版本：确认前端已执行 `npm run build`，必要时使用 `.\scripts\run_web_local.ps1 -Rebuild`，并清理/重新生成过期的 `web_frontend/dist`。
-- `fitnet`、`optimoptions`、`fmincon` 等 MATLAB 函数缺失：这是导出包或 MATLAB 工具箱不完整的问题，不是通过安装普通 Python 包解决的；重新检查 MATLAB 导出环境和对应 Toolbox。
-- 分类模块报数据缺失：检查 `input_data/error_classification_*.csv` 文件是否存在且未被改名。
-- CDQ 模块报数据缺失：检查 `input_data/cdq_data.xlsx` 是否存在，且没有改变工作目录导致相对路径失效。
-- Runtime 包路径和输出目录不一致：统一使用当前项目中的 `build_python`、`dnn_mpc/build_python` 和 `dnn_mpc/output`，不要混用其他项目副本的路径。
-
-只查看 BS 静态界面时，可以先安装 Python/FastAPI 和 Node.js 并构建前端，不必立即安装 MATLAB Runtime；要执行异常检测或独立调用历史编译包时，仍必须完成 R2024b Runtime 和对应导出包配置。
+<a id="new-module"></a>
 
 ## 5. 新增模块规范
 
@@ -307,8 +188,8 @@ python -c "import dnnmpcpkg; h=dnnmpcpkg.initialize(); print('dnnmpcpkg ok'); h.
 2. 新建页面组件，沿用现有 `Page`、`panel`、结果图、状态区和错误提示结构。
 3. 在 `web_frontend/src/styles.css` 中补充样式，重点检查父级高度、`overflow`、图片完整显示、左右栏对齐和窄窗口响应式布局。
 4. 需要后端计算时，在 `web_backend/services/` 中新建适配器；不要在 React 组件中复制 Runtime 或长时间算法逻辑。
-5. 请求模型、默认配置、任务提交和结果接口统一放在 `web_backend/app.py`，服务适配放在 `web_backend/services/`，复用公共 TaskManager。先考虑现有文件和目录能否承载，避免为单个模块另建 routes 层。
-6. 长时间训练、仿真和 Runtime 调用必须使用 `TaskManager`，不能阻塞 FastAPI 请求线程。
+5. 在 `web_backend/app.py` 注册 API。风险管控对照模块的请求模型和专用接口随各自的 `web_backend/services/` 适配器维护，通用生命周期由第 2.1 节的共享路由提供。有限后台任务复用公共 TaskManager。
+6. 有限训练与 Runtime 任务交给 `TaskManager`，实时 CSTR 由会话运行器逐拍推进。HTTP 请求只提交命令或读取快照。
 7. 进度文件、结果文件和图片只能通过任务 ID 或受控输出目录访问，避免任意路径读取。
 8. 如果 BS 需要复用 CS 的算法逻辑，应抽取无 UI 依赖的部分到 `platform_core` 或独立 service；不要导入 PySide6 页面。
 9. 在 `tests/test_web_core.py` 增加 API、任务状态、进度、结果文件和错误场景测试。
@@ -336,17 +217,11 @@ python -c "import dnnmpcpkg; h=dnnmpcpkg.initialize(); print('dnnmpcpkg ok'); h.
 - 先用 `rg` 定位实际入口、模块名和接口，再修改文件；不要凭截图或旧文档猜测当前结构。
 - 页面问题优先改对应架构的页面层：CS 改 PySide6 页面/`main_interface.py`，BS 改 `web_frontend`/`web_backend`，不要跨架构复制 UI 代码。
 - 涉及训练、仿真或 Runtime 的改动，必须同时检查进度、结果图、结果 JSON 和错误状态。
-- 不要删除或覆盖用户已有的运行结果、输入数据和未相关改动。
+- 保留用户已有的运行结果、输入数据以及与本次工作无关的改动。
 - 修改完成后至少运行与改动范围匹配的语法检查、前端构建和测试；涉及 Runtime 时再执行对应初始化检查。
 
-## 化学反应器模块
+## 7. 实现记录与历史版本
 
-新增化学反应器自适应控制仿真：共享核心 platform_core/risk_control/reactor，桌面 desktop/risk_control/reactor_page.py，Web ReactorPage.tsx 与 web_backend/services/reactor.py。两端共用 assets/reactor/reactor_process.svg，使用共享 presentation.py 的样本显示映射；历史 GIF/PNG/SVG 帧资源保留兼容。保留后台计算、取消、回放和结果导出。输出遵循 dnn_mpc/python_output/reactor 约定。
+新增或调整功能时，在同次交付中核对操作手册、实际入口和接口。研究设计、控制假设、逐拍例子和验收结果写入课题目录对应的中英文实现记录。实验保留配置、输入来源、单位、评价窗口、对照结果和失效条件，并链接可复核的脚本或数据。历史版本的数字和截图继续按原版本引用。
 
-反应器默认打开在线闭环运行界面：reactor/live.py 保存对象、控制器和事件状态，共享 live_runtime.py 在后台推进；CS reactor_live_page.py 和 BS ReactorLivePage.tsx 只消费已完成快照。离线实验作为独立标签保留。实时交互不得用预计算回放替代；切页暂停、关闭释放线程，指令在积分边界生效，求解失败保留最近有效样本并明确提示。
-
-模型、参数、页面操作、结果格式与数值验证边界统一维护在 [风险管控手册第 7 节](RISK_CONTROL_MANUAL.md#reactor)，不再依赖独立的 `docs/reactor` 目录或文档生成脚本。
-
-反应器主展示使用论文反变换后的有符号 xs/xd；共享 coordinates.py 负责尺度、FDI 说明与组分输出。R1/R2 必须实际进入两套数值内核；在线修改参数明确复位实验。不得重新引入浓度百分比、液位或阀门开度作为数值模型输出。详情见风险管控手册第 7 节。
-
-反应器 FDI 参数与验证集中在 reactor/attack.py：默认复现原乘性攻击，在线原子更新 attack 参数保留闭环状态；attack_enabled 独立开关。u 有符号动态条只限制显示长度，不限制真实控制量。模型与 UI 变更时同时核对 NumPy/Numba 和在线/离线入口。
+旧版独立化学反应器、倒立摆及各自页面的设计可在 `ed33ff8` 查看。当时的实现、操作和验证范围见 `git show ed33ff8:RISK_CONTROL_MANUAL.md`。当前分支的菜单以第 2 节为准。
