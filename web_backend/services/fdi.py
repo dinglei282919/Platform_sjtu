@@ -1,31 +1,48 @@
-"""Web service adapter for the shared FDI simulation and its artifacts."""
-from platform_core.risk_control.fdi.config import defaults
-from concurrent.futures import CancelledError
+"""HTTP transport for the two independently owned module-3 trials."""
+from typing import Literal
+
+from platform_core.risk_control.fdi import GROUPS, SCENARIOS, options
+from platform_core.risk_control.fdi_display import CHARTS, FLOW_CHART, loop_tokens, nominal_preview, preview_marker, view
+from platform_core.risk_control.presentation import marker_tokens, tokens
+
+from .comparison import SessionCommand, comparison_router, dispatch_command
+from .control_http import Owner, call
 
 
-def default_config():
-    return defaults()
+class Command(SessionCommand):
+    kind: Literal["start", "resume", "pause", "end", "reset", "begin", "finish"]
 
 
-def new_run_dir():
-    from platform_core.risk_control.fdi import runner
-    return runner.new_run_dir()
+def routes(service):
+    router = comparison_router("/api/cstr/fdi", service)
 
+    @router.get("/config")
+    def config():
+        previews = {side: {case: marker_tokens(preview_marker(side, case)) for case in cases}
+                    for side, cases in SCENARIOS.items()}
+        nominal = nominal_preview("measurement", "healthy")
+        return dict(**options(), charts=CHARTS, flow_chart=FLOW_CHART, previews=previews,
+                    loop_labels={arm: loop_tokens(arm) for groups in GROUPS.values() for arm in groups},
+                    nominal_display={side: tokens(nominal_preview(side, "healthy")) for side in GROUPS},
+                    nominal_flow=nominal["Qc"])
 
-def is_artifact(name):
-    from platform_core.risk_control.fdi import runner
-    return name in runner.ARTIFACT_NAMES
+    @router.get("/sessions/{identifier}")
+    def snapshot(identifier: str, after: int = -1, run: str | None = None, owner: Owner = None):
+        data = call(service().session, identifier).snapshot(after, owner, run)
+        return dict(**data, view=view(data))
 
+    @router.get("/sessions/{identifier}/history")
+    def history(identifier: str, run: str, first: int, count: int):
+        session = call(service().session, identifier)
+        data = call(session.window, run, first, count)
+        return dict(**data, view=view(data, live=False))
 
-def artifact_path(directory, name):
-    from platform_core.risk_control.fdi import runner
-    return runner.artifact_path(directory, name)
+    @router.post("/sessions/{identifier}/commands")
+    def command(identifier: str, request: Command, owner: Owner = None):
+        return dispatch_command(service(), identifier, owner, request)
 
+    @router.get("/sessions/{identifier}/export")
+    def export(identifier: str, run: str | None = None):
+        return call(call(service().session, identifier).export, run)
 
-def run(config, log, *, run_dir=None, cancelled=None):
-    from platform_core.risk_control.fdi import runner
-    from platform_core.risk_control.fdi.simulation import SimulationCancelled
-    try:
-        return runner.run(config, log, run_dir=run_dir, cancelled=cancelled)
-    except SimulationCancelled as exc:
-        raise CancelledError(str(exc)) from exc
+    return router

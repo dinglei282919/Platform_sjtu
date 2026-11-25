@@ -6,14 +6,13 @@ import sys
 import math
 from contextlib import asynccontextmanager
 from pathlib import Path
-from threading import Event
 from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, Response
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from fastapi.responses import FileResponse, JSONResponse
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -22,10 +21,17 @@ if str(ROOT) not in sys.path:
 FRONTEND_DIST = ROOT / "web_frontend" / "dist"
 
 from web_backend.task_manager import TaskManager, TaskStateUnavailable
-from web_backend.services import reactor, anomaly, cdq, classification, fdi, replay, self_healing, mpc, path_picker, scoring, sdg, sil, training
+from web_backend.services.dnn_mpc import routes as dnn_mpc_routes
+from web_backend.services.healing import routes as healing_routes
+from web_backend.services.fdi import routes as fdi_routes
+from web_backend.services.replay import routes as replay_routes
+from web_backend.services import anomaly, cdq, classification, path_picker, scoring, sdg, sil
+from platform_core.risk_control import FDI_TITLE, REPLAY_TITLE
+from platform_core.risk_control.service import ControlService
 
 
 task_manager = TaskManager()
+cstr_service = ControlService(task_manager)
 
 
 class ScoreRequest(BaseModel):
@@ -147,99 +153,19 @@ class AnomalyTaskRequest(BaseModel):
         return self
 
 
-class TrainingTaskRequest(BaseModel):
-    model_config = {"extra": "forbid"}
-    output_dir: str = Field(default_factory=lambda: training.default_config()["output_dir"])
-    model_path: str = Field(default_factory=lambda: training.default_config()["model_path"])
-    dataset_path: str = Field(default_factory=lambda: training.default_config()["dataset_path"])
-    sample_count: int = Field(default=1000, ge=100, le=100000, strict=True)
-    epochs: int = Field(default=200, ge=1, le=5000, strict=True)
-    lr: float = Field(default=0.001, ge=0.000001, le=0.1, allow_inf_nan=False)
-    hidden_layers: str = "64,64"
-
-    @model_validator(mode="after")
-    def validate_python_config(self):
-        from platform_core.risk_control.dnn_mpc.config import validate_config
-        normalized = validate_config("training", self.model_dump())
-        for key, value in normalized.items():
-            setattr(self, key, value)
-        return self
-
-
-class MpcTaskRequest(BaseModel):
-    model_config = {"extra": "forbid"}
-    output_dir: str = Field(default_factory=lambda: mpc.default_config()["output_dir"])
-    model_path: str = Field(default_factory=lambda: mpc.default_config()["model_path"])
-    sim_time: float = Field(default=5.0, ge=0.2, le=20.0, allow_inf_nan=False)
-    prediction_horizon: int = Field(default=10, ge=1, le=60, strict=True)
-
-    @model_validator(mode="after")
-    def validate_python_config(self):
-        from platform_core.risk_control.dnn_mpc.config import validate_config
-        validate_config("mpc", self.model_dump())
-        return self
-
-class FdiTaskRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    sim_time: float = Field(default=10., ge=.1, le=10., allow_inf_nan=False, strict=True)
-
-class ReactorTaskRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    duration: float = Field(default=3., ge=.1, le=3., allow_inf_nan=False, strict=True)
-    sample_dt: float = Field(default=.002, ge=.0001, le=.1, allow_inf_nan=False, strict=True)
-    prescribed_time: float = Field(default=1.5, ge=.1, le=3., allow_inf_nan=False, strict=True)
-    ell: float = Field(default=.15, ge=.01, le=1., allow_inf_nan=False, strict=True)
-    x1: float = Field(default=.5, ge=-1., le=1., allow_inf_nan=False, strict=True)
-    x2: float = Field(default=.5, ge=-1., le=1., allow_inf_nan=False, strict=True)
-    observer1: float = Field(default=0., ge=-1., le=1., allow_inf_nan=False, strict=True)
-    observer2: float = Field(default=.5, ge=-1., le=1., allow_inf_nan=False, strict=True)
-
-    @model_validator(mode="after")
-    def validate_reactor(self):
-        from platform_core.risk_control.reactor.core import Config
-        Config(**self.model_dump()).validate()
-        return self
-
-
-class ReactorImportRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    directory: str = Field(min_length=1, max_length=4096)
-
-    @field_validator("directory")
-    @classmethod
-    def absolute_directory(cls, value):
-        if not Path(value).is_absolute():
-            raise ValueError("请选择本机绝对路径的结果文件夹")
-        return value
-
-class ReplayTaskRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    sim_time: float = Field(default=50., ge=.1, le=50., allow_inf_nan=False, strict=True)
-
-
-class SelfHealingTaskRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    config: dict[str, Any] = Field(default_factory=dict)
-
-    @field_validator("config")
-    @classmethod
-    def validate_experiment(cls, value):
-        return self_healing.validate_config(value)
-
-
-
 class LocalPathSelectRequest(BaseModel):
     kind: Literal["directory", "open-mat", "save-mat", "open-npz", "save-npz"]
     initial_path: str = ""
 
 
-class DnnModelInfoRequest(BaseModel):
-    model_path: str
-
-
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    global task_manager, cstr_service
+    if task_manager._closed:
+        task_manager = TaskManager()
+    cstr_service = ControlService(task_manager)
     yield
+    cstr_service.close()
     task_manager.shutdown()
 
 
@@ -304,11 +230,11 @@ def modules() -> list[dict[str, str]]:
         {"id": "sdg", "name": "SIS自主化检测 · SDG-HAZOP", "status": "available"},
         {"id": "sil", "name": "在线SIL验证", "status": "available"},
         {"id": "anomaly", "name": "异常行为检测", "status": "available"},
+        {"id": "risk-overview", "name": "综合仿真展示", "status": "placeholder"},
         {"id": "dnn-mpc", "name": "深度神经网络优化控制", "status": "available"},
-        {"id": "fdi", "name": "虚假数据注入下的自适应控制仿真", "status": "available"},
-        {"id": "reactor", "name": "化学反应器自适应控制仿真", "status": "available"},
-        {"id": "replay", "name": "重放攻击下的自适应控制仿真", "status": "available"},
-        {"id": "self-healing", "name": "多变量过程自愈控制仿真", "status": "available"},
+        {"id": "self-healing", "name": "多变量过程自愈控制", "status": "available"},
+        {"id": "fdi", "name": FDI_TITLE, "status": "available"},
+        {"id": "replay", "name": REPLAY_TITLE, "status": "available"},
     ]
 
 
@@ -389,110 +315,6 @@ def create_anomaly_task(request: AnomalyTaskRequest) -> dict[str, str]:
     return {"task_id": task.id, "status": task.status}
 
 
-@app.get("/api/training/defaults")
-def training_defaults() -> dict[str, Any]:
-    return training.default_config()
-
-
-@app.post("/api/training/tasks")
-def create_training_task(request: TrainingTaskRequest) -> dict[str, str]:
-    config = request.model_dump()
-    from platform_core.risk_control.dnn_mpc.runner import new_run_dir
-    output_dir = new_run_dir(config)
-    task = task_manager.submit(
-        "风险场景下控制系统智能模型训练算法 · DNNTrain",
-        lambda log: training.run(config, log, run_dir=output_dir),
-        progress_path=output_dir / "progress.json",
-        artifact_dir=output_dir,
-    )
-    return {"task_id": task.id, "status": task.status}
-
-
-@app.get("/api/training/images/{image_name}")
-def training_image(image_name: str) -> FileResponse:
-    try:
-        image = training.image_path(image_name)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return FileResponse(image, media_type="image/svg+xml")
-
-
-@app.get("/api/training/tasks/{task_id}/images/{image_name}")
-def training_task_image(task_id: str, image_name: str) -> FileResponse:
-    output_dir = task_manager.artifact_dir(task_id)
-    if output_dir is None:
-        raise HTTPException(status_code=404, detail="训练任务不存在或本机服务已重启")
-    try:
-        image = training.image_path(image_name, output_dir)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return FileResponse(image, media_type="image/svg+xml")
-
-
-@app.get("/api/mpc/defaults")
-def mpc_defaults() -> dict[str, Any]:
-    return mpc.default_config()
-
-
-@app.post("/api/mpc/model-info")
-def mpc_model_info(request: DnnModelInfoRequest) -> dict[str, Any]:
-    from platform_core.risk_control.dnn_mpc.config import model_info
-    try:
-        return model_info(request.model_path)
-    except (ValueError, OSError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@app.post("/api/mpc/tasks")
-def create_mpc_task(request: MpcTaskRequest) -> dict[str, str]:
-    config = request.model_dump()
-    from platform_core.risk_control.dnn_mpc.runner import new_run_dir
-    output_dir = new_run_dir(config)
-    task = task_manager.submit(
-        "风险场景下智能模型优化控制算法 · MPC simulation",
-        lambda log: mpc.run(config, log, run_dir=output_dir),
-        progress_path=output_dir / "progress.json",
-        artifact_dir=output_dir,
-    )
-    return {"task_id": task.id, "status": task.status}
-
-
-@app.get("/api/mpc/images/{image_name}")
-def mpc_image(image_name: str) -> FileResponse:
-    try:
-        image = mpc.image_path(image_name)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return FileResponse(image, media_type="image/svg+xml")
-
-
-@app.get("/api/mpc/tasks/{task_id}/images/{image_name}")
-def mpc_task_image(task_id: str, image_name: str) -> FileResponse:
-    output_dir = task_manager.artifact_dir(task_id)
-    if output_dir is None:
-        raise HTTPException(status_code=404, detail="MPC 任务不存在或本机服务已重启")
-    try:
-        image = mpc.image_path(image_name, output_dir)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return FileResponse(image, media_type="image/svg+xml")
-
-
-@app.get("/api/dnn/{mode}/tasks/{task_id}/files/{file_name}")
-def dnn_artifact(mode: Literal["training", "mpc"], task_id: str, file_name: str) -> FileResponse:
-    from platform_core.risk_control.dnn_mpc.runner import artifact_path
-    directory = task_manager.artifact_dir(task_id)
-    if directory is None:
-        raise HTTPException(status_code=404, detail="任务不存在或任务记录已被移除")
-    try:
-        path = artifact_path(mode, file_name, directory)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    media_type = {".svg": "image/svg+xml", ".pdf": "application/pdf", ".csv": "text/csv",
-                  ".json": "application/json", ".zip": "application/zip"}.get(path.suffix, "application/octet-stream")
-    return FileResponse(path, media_type=media_type, filename=path.name)
-
-
 @app.get("/api/anomaly/images/{image_name}")
 def anomaly_image(image_name: str) -> FileResponse:
     allowed = {"topology.png", "detection_probability.png"}
@@ -527,6 +349,9 @@ def get_task(task_id: str) -> dict[str, Any]:
 @app.post("/api/tasks/{task_id}/cancel")
 def cancel_control_task(task_id: str):
     try:
+        current = task_manager.get(task_id)
+        if current and current["title"] == "CSTR 在线模型更新":
+            raise HTTPException(403, "请通过所属控制会话取消更新")
         task = task_manager.cancel(task_id)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -535,221 +360,16 @@ def cancel_control_task(task_id: str):
     return task
 
 
-@app.get("/api/fdi/defaults")
-def fdi_defaults():
-    return fdi.default_config()
-
-
-@app.post("/api/fdi/tasks")
-def create_fdi_task(request: FdiTaskRequest):
-    directory = fdi.new_run_dir()
-    config = request.model_dump()
-    cancelled = Event()
-    task = task_manager.submit("虚假数据注入下的自适应控制仿真 · FDI",
-                               lambda log: fdi.run(config, log, run_dir=directory, cancelled=cancelled.is_set),
-                               artifact_dir=directory, progress_path=directory / "progress.json", cancel_event=cancelled)
-    return {"task_id": task.id, "status": task.status}
-
-
-def _fdi_artifact_path(task_id, name, *, preview=False):
-    if not fdi.is_artifact(name):
-        raise HTTPException(status_code=404, detail="FDI 结果文件不存在。")
-    task = task_manager.get(task_id)
-    directory = task_manager.artifact_dir(task_id)
-    if task is None or directory is None:
-        raise HTTPException(status_code=404, detail="FDI 任务不存在或本机服务已重启，请重新运行。")
-    if task["status"] != "succeeded":
-        progress = task.get("progress") or {}
-        if not (preview and name.endswith(".svg") and progress.get("module") == "fdi"
-                and progress.get("outputs", {}).get(Path(name).stem)):
-            raise HTTPException(status_code=409, detail="仿真尚未成功完成。")
-    elif (task.get("result") or {}).get("module") != "fdi":
-        raise HTTPException(status_code=404, detail="该任务没有 FDI 结果。")
-    try:
-        return fdi.artifact_path(directory, name)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-
-@app.get("/api/fdi/tasks/{task_id}/images/{image_name}")
-def fdi_task_image(task_id: str, image_name: str):
-    if not image_name.endswith((".svg", ".png")):
-        raise HTTPException(status_code=404, detail="FDI 图片不存在。")
-    path = _fdi_artifact_path(task_id, image_name, preview=True)
-    # Read one complete revision before responding; a live SVG can be replaced
-    # between FileResponse's stat and streaming operations on Windows.
-    return Response(path.read_bytes(), media_type="image/svg+xml" if path.suffix == ".svg" else "image/png",
-                    headers={"Cache-Control": "no-store"})
-
-
-@app.get("/api/fdi/tasks/{task_id}/files/{file_name}")
-def fdi_artifact(task_id: str, file_name: str):
-    path = _fdi_artifact_path(task_id, file_name)
-    return FileResponse(path, filename=path.name)
-
-
-@app.get("/api/replay/defaults")
-def replay_defaults():
-    return replay.default_config()
-
-
-@app.post("/api/replay/tasks")
-def create_replay_task(request: ReplayTaskRequest):
-    directory = replay.new_run_dir()
-    config = request.model_dump()
-    cancelled = Event()
-    task = task_manager.submit("重放攻击下的自适应控制仿真",
-                               lambda log: replay.run(config, log, run_dir=directory, cancelled=cancelled.is_set),
-                               artifact_dir=directory, progress_path=directory / "progress.json", cancel_event=cancelled)
-    return {"task_id": task.id, "status": task.status}
-
-
-def _replay_artifact_path(task_id, name, *, preview=False):
-    if not replay.is_artifact(name):
-        raise HTTPException(status_code=404, detail="重放攻击结果文件不存在。")
-    task = task_manager.get(task_id)
-    directory = task_manager.artifact_dir(task_id)
-    if task is None or directory is None:
-        raise HTTPException(status_code=404, detail="重放攻击任务不存在或本机服务已重启，请重新运行。")
-    if task["status"] != "succeeded":
-        progress = task.get("progress") or {}
-        if not (preview and name.endswith(".svg") and progress.get("module") == "replay"
-                and progress.get("outputs", {}).get(Path(name).stem)):
-            raise HTTPException(status_code=409, detail="仿真尚未成功完成。")
-    elif (task.get("result") or {}).get("module") != "replay":
-        raise HTTPException(status_code=404, detail="该任务没有 重放攻击结果。")
-    try:
-        return replay.artifact_path(directory, name)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-
-@app.get("/api/replay/tasks/{task_id}/images/{image_name}")
-def replay_task_image(task_id: str, image_name: str):
-    if not image_name.endswith((".svg", ".png")):
-        raise HTTPException(status_code=404, detail="重放攻击图片不存在。")
-    path = _replay_artifact_path(task_id, image_name, preview=True)
-    return Response(path.read_bytes(), media_type="image/svg+xml" if path.suffix == ".svg" else "image/png",
-                    headers={"Cache-Control": "no-store"})
-
-
-@app.get("/api/replay/tasks/{task_id}/files/{file_name}")
-def replay_artifact(task_id: str, file_name: str):
-    path = _replay_artifact_path(task_id, file_name)
-    return FileResponse(path, filename=path.name)
-
-
-@app.get("/api/reactor/defaults")
-def reactor_defaults():
-    return ReactorTaskRequest().model_dump()
-
-
-@app.get("/api/reactor/diagram/{name}")
-def reactor_diagram(name: str):
-    if name not in {"reactor_dual_feed.png", "reactor_dual_feed.gif"}:
-        raise HTTPException(status_code=404, detail="框图不存在")
-    return FileResponse(reactor.ROOT / "assets" / "reactor" / name)
-
-
-@app.post("/api/reactor/tasks")
-def create_reactor_task(request: ReactorTaskRequest):
-    directory = reactor.new_run_dir()
-    cancelled = Event()
-    task = task_manager.submit("化学反应器自适应控制仿真",
-        lambda log: reactor.run(request.model_dump(), log, run_dir=directory, cancelled=cancelled.is_set),
-        artifact_dir=directory, progress_path=directory / "progress.json", cancel_event=cancelled)
-    return {"task_id": task.id, "status": task.status}
-
-
-@app.post("/api/reactor/import-result")
-def import_reactor_result(request: ReactorImportRequest):
-    directory = reactor.new_run_dir()
-    task = task_manager.submit("载入化学反应器仿真结果",
-        lambda log: reactor.import_saved(request.directory, log, run_dir=directory),
-        artifact_dir=directory)
-    return {"task_id": task.id, "status": task.status}
-
-
-def _reactor_directory(task_id):
-    task = task_manager.get(task_id)
-    directory = task_manager.artifact_dir(task_id)
-    if task is None or directory is None:
-        raise HTTPException(status_code=404, detail="任务不存在")
-    if task["status"] != "succeeded":
-        raise HTTPException(status_code=409, detail="仿真尚未成功完成")
-    if (task.get("result") or {}).get("module") != "reactor":
-        raise HTTPException(status_code=404, detail="该任务没有化学反应器结果")
-    return directory
-
-
-@app.get("/api/reactor/tasks/{task_id}/trajectory")
-def reactor_trajectory(task_id: str):
-    return reactor.trajectory(_reactor_directory(task_id))
-
-
-@app.get("/api/reactor/tasks/{task_id}/files/{name}")
-def reactor_file(task_id: str, name: str):
-    directory = _reactor_directory(task_id)
-    try:
-        path = reactor.artifact_path(directory, name)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return FileResponse(path, filename=path.name)
-
-
-@app.get("/api/self-healing/defaults")
-def self_healing_defaults():
-    return self_healing.default_config()
-
-
-@app.post("/api/self-healing/tasks")
-def create_self_healing_task(request: SelfHealingTaskRequest):
-    config = self_healing.validate_config(request.config)
-    directory = self_healing.new_run_dir()
-    cancelled = Event()
-    task = task_manager.submit("多变量过程自愈控制仿真",
-                               lambda log: self_healing.run(config, log, run_dir=directory, cancelled=cancelled.is_set),
-                               artifact_dir=directory, progress_path=directory / "progress.json", cancel_event=cancelled)
-    return {"task_id": task.id, "status": task.status}
-
-
-def _self_healing_artifact_path(task_id, name, *, preview=False):
-    if not self_healing.is_artifact(name):
-        raise HTTPException(status_code=404, detail="自愈控制结果文件不存在。")
-    task = task_manager.get(task_id)
-    directory = task_manager.artifact_dir(task_id)
-    if task is None or directory is None:
-        raise HTTPException(status_code=404, detail="自愈控制任务不存在，请重新运行。")
-    if task["status"] != "succeeded":
-        progress = task.get("progress") or {}
-        if not (preview and name.endswith(".svg") and progress.get("module") == "self_healing"
-                and progress.get("outputs", {}).get(Path(name).stem)):
-            raise HTTPException(status_code=409, detail="仿真尚未成功完成。")
-    elif (task.get("result") or {}).get("module") != "self_healing":
-        raise HTTPException(status_code=404, detail="该任务没有自愈控制结果。")
-    try:
-        return self_healing.artifact_path(directory, name)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-
-@app.get("/api/self-healing/tasks/{task_id}/images/{image_name}")
-def self_healing_task_image(task_id: str, image_name: str):
-    if not image_name.endswith((".svg", ".png")):
-        raise HTTPException(status_code=404, detail="自愈控制图片不存在。")
-    path = _self_healing_artifact_path(task_id, image_name, preview=True)
-    return Response(path.read_bytes(), media_type="image/svg+xml" if path.suffix == ".svg" else "image/png",
-                    headers={"Cache-Control": "no-store"})
-
-
-@app.get("/api/self-healing/tasks/{task_id}/files/{file_name}")
-def self_healing_artifact(task_id: str, file_name: str):
-    path = _self_healing_artifact_path(task_id, file_name)
-    return FileResponse(path, filename=path.name)
+app.include_router(dnn_mpc_routes(lambda: cstr_service, lambda: task_manager))
+app.include_router(healing_routes(lambda: cstr_service.healing))
+app.include_router(fdi_routes(lambda: cstr_service.fdi))
+app.include_router(replay_routes(lambda: cstr_service.replay))
 
 
 @app.get("/{requested_path:path}", include_in_schema=False)
 def frontend(requested_path: str):
+    if requested_path.startswith("api/"):
+        raise HTTPException(404, "接口不存在")
     index_path = FRONTEND_DIST / "index.html"
     if not index_path.is_file():
         return JSONResponse(

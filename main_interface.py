@@ -1,11 +1,14 @@
 # -*- coding: utf-8 -*-
 import sys
+from platform_core.risk_control import NAVIGATION as RISK_PAGES
 from PySide6.QtCore import QPoint, Qt, QTimer
 from PySide6.QtGui import QFont, QFontMetrics
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
     QHBoxLayout,
+    QScrollArea,
+    QSizePolicy,
     QLabel,
     QMainWindow,
     QMessageBox,
@@ -31,11 +34,6 @@ try:
     from cdq_risk_matching import CDQMatchingWidget
 except ImportError:
     CDQMatchingWidget = None
-try:
-    from desktop.risk_control.process_control_dnn_mpc import ProcessControlDnnMpcWidget, DnnMpcWorkflowWidget
-except ImportError:
-    ProcessControlDnnMpcWidget = None
-
 # ---- 新增导入 ----
 from sdg_hazop import SDG_HazopWidget
 from sil_validation import SILValidationWidget
@@ -60,11 +58,7 @@ class MainWindow(QMainWindow):
         self._error_class_content_widget = None
         self._auto_score_content_widget = None
         self._cdq_matching_content_widget = None
-        self._process_mpc_content_widget = None
-        self._fdi_content_widget = None
-        self._replay_content_widget = None
-        self._reactor_content_widget = None
-        self._self_healing_content_widget = None
+        self._risk_workspace = None
         self._sis_detection_content_widget = None
         self._sil_validation_content_widget = None
 
@@ -103,6 +97,7 @@ class MainWindow(QMainWindow):
         logo.setObjectName("logoBlock")
         title = QLabel("流程行业动态风险管控工具集平台")
         title.setObjectName("pageTitle")
+        self._brand_title = title
 
         layout.addWidget(logo)
         layout.addWidget(title)
@@ -130,8 +125,19 @@ class MainWindow(QMainWindow):
         bar.setObjectName("functionBar")
         bar.setFixedHeight(58)
         layout = QHBoxLayout(bar)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(8)
+        layout.setContentsMargins(1, 1, 1, 1)
+        scroller = QScrollArea()
+        scroller.setObjectName("navigationScroll")
+        scroller.setFrameShape(QFrame.NoFrame)
+        scroller.setWidgetResizable(True)
+        scroller.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroller.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        strip = QWidget()
+        row = QHBoxLayout(strip)
+        row.setContentsMargins(10, 0, 10, 0)
+        row.setSpacing(8)
+        scroller.setWidget(strip)
+        layout.addWidget(scroller)
 
         # 菜单项：为 SIS自主化检测 和 在线SIL验证 增加子菜单
         items = [
@@ -141,21 +147,22 @@ class MainWindow(QMainWindow):
              ["潜在安全威胁识别与自动分类",
               "多评估准则融合的风险学习分析",
               "风险场景动态匹配与适配方案生成算法"]),
-            ("🎛", "风险管控优化决策", False, ["深度神经网络优化控制", "虚假数据注入下的自适应控制仿真", "重放攻击下的自适应控制仿真", "多变量过程自愈控制仿真", "化学反应器自适应控制仿真"]),
+            ("🎛", "风险管控优化决策", False, RISK_PAGES),
             ("🛡", "SIS自主化检测", True, ["SDG-HAZOP"]),
             ("✅", "在线SIL验证", False, ["基于GSPN-MC模型的动态化SIL验证方法"]),
         ]
 
         for icon, text, checked, menu_items in items:
             button = self._make_nav_button(icon, text, checked=checked, has_dropdown=bool(menu_items))
-            layout.addWidget(button)
+            button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+            row.addWidget(button)
             button.clicked.connect(lambda _checked=False, b=button: self._toggle_dropdown(b))
             self._nav_menu_map[button] = menu_items
             self._nav_title_map[button] = text
             if checked:
                 self._active_dropdown_button = button
 
-        layout.addStretch()
+        row.addStretch()
 
         self._dropdown = self._build_dropdown()
         self._dropdown.hide()
@@ -225,11 +232,6 @@ class MainWindow(QMainWindow):
             self._anomaly_content_widget.hide()
             body_layout.addWidget(self._anomaly_content_widget, 1)
 
-        # ---- 风险管控优化决策 ----
-        if ProcessControlDnnMpcWidget is not None:
-            self._process_mpc_content_widget = DnnMpcWorkflowWidget()
-            self._process_mpc_content_widget.hide()
-            body_layout.addWidget(self._process_mpc_content_widget, 1)
 
         # ---- 风险动态分析子模块 ----
         if ErrorClassificationWidget is not None:
@@ -293,26 +295,28 @@ class MainWindow(QMainWindow):
             if widget is not None:
                 widget.deleteLater()
 
-        item_height = 52
+        item_height = 44
         font = QFont("Microsoft YaHei UI")
-        font.setPixelSize(22)
+        font.setPixelSize(17)
         metrics = QFontMetrics(font)
         max_text_width = max((metrics.horizontalAdvance(name) for name in items), default=0)
 
+        selected = (self._risk_workspace.pages.currentIndex()
+                    if nav_title == "风险管控优化决策" and self._risk_workspace is not None else 0)
         for i, name in enumerate(items):
             btn = QPushButton(name)
             btn.setObjectName("dropItem")
             btn.setCursor(Qt.PointingHandCursor)
             btn.setFixedHeight(item_height)
             btn.setFont(font)
-            if i == 0:
+            if i == selected:
                 btn.setProperty("active", True)
             btn.clicked.connect(lambda _checked=False, t=nav_title, n=name: self._on_submodule_clicked(t, n))
             self._dropdown_layout.addWidget(btn)
         self._dropdown_layout.addStretch()
 
-        panel_width = max(360, min(max_text_width + 120, 980))
-        panel_height = 24 + item_height * len(items)
+        panel_width = max(360, min(max_text_width + 56, 720))
+        panel_height = self._dropdown_layout.sizeHint().height()
         self._dropdown.setFixedSize(panel_width, min(max(panel_height, 140), 460))
 
     def _toggle_dropdown(self, button):
@@ -327,6 +331,8 @@ class MainWindow(QMainWindow):
         if not menu_items:
             self._on_empty_module_clicked(nav_title)
             return
+        if nav_title == "风险管控优化决策" and (self._risk_workspace is None or self._risk_workspace.isHidden()):
+            self._on_submodule_clicked(nav_title, RISK_PAGES[0])
         self._set_dropdown_items(nav_title, menu_items)
         self._position_dropdown()
         self._dropdown.show()
@@ -353,11 +359,7 @@ class MainWindow(QMainWindow):
             self._error_class_content_widget,
             self._auto_score_content_widget,
             self._cdq_matching_content_widget,
-            self._process_mpc_content_widget,
-            self._fdi_content_widget,
-            self._replay_content_widget,
-            self._reactor_content_widget,
-            self._self_healing_content_widget,
+            self._risk_workspace,
             self._sis_detection_content_widget,
             self._sil_validation_content_widget,
         ):
@@ -380,32 +382,13 @@ class MainWindow(QMainWindow):
             self._auto_score_content_widget.show()
         elif submodule_title == "风险场景动态匹配与适配方案生成算法":
             self._cdq_matching_content_widget.show()
-        elif submodule_title == "深度神经网络优化控制":
-            self._process_mpc_content_widget.show()
-        elif submodule_title == "虚假数据注入下的自适应控制仿真":
-            if self._fdi_content_widget is None:
-                from desktop.risk_control.fdi_page import FdiWidget
-                self._fdi_content_widget = FdiWidget()
-                self._module_body_layout.addWidget(self._fdi_content_widget, 1)
-            self._fdi_content_widget.show()
-        elif submodule_title == "重放攻击下的自适应控制仿真":
-            if self._replay_content_widget is None:
-                from desktop.risk_control.replay_page import ReplayWidget
-                self._replay_content_widget = ReplayWidget()
-                self._module_body_layout.addWidget(self._replay_content_widget, 1)
-            self._replay_content_widget.show()
-        elif submodule_title == "化学反应器自适应控制仿真":
-            if self._reactor_content_widget is None:
-                from desktop.risk_control.reactor_page import ReactorWidget
-                self._reactor_content_widget = ReactorWidget()
-                self._module_body_layout.addWidget(self._reactor_content_widget, 1)
-            self._reactor_content_widget.show()
-        elif submodule_title == "多变量过程自愈控制仿真":
-            if self._self_healing_content_widget is None:
-                from desktop.risk_control.self_healing_page import SelfHealingWidget
-                self._self_healing_content_widget = SelfHealingWidget()
-                self._module_body_layout.addWidget(self._self_healing_content_widget, 1)
-            self._self_healing_content_widget.show()
+        elif nav_title == "风险管控优化决策":
+            if self._risk_workspace is None:
+                from desktop.risk_control.workspace import RiskWorkspace
+                self._risk_workspace = RiskWorkspace()
+                self._module_body_layout.addWidget(self._risk_workspace, 1)
+            self._risk_workspace.select_page(submodule_title)
+            self._risk_workspace.show()
         elif submodule_title == "SDG-HAZOP":
             self._sis_detection_content_widget.show()
             if not hasattr(self._sis_widget, '_signal_connected'):
@@ -426,31 +409,16 @@ class MainWindow(QMainWindow):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        width = event.size().width()
+        for widget, size in ((self._brand_title, 25 if width <= 1180 else min(42, round(width*.0245))),
+                             (self._content_title_label, max(21, min(29, round(width*.02))))):
+            font = widget.font()
+            if font.pixelSize() != size:
+                font.setPixelSize(size)
+                widget.setFont(font)
         self._position_dropdown()
 
     def closeEvent(self, event):
-        if self._reactor_content_widget is not None and self._reactor_content_widget.has_running_worker():
-            QMessageBox.warning(self, "后台任务运行中", "请等待化学反应器仿真完成，或取消后再关闭。")
-            event.ignore()
-            return
-        if self._self_healing_content_widget is not None and self._self_healing_content_widget.has_running_worker():
-            QMessageBox.warning(self, "后台任务运行中", "请等待自愈控制仿真完成，或取消后再关闭。")
-            event.ignore()
-            return
-        if self._replay_content_widget is not None and self._replay_content_widget.has_running_worker():
-            QMessageBox.warning(self, "后台任务运行中", "请等待重放仿真完成，或取消后再关闭。")
-            event.ignore()
-            return
-        if self._fdi_content_widget is not None and self._fdi_content_widget.has_running_worker():
-            QMessageBox.warning(self, "后台任务运行中", "请等待 FDI 仿真完成，或取消后再关闭。")
-            event.ignore()
-            return
-        if ProcessControlDnnMpcWidget is not None:
-            for widget in self.findChildren(ProcessControlDnnMpcWidget):
-                if widget.has_running_worker():
-                    QMessageBox.warning(self, "后台任务运行中", "请等待 DNN-MPC 任务完成后再关闭。")
-                    event.ignore()
-                    return
         for widget in (self._sis_widget, self._sil_widget):
             if widget is not None:
                 checker = getattr(widget, "has_running_worker", None)
@@ -458,6 +426,8 @@ class MainWindow(QMainWindow):
                     QMessageBox.warning(self, "后台任务运行中", "请等待当前计算任务完成后再关闭。")
                     event.ignore()
                     return
+        if self._risk_workspace is not None:
+            self._risk_workspace.shutdown()
         super().closeEvent(event)
 
     def showEvent(self, event):
@@ -507,12 +477,12 @@ class MainWindow(QMainWindow):
                 qproperty-alignment: AlignCenter;
             }
             QLabel#pageTitle {
-                font-size: 42px;
                 font-weight: 700;
                 color: #f2f6ff;
                 letter-spacing: 1px;
             }
             QPushButton#headerIcon {
+                padding: 0;
                 min-width: 36px;
                 max-width: 36px;
                 min-height: 36px;
@@ -531,12 +501,19 @@ class MainWindow(QMainWindow):
                 background: qlineargradient(x1:0,y1:0,x2:1,y2:0,
                     stop:0 #0f2948, stop:1 #102847);
             }
+            QScrollArea#navigationScroll, QScrollArea#navigationScroll > QWidget > QWidget {
+                border: none;
+                background: transparent;
+            }
+            QScrollArea#navigationScroll QScrollBar:horizontal {
+                height: 6px;
+            }
             QPushButton#navButton {
                 border-radius: 10px;
                 border: 1px solid transparent;
                 padding: 8px 14px;
                 background: transparent;
-                font-size: 21px;
+                font-size: 18px;
                 color: #c3d8f6;
                 text-align: left;
             }
@@ -560,7 +537,7 @@ class MainWindow(QMainWindow):
                 border-radius: 10px;
                 background: transparent;
                 border: none;
-                font-size: 22px;
+                font-size: 17px;
                 color: #d7e7fb;
             }
             QPushButton#dropItem[active="true"] {
@@ -576,7 +553,6 @@ class MainWindow(QMainWindow):
                 background: rgba(17, 42, 73, 0.9);
             }
             QLabel#contentTitle {
-                font-size: 29px;
                 font-weight: 700;
                 color: #eef6ff;
             }

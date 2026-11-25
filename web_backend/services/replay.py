@@ -1,31 +1,36 @@
-"""Web service adapter for the shared replay simulation and its artifacts."""
-from platform_core.risk_control.replay.config import defaults
-from concurrent.futures import CancelledError
+"""Local UI transport for independent CSTR observer trials."""
+from typing import Literal
+
+from platform_core.risk_control.presentation import tokens
+from platform_core.risk_control.replay_display import diagram_sample
+from platform_core.risk_control.replay_session import options
+
+from .comparison import SessionCommand, comparison_router, dispatch_command
+from .control_http import Owner, call
 
 
-def default_config():
-    return defaults()
+class Command(SessionCommand):
+    kind: Literal["pause", "resume", "reset", "begin", "finish", "cancel"]
 
 
-def new_run_dir():
-    from platform_core.risk_control.replay import runner
-    return runner.new_run_dir()
+def routes(service):
+    router = comparison_router("/api/cstr/replay", service)
 
+    @router.get("/config")
+    def config():
+        return options()
 
-def is_artifact(name):
-    from platform_core.risk_control.replay import runner
-    return name in runner.ARTIFACT_NAMES
+    @router.get("/sessions/{identifier}")
+    def frame(identifier: str, run: str | None = None, at: int | None = None, arm: str = "guard",
+              owner: Owner = None):
+        session = call(service().session, identifier)
+        data = call(session.frame, run, at, owner, arm)
+        sample = diagram_sample(data["point"], data["arm"], data["display"])
+        data["process"] = {"labels": tokens(sample), "flow": sample["Qc"]} if sample else None
+        return data
 
+    @router.post("/sessions/{identifier}/commands")
+    def command(identifier: str, body: Command, owner: Owner = None):
+        return dispatch_command(service(), identifier, owner, body)
 
-def artifact_path(directory, name):
-    from platform_core.risk_control.replay import runner
-    return runner.artifact_path(directory, name)
-
-
-def run(config, log, *, run_dir=None, cancelled=None):
-    from platform_core.risk_control.replay import runner
-    from platform_core.risk_control.replay.simulation import SimulationCancelled
-    try:
-        return runner.run(config, log, run_dir=run_dir, cancelled=cancelled)
-    except SimulationCancelled as exc:
-        raise CancelledError(str(exc)) from exc
+    return router

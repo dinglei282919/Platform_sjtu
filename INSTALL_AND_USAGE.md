@@ -1,133 +1,69 @@
-# 本机 Web 版（B/S）
+# 平台安装与启动
 
-> 路径约定：`C:\path\to\...` 是示例占位路径，执行命令前请替换为实际项目、环境或 Runtime 安装目录。
+平台提供 PySide6 桌面端和仅监听本机的 Web 端。运行四个风险管控模块需要 Python 环境，浏览器页面由 React 构建。异常行为检测使用 MATLAB Runtime R2024b。风险管控页面的设置、曲线和导出见[操作手册](RISK_CONTROL_MANUAL.md)。源码分层与新增模块约定见[架构指南](AGENTS.md)。
 
-桌面端（CS）和本机 Web 端（BS）并行保留。本机 Web 版只绑定 `127.0.0.1:8000`，不向局域网开放。
+## 1. 前置条件
 
-项目架构、源码边界、BS/CS 模块映射和新增模块规范以根目录 [`AGENTS.md`](AGENTS.md) 为权威说明；本文保留面向人工使用的安装、启动和 CS 模块教程。
+- Windows、Conda 和 Python 3.10。项目验证环境使用 Python 3.10.20。
+- 需要构建 Web 页面时安装 Node.js 和 npm。已有 `web_frontend/dist` 时，可直接由 FastAPI 提供页面。
+- 使用异常行为检测时安装对应 MATLAB Runtime，步骤见第 4 节。重新编译导出包需要完整 MATLAB 开发环境。
 
-控制模型训练、MPC、FDI、重放与自愈控制的实现和操作统一见 [风险管控算法实现与使用手册](RISK_CONTROL_MANUAL.md)。这四个模块无需 MATLAB Runtime；下文 Runtime 步骤用于其他依赖编译包的功能或历史工程。
+## 2. 创建 Python 环境
 
-首次启动前安装 Node.js LTS，并在项目根目录执行：
+在仓库根目录打开 PowerShell，创建并激活环境。
+
+```powershell
+conda create -n Platform python=3.10.20 -y
+conda activate Platform
+python --version
+```
+
+## 3. 安装项目依赖
+
+```powershell
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cu130
+python -m pip check
+```
+
+Web 端从锁文件安装依赖并构建。使用启动脚本时，它也能在缺少构建产物时完成首次构建。
+
+```powershell
+Push-Location web_frontend
+npm ci
+npm run build
+Pop-Location
+```
+
+## 4. 异常行为检测的 MATLAB Runtime
+
+在已激活的平台环境中安装仓库内的导出包。将示例路径换成实际 Runtime 根目录，核对 DLL 并初始化一次。
+
+```powershell
+python -m pip install --no-build-isolation .\build_python
+$env:MCR_ROOT = 'C:\path\to\MATLAB_Runtime\R2024b'
+$env:Path = "$env:MCR_ROOT\runtime\win64;$env:MCR_ROOT\bin\win64;$env:MCR_ROOT\extern\bin\win64;$env:Path"
+Test-Path "$env:MCR_ROOT\runtime\win64\mclmcrrt24_2.dll"
+python -c "import gridattackpkg; h=gridattackpkg.initialize(); print('gridattackpkg ok'); h.terminate()"
+```
+
+当前 DNN-MPC 使用共享 Python 核心。旧 `dnnmpcpkg` 的环境、重新导出和独立验证保存在[历史编译包说明](dnn_mpc/DNN_MPC_PYTHON_PACKAGE_SETUP.md)。
+
+## 5. 启动桌面或 Web
+
+```powershell
+python Framework.py
+```
+
+Web 用另一个已激活平台环境的终端启动。
 
 ```powershell
 .\scripts\run_web_local.ps1
 ```
 
-脚本会在首次运行时构建 React 前端、启动 FastAPI 服务并打开浏览器。访问地址固定为：
+打开 [本机 Web 平台](http://127.0.0.1:8000/)。`-NoBrowser` 可跳过自动打开浏览器。前端改动后用 `-Rebuild` 重新构建，此选项会重启已有的平台后台，应先处理正在运行的任务。可用 `-PythonExe` 指定解释器。开发时另在 `web_frontend` 运行 `npm run dev`，Vite 将 `/api` 请求代理至 8000。
 
-```text
-http://127.0.0.1:8000
-```
-
-前端源码变更后可执行 `.\scripts\run_web_local.ps1 -Rebuild`。当前 BS 端已包含多评估准则评分、SDG-HAZOP、SIL 验证、风险场景适配方案生成、安全威胁分类、异常行为检测以及 DNN-MPC 的训练评估和优化控制仿真；CS 桌面端仍保留全部对应功能。
-
-# 安装与使用教程
-
-本文档说明如何为平台创建 Python 3.10.20 环境、安装依赖、配置 MATLAB Runtime R2024b，并启动程序。
-
-## 1. 前置条件
-
-- Windows 系统
-- 已安装 Conda
-- 已安装 MATLAB R2024b 与 MATLAB Runtime R2024b
-- Runtime 安装路径示例：
-
-```text
-C:\path\to\MATLAB_Runtime\R2024b
-```
-
-确认关键 DLL 存在：
-
-```cmd
-dir C:\path\to\MATLAB_Runtime\R2024b\runtime\win64\mclmcrrt24_2.dll
-```
-
-## 2. 创建 Python 环境
-
-在 `cmd` 中进入项目目录：
-
-```cmd
-cd /d C:\path\to\Platform_sjtu
-```
-
-创建并激活环境：
-
-```cmd
-conda create -n Platform python=3.10.20 -y
-conda activate Platform
-```
-
-确认版本：
-
-```cmd
-python --version
-```
-
-应输出：
-
-```text
-Python 3.10.20
-```
-
-## 3. 安装依赖
-
-安装基础依赖：
-
-```cmd
-python -m pip install --upgrade pip setuptools wheel
-python -m pip install --upgrade --force-reinstall -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cu130
-```
-
-安装 MATLAB 导出的本地 Python 包：
-
-```cmd
-python -m pip install --upgrade --force-reinstall --no-build-isolation .\build_python
-python -m pip install --upgrade --force-reinstall --no-build-isolation .\dnn_mpc\build_python
-```
-
-检查安装结果：
-
-```cmd
-python -m pip check
-python -m pip show gridattackpkg-R2024b dnnmpcpkg-R2024b
-```
-
-## 4. 配置 Runtime
-
-临时配置当前 `cmd` 会话的 MATLAB Runtime 路径：
-
-```cmd
-set MCR_ROOT=C:\path\to\MATLAB_Runtime\R2024b
-set PATH=%MCR_ROOT%\runtime\win64;%MCR_ROOT%\bin\win64;%MCR_ROOT%\extern\bin\win64;%PATH%
-```
-
-验证 `gridattackpkg`：
-
-```cmd
-python -c "import gridattackpkg, matlab; h=gridattackpkg.initialize(); print('gridattackpkg ok'); h.terminate()"
-```
-
-验证 `dnnmpcpkg`：
-
-```cmd
-python -c "import dnnmpcpkg; h=dnnmpcpkg.initialize(); print('dnnmpcpkg ok'); h.terminate()"
-```
-
-## 5. 启动平台
-
-每次启动前先激活环境：
-
-```cmd
-conda activate Platform
-cd /d C:\path\to\Platform_sjtu
-```
-
-启动程序：
-
-```cmd
-python Framework.py
-```
+在“风险管控优化决策”菜单中选择单模块即可进入对应在线试验。[深度神经网络优化控制](RISK_CONTROL_MANUAL.md#dnn-mpc) · [多变量过程自愈控制](RISK_CONTROL_MANUAL.md#self-healing) · [FDI](RISK_CONTROL_MANUAL.md#fdi) · [重放](RISK_CONTROL_MANUAL.md#replay)
 
 ## 6. 使用说明
 
@@ -196,155 +132,4 @@ python Framework.py
 
 ## 8. 如何增加新模块
 
-平台主界面由 `main_interface.py` 管理，功能页面通常是一个继承 `QWidget` 的 PySide6 组件。新增模块时，建议按下面流程操作。
-
-### 8.1 新建模块页面文件
-
-在项目根目录新建一个 Python 文件，例如：
-
-```text
-new_module.py
-```
-
-最小页面模板：
-
-```python
-from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
-
-
-class NewModuleWidget(QWidget):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("新模块页面"))
-```
-
-如果模块需要后台计算，建议使用 `QThread` 或 `QObject + QThread`，避免长时间任务阻塞界面。
-
-### 8.2 在主界面增加容器变量
-
-打开：
-
-```text
-main_interface.py
-```
-
-在 `MainWindow.__init__` 中增加两个成员变量：
-
-```python
-self._new_module_content_widget = None
-self._new_module_widget = None
-```
-
-其中：
-
-- `_new_module_content_widget` 是页面容器
-- `_new_module_widget` 是真实功能页面，建议懒加载
-
-### 8.3 在内容区创建页面容器
-
-在 `_build_content()` 中，仿照已有模块增加一个 `QFrame` 容器：
-
-```python
-self._new_module_content_widget = QFrame()
-new_module_layout = QVBoxLayout(self._new_module_content_widget)
-new_module_layout.setContentsMargins(0, 0, 0, 0)
-new_module_layout.setSpacing(0)
-self._new_module_content_widget.hide()
-
-body_layout.addWidget(self._new_module_content_widget, 1)
-```
-
-如果 `_on_submodule_clicked()` 里有统一隐藏页面的循环，也要把新容器加入循环：
-
-```python
-for widget in (
-    self._anomaly_content_widget,
-    self._new_module_content_widget,
-):
-    if widget is not None:
-        widget.hide()
-```
-
-实际代码中应保留原有容器，只把新容器补进去，不要删除已有模块。
-
-### 8.4 在导航栏增加菜单入口
-
-在 `_build_function_bar()` 的 `items` 列表里增加新模块入口。
-
-如果要加到已有一级菜单，例如“风险动态分析”：
-
-```python
-("图标", "风险动态分析", False, [
-    "已有子模块",
-    "新模块名称",
-])
-```
-
-如果要新增一级菜单：
-
-```python
-("图标", "新一级菜单", False, ["新模块名称"])
-```
-
-注意：`_on_submodule_clicked()` 中判断使用的是子模块名称字符串，所以菜单里的名称必须和后面的判断完全一致。
-
-### 8.5 在点击逻辑中加载页面
-
-在 `_on_submodule_clicked()` 中增加分支：
-
-```python
-elif submodule_title == "新模块名称":
-    from new_module import NewModuleWidget
-
-    self._ensure_lazy_page(
-        "_new_module_widget",
-        self._new_module_content_widget,
-        NewModuleWidget,
-    )
-    self._new_module_content_widget.show()
-```
-
-推荐使用这种懒加载方式：只有用户第一次点击模块时才创建页面，启动速度更快，也能减少模块依赖错误对主程序启动的影响。
-
-### 8.6 验证新模块
-
-先做语法检查：
-
-```cmd
-python -m py_compile new_module.py main_interface.py
-```
-
-启动平台：
-
-```cmd
-conda activate Platform
-cd /d C:\path\to\Platform_sjtu
-python Framework.py
-```
-
-检查：
-
-- 一级菜单能正常展开
-- 子模块点击后标题正确变化
-- 新页面能显示
-- 切换到其他模块后，新页面会隐藏
-- 如果新模块有后台任务，关闭窗口时不会残留线程
-
-### 8.7 增加依赖
-
-如果新模块引入了新的第三方库，需要更新：
-
-```text
-requirements.txt
-```
-
-然后重新安装：
-
-```cmd
-conda activate Platform
-cd /d C:\path\to\Platform_sjtu
-python -m pip install -r requirements.txt
-```
-
-不要只在当前机器手动 `pip install` 后不更新 `requirements.txt`，否则换环境后模块会缺依赖。
+新增 Qt 页面、注册菜单、接入 Web 服务以及回归测试的步骤见[架构指南第 5 节](AGENTS.md#new-module)。分支、提交与合并的约定见[项目管理规范](PROJECT_MANAGEMENT.md)。
