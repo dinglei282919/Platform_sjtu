@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 194" font-family="Microsoft YaHei, sans-serif">
+  <rect x="1" y="1" width="798" height="192" rx="9" fill="#10243a" stroke="#385672"/>
+  <g fill="none" stroke="#8bb6ce" stroke-width="2.5">
+    <path d="M156 55 H244 M399 55 H510 M641 55 H674"/>
+  </g>
+  <g fill="#8bb6ce"><path d="M244 55 l-8 -5 v10z M510 55 l-8 -5 v10z M674 55 l-8 -5 v10z"/></g>
+  <g fill="#16334c" stroke="#547994">
+    <rect x="13" y="28" width="143" height="54" rx="6"/><rect x="246" y="28" width="153" height="54" rx="6"/>
+    <rect x="512" y="28" width="129" height="54" rx="6"/><rect x="676" y="28" width="111" height="54" rx="6"/>
+  </g>
+  <g text-anchor="middle" fill="#e3eff7" font-size="15">
+    <text x="84" y="49">测温仪表</text><text x="322" y="49">本地温控 PI</text>
+    <text x="577" y="49">合计并限幅</text><text x="731" y="49">冷却阀</text>
+  </g>
+  <g text-anchor="middle" fill="#bad0e0" font-size="12">
+    <text x="84" y="70">@@LOCAL@@</text><text x="322" y="70">@@BASE@@</text>
+    <text x="577" y="70">10–200 L/min</text><text x="731" y="70">@@COMMAND@@</text>
+    <text x="201" y="42">本拍釜温</text>
+  </g>
+  <g opacity="@@OBSERVER@@">
+    <circle cx="185" cy="55" r="4" fill="#8bb6ce"/>
+    <path d="M185 59 V133 H244" fill="none" stroke="@@COLOR@@" stroke-width="@@WIDTH@@" stroke-dasharray="@@DASH@@"/>
+    <path d="M244 133 l-9 -6 v12z" fill="@@COLOR@@"/>
+    <text x="173" y="110" text-anchor="end" fill="#d4e5f0" font-size="13">测温副本</text>
+    <text x="173" y="134" text-anchor="end" fill="@@COLOR@@" font-size="14">@@LINK@@</text>
+    <rect x="246" y="105" width="153" height="55" rx="6" fill="#16334c" stroke="#547994"/>
+    <text x="322" y="127" text-anchor="middle" fill="#e3eff7" font-size="15">热负荷观测器</text>
+    <text x="322" y="147" text-anchor="middle" fill="#bad0e0" font-size="12">@@HEAT@@</text>
+    <g opacity="@@LOCAL_BRANCH@@" fill="@@LOCAL_PATH_COLOR@@">
+      <path d="M322 82 V103" fill="none" stroke="@@LOCAL_PATH_COLOR@@" stroke-width="2.5"/>
+      <path d="M322 105 l-5 -8 h10z"/>
+      <text x="334" y="97" font-size="12">本地釜温辅助重估</text>
+    </g>
+    <path d="M399 133 H472 V72 H510" fill="none" stroke="#8bb6ce" stroke-width="2.5"/>
+    <path d="M510 72 l-8 -5 v10z" fill="#8bb6ce"/>
+    <text x="480" y="122" fill="#d4e5f0" font-size="13">补偿流量</text>
+    <text x="480" y="142" fill="#bad0e0" font-size="12">@@COMP@@</text>
+  </g>
+</svg>
