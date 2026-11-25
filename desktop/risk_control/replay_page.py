@@ -4,16 +4,16 @@ from uuid import uuid4
 from PySide6.QtCore import QByteArray, QSignalBlocker, Qt, QTimer
 from PySide6.QtGui import QColor, QPen
 from PySide6.QtSvgWidgets import QSvgWidget
-from PySide6.QtWidgets import QCheckBox, QPushButton, QSlider
+from PySide6.QtWidgets import QCheckBox, QSlider
 
 from platform_core.risk_control.replay import ARMS, DEMO_CASES, DT
 from platform_core.risk_control.replay_display import (
     CASE_GUIDES, CHARTS, GUIDE, HEAT_CHART, OBSERVATIONS, QUANTITIES, SENSORS, diagram_sample, number)
 from .controls import ControlComboBox
 from .comparison_trends import ComparisonTrendWindow
-from .layout import FieldGrid, FlowRow, StagePage, label
+from .layout import FieldGrid, FlowRow, RunningValue, StagePage, action_button, choice, field, label
 from .process_diagram import ProcessDiagram
-from .workspace import Trend, field
+from .trends import Trend
 
 
 MAIN_ARMS = ("raw", "guard", "candidate", "continuous")
@@ -29,25 +29,20 @@ class ReplayPage(StagePage):
         self.parameters.addWidget(label("重放攻击 Replay Attack", "heading"))
         self.parameters.addWidget(label(GUIDE, "guide"))
         form = FieldGrid(self.parameters)
-        self.scenario = ControlComboBox()
-        for key, name in DEMO_CASES.items():
-            self.scenario.addItem(name, key)
-        form.add_field("本次重放的热负荷工况", self.scenario, wide=True)
+        self.scenario = choice(form, "本次重放的热负荷工况", DEMO_CASES)
         self.case_label = label(CASE_GUIDES[self.scenario.currentData()], "guide")
         self.parameters.addWidget(self.case_label)
         self.scenario.currentIndexChanged.connect(lambda: self.case_label.setText(CASE_GUIDES[self.scenario.currentData()]))
-        self.begin = QPushButton("注入测温重放")
-        self.begin.clicked.connect(lambda: self.command("begin"))
-        self.cancel = QPushButton("取消待注入")
-        self.cancel.clicked.connect(lambda: self.command("cancel"))
-        self.finish = QPushButton("提前结束本段")
-        self.finish.clicked.connect(lambda: self.command("finish"))
+        self.begin = action_button("注入测温重放", lambda: self.command("begin"), "primary")
+        self.cancel = action_button("取消待注入", lambda: self.command("cancel"))
+        self.finish = action_button("提前结束本段", lambda: self.command("finish"))
         self.parameters.addLayout(FlowRow(self.begin, self.cancel, self.finish))
         self.phase_label = label("", "guide")
         self.parameters.addWidget(self.phase_label)
-        self.speed = field(FieldGrid(self.parameters), "推进倍率", 1, 1200, 30)
-        self.reset = QPushButton("应用并复位")
-        self.reset.clicked.connect(lambda: self.command("reset"))
+        settings = FieldGrid(self.parameters)
+        self.speed = field(settings, "推进倍率", 1, 1200, 30)
+        self.running_speed = RunningValue(settings, self.speed)
+        self.reset = action_button("应用配置并复位", lambda: self.command("reset"))
         self.parameters.addLayout(FlowRow(self.reset))
         self.parameters.addWidget(label("每轮先生成 0–4.9 min 的正常测温记录，3.0 min 起额外放热。复位会新开一轮。", "guide"))
         self.message = label("", "guide")
@@ -80,17 +75,13 @@ class ReplayPage(StagePage):
         self.position = QSlider(Qt.Horizontal)
         self.position.setAccessibleName("查看采样点")
         self.cursor_label = label("", "guide")
-        self.follow = QPushButton("回到实时")
-        self.locate = QPushButton("定位本段首拍")
-        self.locate.clicked.connect(self.locate_start)
+        self.follow = action_button("回到实时", self.live)
+        self.locate = action_button("定位本段首拍", self.locate_start)
         self.display.addLayout(FlowRow(self.cursor_label,self.locate,self.follow))
         self.display.addWidget(self.position)
         self.references = QCheckBox("展开参照组")
         self.display.addWidget(self.references)
-        self.sensor = ControlComboBox()
-        for key, name in SENSORS.items():
-            self.sensor.addItem(name, key)
-        FieldGrid(self.display).add_field("温度测点", self.sensor)
+        self.sensor = choice(FieldGrid(self.display), "温度测点", SENSORS, wide=False)
         self.display.addWidget(label("阴影为观测支路收到旧测温的时段。切换分支可核对本地测温、观测副本及当拍的阀指令。", "guide"))
         self.display.addWidget(self.trend_window.guide)
         self.charts = []
@@ -119,7 +110,6 @@ class ReplayPage(StagePage):
         self.sensor.currentIndexChanged.connect(self.refresh)
         self.position.valueChanged.connect(self.inspect)
         self.records.currentIndexChanged.connect(self.select_record)
-        self.follow.clicked.connect(self.live)
         self.timer = QTimer(self)
         self.timer.setInterval(350)
         self.timer.timeout.connect(self.refresh)
@@ -196,9 +186,10 @@ class ReplayPage(StagePage):
                 self.session = self.service.create()
             frame = self.session.frame(self.records.currentData() or None,self.at,arm=self.arm.currentData())
             self.set_arm_choices(frame["available_arms"], frame["arm"])
-            if not self.snap or frame["live_run"] != self.snap["live_run"]:
+            run_changed = not self.snap or frame["live_run"] != self.snap["live_run"]
+            self.running_speed.sync(frame["live_config"]["speed"], restore=run_changed)
+            if run_changed:
                 self.scenario.setCurrentIndex(self.scenario.findData(frame["live_config"]["scenario"]))
-                self.speed.setValue(frame["live_config"]["speed"])
                 with QSignalBlocker(self.records):
                     self.records.clear()
                     self.records.addItem("本轮","")

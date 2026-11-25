@@ -1,30 +1,17 @@
-import { Component, useEffect, useId, useRef, useState, type ReactNode } from 'react'
-import { CstrLiveTrends, TrendChart } from './CstrLiveTrends'
+import { useEffect, useId, useRef, useState } from 'react'
+import { CstrLiveTrends, TrendChart, type Point } from './CstrLiveTrends'
+import { SimulationLayout } from './SimulationLayout'
 import { CstrProcessDiagram } from './CstrProcessDiagram'
 import { pulseControls, pulseDurationHint, speedLimits, type PulseReceipt } from './cstrDisturbance'
-import { FormNumber, Page, SimulationBar, StageSwitch } from './PlatformUI'
-import parameterHelp from '../../assets/cstr/parameter-help.json'
-import { api, ApiError, post } from './api'
-import { useTask } from './useTask'
-import { useStoredState } from './taskSession'
-import { dnnOwner, emptyHandle, fdiOwners, healingOwner, replayOwner, useLivePresence } from './cstrOwner'
-import { HealingPage } from './HealingPage'
-import { FDI_TITLE, FdiPage } from './FdiPage'
-import { REPLAY_TITLE, ReplayPage } from './ReplayPage'
+import { FormNumber, Page, SimulationBar, StageSwitch } from '../PlatformUI'
+import parameterHelp from '../../../assets/cstr/parameter-help.json'
+import { api, ApiError, post } from '../api'
+import { useTask } from '../useTask'
+import { useStoredState } from '../taskSession'
+import { dnnOwner, emptyHandle } from './cstrOwner'
 
-export type RiskId =
-  | 'risk-overview'
-  | 'dnn-mpc'
-  | 'fdi'
-  | 'replay'
-  | 'self-healing'
-export const riskEntries: { id: RiskId; name: string }[] = [
-  { id: 'risk-overview', name: '综合仿真展示' },
-  { id: 'dnn-mpc', name: '深度神经网络优化控制' },
-  { id: 'self-healing', name: '多变量过程自愈控制' },
-  { id: 'fdi', name: FDI_TITLE },
-  { id: 'replay', name: REPLAY_TITLE },
-]
+export const DNN_TITLE = '深度神经网络优化控制'
+
 const stages = [
   '风险场景下控制系统智能模型训练算法',
   '风险场景下智能模型优化控制算法',
@@ -79,19 +66,6 @@ type Config = {
   training: Train
   models: { id: string; version: string; label: string }[]
 }
-export type Point = {
-  seq: number
-  t: number
-  T: number
-  T_ref: number
-  Qc: number
-  Qc_cmd: number
-  trial_id?: string
-  disturbance_phase?: 'active' | 'recovery'
-  T_hold?: number | null
-  Qc_hold?: number
-  solve_ms?: number | null
-}
 type LogEvent = {
   key?: string
   event: string
@@ -143,13 +117,6 @@ type Task = {
   }
 }
 const { ensure: ensureHandle, request: owned, save: saveHandle } = dnnOwner
-export function useCstrPresence() {
-  useLivePresence(dnnOwner)
-  useLivePresence(healingOwner)
-  useLivePresence(fdiOwners.measurement)
-  useLivePresence(fdiOwners.execution)
-  useLivePresence(replayOwner)
-}
 async function loadConfig(): Promise<Config> {
   const config = await api<Config | null>('/cstr/config')
   if (!config?.settings || !config.training ||
@@ -183,32 +150,7 @@ function Device({
     </label>
   )
 }
-class CstrPageBoundary extends Component<{ active: RiskId; children: ReactNode }, { failed: boolean }> {
-  state = { failed: false }
-
-  static getDerivedStateFromError() { return { failed: true } }
-
-  componentDidUpdate(previous: { active: RiskId }) {
-    if (this.state.failed && previous.active !== this.props.active) this.setState({ failed: false })
-  }
-
-  render() {
-    if (!this.state.failed) return this.props.children
-    return <Page title="风险管控优化决策">
-      <div role="alert" className="error">
-        <strong>当前控制页面加载失败</strong>
-        <p>可以重新打开当前页面，也可以通过顶部菜单切换模块。</p>
-        <button type="button" className="secondary" onClick={() => this.setState({ failed: false })}>重新打开页面</button>
-      </div>
-    </Page>
-  }
-}
-
-export function CstrWorkspace({ active }: { active: RiskId }) {
-  return <CstrPageBoundary active={active}><CstrPage active={active} /></CstrPageBoundary>
-}
-
-function CstrPage({ active }: { active: RiskId }) {
+export function DnnMpcPage({ visible }: { visible: boolean }) {
   const [stage, setStage] = useState(1),
     [cfg, setCfg] = useState<Config | null>(null)
   const [edits, setEdits] = useState<Partial<Settings>>({})
@@ -250,7 +192,7 @@ function CstrPage({ active }: { active: RiskId }) {
     visibleSamples.current = { run: v.run, rows }
     setSamples(rows)
   }
-  const live = active === 'dnn-mpc' && stage === 1
+  const live = visible && stage === 1
   useEffect(() => {
     setSpeedPreview(null)
     setCyclesPreview(null)
@@ -277,14 +219,13 @@ function CstrPage({ active }: { active: RiskId }) {
   const training = Boolean(
     trainId && (!task || ['queued', 'running'].includes(task.status)),
   )
-  const isDnn = active === 'dnn-mpc'
-  useEffect(() => { if (isDnn) setStage(1) }, [isDnn])
+  useEffect(() => { if (visible) setStage(1) }, [visible])
   const trainedModel = task?.status === 'succeeded' ? task.result?.model : undefined
   const [configError, setConfigError] = useState('')
   const [configAttempt, setConfigAttempt] = useState(0)
 
   useEffect(() => {
-    if (!isDnn) return
+    if (!visible) return
     let current = true
     setConfigError('')
     loadConfig().then(config => {
@@ -295,13 +236,13 @@ function CstrPage({ active }: { active: RiskId }) {
       if (current) setConfigError(error instanceof Error ? error.message : String(error))
     })
     return () => { current = false }
-  }, [isDnn, configAttempt, trainedModel])
+  }, [visible, configAttempt, trainedModel])
   useEffect(() => {
-    if (!isDnn || !cfg) return
+    if (!visible || !cfg) return
     let active = true
     void ensureHandle().catch(e => { if (active) setMessage(String(e)) })
     return () => { active = false }
-  }, [isDnn, Boolean(cfg)])
+  }, [visible, Boolean(cfg)])
 
   useEffect(() => {
     if (!live || !cfg) return
@@ -439,24 +380,10 @@ function CstrPage({ active }: { active: RiskId }) {
     update_rejected: '候选未通过',
   }
   const error = message || (stage === 0 ? trainingError : '')
-  if (!isDnn) {
-    if (active === 'self-healing') return <HealingPage />
-    if (active === 'fdi') return <FdiPage />
-    if (active === 'replay') return <ReplayPage />
-    const overview = active === 'risk-overview'
-    return <Page title={riskEntries.find(entry => entry.id === active)?.name ?? '风险管控优化决策'}>
-      <section className="deferred">
-        <h3>{overview ? '综合仿真展示待接入' : '仿真界面待接入'}</h3>
-        <p>{overview
-          ? '四种控制算法接入后，这里将展示统一 CSTR 的仿真结果。'
-          : '该子模块的 Web 仿真界面将在后续阶段接入。'}</p>
-        <p>从顶部“风险管控优化决策”菜单可进入 DNN-MPC、自愈控制、FDI 或重放控制试验。</p>
-      </section>
-    </Page>
-  }
+  if (!visible) return null
 
   return (
-    <Page title="深度神经网络优化控制" className="cstr-page">
+    <Page title={DNN_TITLE} className="cstr-page">
       <StageSwitch id="cstr-stage" label="深度神经网络优化控制工作流程" tabs={stages} selected={stage} select={setStage}/>
       <section id="cstr-stage-panel" role="tabpanel" aria-labelledby={`cstr-stage-${stage}`} className="cstr-stage">
         {live && cfg && <SimulationBar state={state} time={snap?.latest.t} busy={busy || !snap}
@@ -472,8 +399,7 @@ function CstrPage({ active }: { active: RiskId }) {
           settings &&
           train &&
           (stage === 0 ? (
-            <div className="two-column cstr-layout">
-              <aside className="panel">
+            <SimulationLayout controls={<>
                 <h3>模型训练配置</h3>
                 <label>外部训练数据（CSV，可选）
                   <input ref={csvInput} type="file" accept=".csv,text/csv" onChange={event => setCsvFile(event.target.files?.[0] ?? null)} />
@@ -538,8 +464,7 @@ function CstrPage({ active }: { active: RiskId }) {
                     取消训练
                   </button>
                 </div>
-              </aside>
-              <article className="panel">
+              </>}>
                 <h3>模型训练进度</h3>
                 <header className="module-status-bar cstr-status">
                   <strong><i className={`status-dot ${task?.status ?? 'ready'}`} />{status[task?.status ?? 'ready']}</strong>
@@ -579,11 +504,9 @@ function CstrPage({ active }: { active: RiskId }) {
                     </a>
                   </div>
                 )}
-              </article>
-            </div>
+              </SimulationLayout>
           ) : (
-            <div className="two-column cstr-layout">
-              <aside className="panel">
+            <SimulationLayout controls={<>
                 {scenarios && <section className="cstr-disturbance-settings" aria-label="工况扰动">
                   <h3>工况扰动</h3>
                   <div className="form-grid">
@@ -698,8 +621,7 @@ function CstrPage({ active }: { active: RiskId }) {
                     导出实验记录
                   </a>
                 )}
-              </aside>
-              <article className="panel">
+              </>}>
                 <h3>在线闭环仿真</h3>
                 <header className="module-status-bar cstr-status">
                   <strong><i className={`status-dot ${state}`} />{snap ? status[state] : '正在连接'}</strong>
@@ -732,8 +654,7 @@ function CstrPage({ active }: { active: RiskId }) {
                     {marked.new ?? marked.value ?? marked.reason}
                   </p>
                 )}
-              </article>
-            </div>
+              </SimulationLayout>
           ))}
       </section>
     </Page>

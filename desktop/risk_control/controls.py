@@ -134,7 +134,6 @@ class ControlTabWidget(QTabWidget):
         self.setDocumentMode(True)
         self.tabBar().setExpanding(False)
         self.tabBar().setDrawBase(False)
-        self.setAccessibleName("深度神经网络优化控制工作流程")
 
 
 def control_page_style(root):

@@ -6,7 +6,7 @@ from uuid import uuid4
 from PySide6.QtCore import QByteArray, QSignalBlocker, Qt, QTimer
 from PySide6.QtGui import QColor, QPen
 from PySide6.QtSvgWidgets import QSvgWidget
-from PySide6.QtWidgets import (QCheckBox, QFileDialog, QHeaderView, QPushButton, QSlider,
+from PySide6.QtWidgets import (QCheckBox, QFileDialog, QHeaderView, QSlider,
                                QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from platform_core.risk_control.fdi import BOOK, GROUPS, RECOVERY_STEPS, Config
@@ -14,19 +14,11 @@ from platform_core.risk_control.fdi_control import DT
 from platform_core.risk_control.fdi_display import (DEMO_VIEWS, diagram_sample, loop_template, loop_tokens,
                                                    nominal_preview, preview_marker, view)
 from platform_core.risk_control.presentation import marker_tokens
-from .controls import ControlComboBox, ControlTabWidget
+from .controls import ControlTabWidget
 from .comparison_trends import ComparisonTrendWindow
-from .layout import FieldGrid, FlowRow, RunningValue, StagePage, StatusStrip, label
+from .layout import FieldGrid, FlowRow, RunningValue, StagePage, StatusStrip, action_button, choice, field, label
 from .process_diagram import ProcessDiagram
-from .workspace import Trend, field
-
-
-def choice(form, title, items):
-    box = ControlComboBox()
-    for key, name in items.items():
-        box.addItem(name, key)
-    form.add_field(title, box, wide=True)
-    return box
+from .trends import Trend
 
 
 class FdiTrialPage(StagePage):
@@ -45,8 +37,7 @@ class FdiTrialPage(StagePage):
         self.scenario.setEnabled(self.scenario.count() > 1)
         notes = self.demo.get("preset_notes")
         self.preset_note = form.add_hint(self.scenario, notes[self.scenario.currentData()]) if notes else None
-        self.begin = self.button("注入 FDI 样本", lambda: self.command("begin"))
-        self.begin.setProperty("role", "primary")
+        self.begin = self.button("注入 FDI 样本", lambda: self.command("begin"), "primary")
         self.finish = self.button("结束本次注入", lambda: self.command("finish"))
         self.parameters.addLayout(FlowRow(self.begin, self.finish))
         self.parameters.addWidget(label(f"每次持续 {BOOK['length']*DT:g} 仿真分钟。生效期间再次注入，先撤除一拍，再施加所选样本。", "guide"))
@@ -136,12 +127,8 @@ class FdiTrialPage(StagePage):
         self.position.valueChanged.connect(lambda k: self.perform(lambda: self.inspect(k)))
         self.runs.currentIndexChanged.connect(lambda: self.perform(self.select_record))
 
-    def button(self, title, fn):
-        box = QPushButton(title)
-        box.setProperty("role", "secondary")
-        box.setCursor(Qt.PointingHandCursor)
-        box.clicked.connect(lambda: self.perform(fn))
-        return box
+    def button(self, title, fn, role="secondary"):
+        return action_button(title, lambda: self.perform(fn), role)
 
     def perform(self, fn):
         try:
@@ -353,6 +340,7 @@ class FdiTrialPage(StagePage):
 class FdiPage(ControlTabWidget):
     def __init__(self, service):
         super().__init__()
+        self.setAccessibleName("虚假数据注入控制试验分支")
         for side, title in (("measurement", "测量端"), ("execution", "执行端")):
             self.addTab(FdiTrialPage(side, service), title)
 

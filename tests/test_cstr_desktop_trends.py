@@ -9,7 +9,7 @@ from unittest.mock import Mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QEvent, QPoint, QPointF, QSignalBlocker, Qt
+from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
 from PySide6.QtGui import QMouseEvent, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QScrollArea
@@ -25,14 +25,14 @@ class DesktopTrendTests(unittest.TestCase):
         cls.app.setQuitOnLastWindowClosed(False)
 
     def setUp(self):
-        self.workspace = w = RiskWorkspace(SimpleNamespace(models=lambda: []))
-        self.addCleanup(w.close)
+        self.workspace = RiskWorkspace(SimpleNamespace(models=lambda: []))
+        self.page = w = self.workspace.dnn_mpc_page
+        self.addCleanup(self.workspace.close)
         w.timer.stop()
-        with QSignalBlocker(w.pages):
-            w.pages.setCurrentIndex(1)
-        w.resize(930, 530)
-        w.setAttribute(Qt.WA_DontShowOnScreen)
-        w.show()
+        self.workspace.pages.setCurrentWidget(w)
+        self.workspace.resize(930, 530)
+        self.workspace.setAttribute(Qt.WA_DontShowOnScreen)
+        self.workspace.show()
         self.rows = [dict(seq=i, t=i*SAMPLE_MIN, T=432.5+i*.001, T_ref=433.,
                           Qc=150+i*.002, Qc_cmd=150.) for i in range(761)]
         for row in self.rows[130:140]:
@@ -66,7 +66,7 @@ class DesktopTrendTests(unittest.TestCase):
         self.app.processEvents()
 
     def test_hover_keeps_one_sample_through_redraws_until_pointer_moves_or_leaves(self):
-        w = self.workspace
+        w = self.page
         w._pin_window(115)
         chart = w.temp
         self.app.processEvents()
@@ -98,7 +98,7 @@ class DesktopTrendTests(unittest.TestCase):
         self.assertTrue(chart.sample_tip.isHidden())
 
     def test_plain_wheel_scrolls_page_and_toolbar_keeps_time_window_synchronized(self):
-        w = self.workspace
+        w = self.page
         self.assertGreaterEqual(w.flow.y(), w.temp.y()+w.temp.height())
         self.assertEqual(w.temp.width(), w.flow.width())
         self.assertGreaterEqual(w.temp.height(), 260)
@@ -132,7 +132,7 @@ class DesktopTrendTests(unittest.TestCase):
         self.assertEqual(w.session.sample_window.call_count, count)
 
     def test_y_zoom_stays_on_its_chart_and_reset_restores_automatic_ranges(self):
-        w = self.workspace
+        w = self.page
         axis = w.temp.axes[1]
         before = axis.min(), axis.max()
         self.wheel(w.temp, 120, y=.25, modifiers=Qt.ShiftModifier)
@@ -150,7 +150,7 @@ class DesktopTrendTests(unittest.TestCase):
         self.assertEqual((axis.min(), axis.max()), w.temp.auto_y_range)
 
     def test_drag_both_axes_then_double_click_restores_live_and_both_y_ranges(self):
-        w = self.workspace
+        w = self.page
         w.span_selector.setCurrentIndex(w.span_selector.findData(60))
         low, high = w.temp.auto_y_range
         self.drag(w.temp, 50, 25)
@@ -179,7 +179,7 @@ class DesktopTrendTests(unittest.TestCase):
         self.assertEqual(before, (w.last_run, w.last_seq, w.rows))
 
     def test_vertical_drag_works_during_startup_and_retains_live_follow(self):
-        w = self.workspace
+        w = self.page
         w.rows = self.rows[:5]
         w.last_seq = 4
         w._draw_window()
@@ -258,7 +258,7 @@ class DesktopTrendTests(unittest.TestCase):
                         service.close()
 
     def test_startup_drag_into_blank_time_and_archived_edge_use_only_real_samples(self):
-        w = self.workspace
+        w = self.page
         w.rows = self.rows[:5]
         w.last_seq = 4
         w._draw_window()
@@ -283,16 +283,16 @@ class DesktopTrendTests(unittest.TestCase):
         self.assertEqual([p.x() for p in w.flow.lines[0].points()], [0., SAMPLE_MIN])
 
     def test_history_indicator_leaves_pointer_input_to_page_and_plots(self):
-        w = self.workspace
+        w = self.page
         bar = w.history_position
-        page = w.workflow.currentWidget()
+        page = w.currentWidget()
         for first in (None, 115):
             w._pin_window(first)
             domain = w.temp.domain
             page.ensureWidgetVisible(bar)
             self.app.processEvents()
             before = page.verticalScrollBar().value()
-            QTest.wheelEvent(w.windowHandle(), bar.mapTo(w, bar.rect().center()), QPoint(0, -120))
+            QTest.wheelEvent(self.workspace.windowHandle(), bar.mapTo(self.workspace, bar.rect().center()), QPoint(0, -120))
             self.app.processEvents()
             self.assertGreater(page.verticalScrollBar().value(), before)
             QTest.mousePress(bar, Qt.LeftButton, pos=bar.rect().center())
@@ -303,7 +303,7 @@ class DesktopTrendTests(unittest.TestCase):
             self.assertEqual(w.flow.domain, domain)
 
     def test_pulse_estimate_follows_input_and_aligns_with_the_spin_box(self):
-        w = self.workspace
+        w = self.page
         w.applied_speed = 4
         w.controls["speed"].setValue(8)
         self.assertEqual(w.pulse_hint.text(), "2.0 仿真分钟，按设定 8× 约 15.0 秒（待应用）")
@@ -314,7 +314,7 @@ class DesktopTrendTests(unittest.TestCase):
         w.controls["speed"].setValue(4)
         self.assertEqual(w.pulse_hint.text(), "0.5 仿真分钟，按设定 4× 约 7.5 秒")
         for width in (1440, 1180, 930):
-            w.resize(width, 760)
+            self.workspace.resize(width, 760)
             self.app.processEvents()
             spin = w.disturbance_cycles
             hint = w.pulse_hint

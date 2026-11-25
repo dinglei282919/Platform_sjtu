@@ -1,8 +1,21 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent } from 'react'
 import { getInstanceByDom, type EChartsOption, type LineSeriesOption } from 'echarts'
 import { SampleChart } from './SampleChart'
-import { api } from './api'
-import type { Point } from './CstrWorkspace'
+import { api } from '../api'
+
+export type Point = {
+  seq: number
+  t: number
+  T: number
+  T_ref: number
+  Qc: number
+  Qc_cmd: number
+  trial_id?: string
+  disturbance_phase?: 'active' | 'recovery'
+  T_hold?: number | null
+  Qc_hold?: number
+  solve_ms?: number | null
+}
 
 const timeIntervals = [15, 30, 60, 120, 240, 480]
 const liveGrid = { top: 36, right: 16, bottom: 48, left: 72 }

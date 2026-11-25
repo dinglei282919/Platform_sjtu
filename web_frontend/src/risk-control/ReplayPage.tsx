@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
-import { api, ApiError } from './api'
+import { api, ApiError } from '../api'
 import { emptyHandle, replayOwner } from './cstrOwner'
-import { FormNumber, Page, SimulationBar } from './PlatformUI'
+import { FormNumber, Page, SimulationBar } from '../PlatformUI'
 import {chartHelp, comparisonDomain, InteractiveComparisonTrend, pannedPosition,
   type ComparisonLine, type SamplePosition, type TrendNavigation} from './ComparisonTrend'
-import { CstrProcessDiagram } from './CstrProcessDiagram'
+import { SimulationLayout } from './SimulationLayout'
+import { CstrProcessDiagram, ControlDiagram } from './CstrProcessDiagram'
 
 type Config = {scenario:string; speed:number}
 type Labels = Record<string,string>
@@ -123,7 +124,7 @@ export function ReplayPage() {
     {error && <div role="alert" className="error">{error} {!options && <button onClick={()=>{setError('');retryConfig(k=>k+1)}}>重试</button>}</div>}
     {options&&frame&&draft?<div className="cstr-stage">
       <SimulationBar state={frame.status} time={Math.max(0,frame.live_seq)*options.sample_min} busy={busy} command={k=>void command(k)}/>
-      <div className="two-column cstr-layout"><aside className="panel">
+      <SimulationLayout controls={<>
         <h3>重放攻击 Replay Attack</h3>
         <p className="cstr-data-help">{options.guide}</p>
         <label>本次重放的热负荷工况<select value={draft.scenario} onChange={e=>setDraft({...draft,scenario:e.target.value})}>
@@ -136,9 +137,9 @@ export function ReplayPage() {
         <p className="cstr-data-help">{position?'正在查看历史 · 回到实时后可注入':frame.phase_label}</p>
         <FormNumber label="推进倍率" value={draft.speed} runningValue={frame.live_config.speed} min={1} max={1200} step={1}
           decimals={0} onChange={speed=>setDraft({...draft,speed})}/>
-        <div className="actions"><button className="secondary" disabled={busy} onClick={()=>void command('reset')}>应用并复位</button></div>
+        <div className="actions"><button className="secondary" disabled={busy} onClick={()=>void command('reset')}>应用配置并复位</button></div>
         <p className="cstr-data-help">每轮先生成 0–4.9 min 的正常测温记录，3.0 min 起额外放热。复位会新开一轮。</p>
-      </aside><section className="panel healing-results">
+      </>}>
         <h3>反应釜工艺与测温支路</h3>
         <div className="form-grid"><label>运行记录<select value={position?.run??frame.live_run} onChange={e=>{
           const entry=frame.archives.find(a=>a.run===e.target.value)
@@ -150,9 +151,7 @@ export function ReplayPage() {
         <div className="cstr-sample-group" aria-busy={!sampleReady}>
           {process && <CstrProcessDiagram key={frame.run+frame.arm} display={process.labels} appliedFlow={process.flow}
             running={sampleReady && frame.following && frame.status==='running'}/>}
-          {v && <><details><summary>展开控制框图</summary>
-            <img className="fdi-loop-diagram" src={'data:image/svg+xml;charset=utf-8,'+encodeURIComponent(v.svg)}
-              alt={'测温副本至热负荷观测器的链路 · '+v.link}/></details>
+          {v && <><ControlDiagram svg={v.svg} label={'测温副本至热负荷观测器的链路 · '+v.link}/>
             <p className="cstr-data-help">{v.link}　接收 {v.received}　样本源 {v.source}　{v.action}</p>
             <p className="cstr-data-help">釜温 · 本拍 {v.local} / 观测器 {v.observed}　夹套出口 · 本拍 {v.jacket} / 观测器 {v.jacket_observed}</p>
             {(frame.arm==='candidate'||frame.arm==='continuous')&&<p className="cstr-data-help">
@@ -181,17 +180,17 @@ export function ReplayPage() {
           <p className="cstr-chart-help">{position?'历史回看':'跟随实时'}　{domain[0].toFixed(1)}–{domain[1].toFixed(1)} min　{chartHelp}</p>
           {[options.observations[sensor],...options.charts.slice(1)].map(c=><ReplayTrend key={run+arm+c.title+scaleReset}
             spec={c} {...{rows,bands,extra,availableArms,period,navigation}}/>)}
-          <details className="fdi-details"><summary>评测指标与指令明细</summary>
+          <details className="cstr-details"><summary>评测指标与指令明细</summary>
             <ReplayTrend key={run+arm+scaleReset} spec={options.heat_chart} {...{rows,bands,extra,availableArms,period,navigation}}/>
             <div className="cstr-sample-group" aria-busy={!sampleReady}>
             {v&&<p className="cstr-data-help">限幅前请求 {v.request}　补偿权重 {v.weight}</p>}
             <p className="cstr-data-help">{options.groups[frame.arm]} · {frame.scored_through===null?'尚未注入重放':
               `第 ${frame.segment} 段评测至 ${(frame.scored_through*options.sample_min).toFixed(1)} min`}</p>
-            <dl className="fdi-readings">{Object.entries(options.metrics).map(([k,n])=><div key={k}><dt>{n}</dt>
+            <dl className="cstr-readings">{Object.entries(options.metrics).map(([k,n])=><div key={k}><dt>{n}</dt>
               <dd>{frame.metrics[frame.arm]?.[k]?.toFixed(3)??'—'}</dd></div>)}</dl></div>
           </details>
         </div>
-      </section></div>
-    </div>:!error&&<p role="status">正在连接独立 PI 试验…</p>}
+      </SimulationLayout>
+    </div>:!error&&<p className="module-status-bar" role="status">正在连接独立 PI 试验…</p>}
   </Page>
 }

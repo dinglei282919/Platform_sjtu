@@ -13,6 +13,7 @@ from .fdi import BOOK, DEMO_VIEWS, FIXED_PRIMARY_WEIGHT, GROUPS, RECOVERY_STEPS,
 from .fdi_control import DT, Gate, LoopSettings
 from .fdi_metrics import Scores
 from .journal import Journal
+from .session_lifecycle import lease_action
 
 
 class FdiSession:
@@ -125,12 +126,13 @@ class FdiSession:
                     if self.closed:
                         return
                     idle = time.monotonic()-self.last_seen
-                    if self.leased and not self.connections and idle > 120:
+                    action = lease_action(self.leased, self.connections, idle, self.status)
+                    if action == "expire":
                         if not self.finalized:
                             self._event("lease_expired")
                         self.closed = True
                         return
-                    if self.leased and not self.connections and idle > 20 and self.status == "running":
+                    if action == "pause":
                         self._event("lease_paused")
                         self.status, self.lease_paused = "paused", True
                     if self.engine is None and not self.failed and not self.finalized:

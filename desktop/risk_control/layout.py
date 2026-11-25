@@ -1,10 +1,43 @@
 """Native cards and wrapping form rows for the risk-control workspace."""
+from collections.abc import Mapping
 from html import escape
 
 from PySide6.QtCore import QEvent, QRect, QSize, Qt
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel, QLayout, QPushButton, QScrollArea,
                                QSizePolicy, QVBoxLayout, QWidget)
+
+from .controls import ControlComboBox, ControlDoubleSpinBox, ControlSpinBox
+
+
+def action_button(text, callback, role="secondary"):
+    button = QPushButton(text)
+    button.setProperty("role", role)
+    button.setCursor(Qt.PointingHandCursor)
+    button.clicked.connect(lambda checked=False: callback())
+    return button
+
+
+def choice(form, title, items=(), *, wide=True):
+    box = ControlComboBox()
+    if isinstance(items, Mapping):
+        for key, name in items.items():
+            box.addItem(name, key)
+    else:
+        box.addItems(items)
+    form.add_field(title, box, wide=wide)
+    return box
+
+
+def field(form, label, lo, hi, value, step=1, decimals=0, *, beside=None, wide=False):
+    box = ControlDoubleSpinBox() if decimals else ControlSpinBox()
+    if decimals:
+        box.setDecimals(decimals)
+    box.setRange(lo, hi)
+    box.setSingleStep(step)
+    box.setValue(value)
+    form.add_field(label, box, beside=beside, wide=wide)
+    return box
 
 
 def label(text, role="hint"):
@@ -254,10 +287,9 @@ class StagePage(QScrollArea):
         row = QHBoxLayout(self.simulation_bar)
         row.setContentsMargins(4, 0, 4, 6)
         self.simulation_clock = label("", "guide")
-        self.simulation_button = QPushButton("暂停仿真")
+        self.simulation_button = action_button("暂停仿真", lambda: command(self.simulation_action))
         self.simulation_button.setToolTip("暂停或继续当前仿真（Pause 键）")
         self.simulation_button.setEnabled(False)
-        self.simulation_button.clicked.connect(lambda: command(self.simulation_action))
         self.pause_shortcut = QShortcut(QKeySequence(Qt.Key_Pause), self)
         self.pause_shortcut.setContext(Qt.WindowShortcut)
         self.pause_shortcut.setAutoRepeat(False)

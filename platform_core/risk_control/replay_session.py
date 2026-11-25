@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from .comparison_service import ComparisonService, sample_bands
 from .journal import Journal
+from .session_lifecycle import lease_action
 from .replay import ARMS, CASES, DEMO_CASES, DT, END, FIXTURE, RECOVERY_STEPS, START, T_REF, Trial, scores
 from .replay_display import CASE_GUIDES, CHARTS, GUIDE, HEAT_CHART, OBSERVATIONS, QUANTITIES, SENSORS, display, trend
 
@@ -84,10 +85,11 @@ class ReplaySession:
                 while not self.closed:
                     now = time.monotonic()
                     idle = now - self.last_seen
-                    if self.leased and not self.connections and idle > 120:
+                    action = lease_action(self.leased, self.connections, idle, self.status)
+                    if action == "expire":
                         self.closed = True
                         break
-                    if self.leased and not self.connections and idle > 20 and self.status == "running":
+                    if action == "pause":
                         self.status, self.lease_paused = "paused", True
                     period = DT * 60 / self.config.speed
                     warming = self.last_published < START-1 and not self.error

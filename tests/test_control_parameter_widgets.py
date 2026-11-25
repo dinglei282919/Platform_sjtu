@@ -152,6 +152,31 @@ class ControlParameterWidgetTests(unittest.TestCase):
             finally:
                 panel.close()
 
+    def test_replay_speed_edit_is_pending_until_applied(self):
+        from desktop.risk_control.replay_page import ReplayPage
+        from platform_core.risk_control.replay_session import ReplayService
+
+        with TemporaryDirectory() as directory:
+            service = ReplayService(Path(directory))
+            page = ReplayPage(service)
+            try:
+                page.refresh()
+                old_run = page.session.run
+                self.assertTrue(page.running_speed.isHidden())
+                page.speed.setValue(75)
+                page.refresh()
+                self.assertEqual(page.speed.value(), 75)
+                self.assertEqual(page.session.config.speed, 30)
+                self.assertFalse(page.running_speed.isHidden())
+                self.assertIn("30", page.running_speed.text())
+                page.reset.click()
+                self.assertNotEqual(page.session.run, old_run)
+                self.assertEqual(page.session.config.speed, 75)
+                self.assertTrue(page.running_speed.isHidden())
+            finally:
+                page.close()
+                service.close()
+
     def test_warning_on_each_running_control_page(self):
         from desktop.risk_control.workspace import RiskWorkspace
         from platform_core.risk_control import NAVIGATION
@@ -169,7 +194,8 @@ class ControlParameterWidgetTests(unittest.TestCase):
                     with self.subTest(module=module, side=side):
                         workspace.select_page(NAVIGATION[module])
                         if module == 1:
-                            page, box = workspace, workspace.controls["reference"]
+                            page = workspace.dnn_mpc_page
+                            box = page.controls["reference"]
                         elif module == 2:
                             page = workspace.healing_page
                             box = page.fields["speed"]
@@ -196,6 +222,19 @@ class ControlParameterWidgetTests(unittest.TestCase):
                         self.assertTrue(box.hasFocus())
                         self.assertEqual(box.value(), value)
                         self.assertEqual(page.session.run, run)
+                page = workspace.dnn_mpc_page
+                first_run = page.session.run
+                workspace.select_page(NAVIGATION[1])
+                self.assertIs(workspace.pages.currentWidget(), page)
+                self.assertEqual(page.currentIndex(), 1)
+                self.assertEqual(page.session.run, first_run)
+                page.setCurrentIndex(0)
+                workspace.select_page(NAVIGATION[0])
+                workspace.select_page(NAVIGATION[1])
+                self.assertEqual(page.currentIndex(), 1)
+                self.assertEqual(page.session.run, first_run)
+                page.command_buttons["reset"].click()
+                self.assertNotEqual(page.session.run, first_run)
             finally:
                 workspace.shutdown()
                 workspace.close()

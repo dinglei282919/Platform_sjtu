@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type PointerEvent } from 'react'
 import { getInstanceByDom, type EChartsOption } from 'echarts'
-import { Chart } from './PlatformUI'
+import { Chart } from '../PlatformUI'
 
 type Readings = [name: string, value: number][]
 type Selection = { at: number; readings: Readings; left: boolean }

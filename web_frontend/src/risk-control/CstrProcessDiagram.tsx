@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 import { useLayoutEffect, useRef } from 'react'
-import processSvg from '../../assets/cstr/process.svg?raw'
+import processSvg from '../../../assets/cstr/process.svg?raw'
 
 const diagram = { __html: processSvg }
 const token = /@@([A-Z]+)@@/g
@@ -53,4 +53,11 @@ export function CstrProcessDiagram({ display, appliedFlow, running }: Props) {
   return <div ref={host} className="cstr-diagram" role="img" aria-label="夹套式 CSTR 实时工艺图"
     aria-description={`釜内温度 ${display.TEMP} K，夹套出口温度 ${display.JACKET} K，实际冷却液流量 ${display.FLOW} L/min　${display.SIGNALLABEL??''}`}
     data-running={running} dangerouslySetInnerHTML={diagram} />
+}
+
+export function ControlDiagram({ svg, label }: { svg: string; label: string }) {
+  return <details>
+    <summary>展开控制框图</summary>
+    <img className="cstr-loop-diagram" src={'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg)} alt={label} />
+  </details>
 }

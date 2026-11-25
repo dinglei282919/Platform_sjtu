@@ -5,15 +5,16 @@ from platform_core.risk_control.fdi import GROUPS, SCENARIOS, options
 from platform_core.risk_control.fdi_display import CHARTS, FLOW_CHART, loop_tokens, nominal_preview, preview_marker, view
 from platform_core.risk_control.presentation import marker_tokens, tokens
 
-from .comparison import Owner, SessionCommand, comparison_router, dispatch_command
+from .comparison import SessionCommand, comparison_router, dispatch_command
+from .control_http import Owner, call
 
 
 class Command(SessionCommand):
     kind: Literal["start", "resume", "pause", "end", "reset", "begin", "finish"]
 
 
-def routes(service, call, presence):
-    router = comparison_router("/api/cstr/fdi", service, call, presence)
+def routes(service):
+    router = comparison_router("/api/cstr/fdi", service)
 
     @router.get("/config")
     def config():
@@ -38,7 +39,7 @@ def routes(service, call, presence):
 
     @router.post("/sessions/{identifier}/commands")
     def command(identifier: str, request: Command, owner: Owner = None):
-        return dispatch_command(service(), call, identifier, owner, request)
+        return dispatch_command(service(), identifier, owner, request)
 
     @router.get("/sessions/{identifier}/export")
     def export(identifier: str, run: str | None = None):

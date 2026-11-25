@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { EChartsOption, LineSeriesOption, ScatterSeriesOption } from 'echarts'
 import {trendGrid as grid, useTrendGestures, type Range} from './trendGestures'
 import { SampleChart } from './SampleChart'
-import { api } from './api'
+import { api } from '../api'
 import { healingColors as colors, inputs, outputs, type Group, type Method, type Options, type Output, type Row, type Signal, type Snapshot } from './healingTypes'
 
 const span = 600

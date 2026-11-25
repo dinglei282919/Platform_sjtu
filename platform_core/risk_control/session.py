@@ -11,6 +11,7 @@ from .dnn_mpc.dataset import Trajectories
 from .dnn_mpc.mpc import check_reference, solve
 from .dnn_mpc.supervision import DISPATCH_RESERVE_S, PI_KP, TRANSFER_STEP, Decision, SolverWorker, backup_flow
 from .journal import Journal
+from .session_lifecycle import lease_action
 from .disturbance import DEFAULT_CYCLES, InletTrial
 
 
@@ -113,7 +114,7 @@ class Session:
 
     def owner_disconnected(self):
         with self.lock:
-            self.owner_connections -= 1
+            self.owner_connections = max(0, self.owner_connections - 1)
             self.last_seen = time.monotonic()
 
     def sample_window(self, run, first, count):
@@ -431,7 +432,8 @@ class Session:
                 if self.closed:
                     return
                 idle = time.monotonic()-self.last_seen
-                if self.leased and not self.owner_connections and idle > 120:
+                action = lease_action(self.leased, self.owner_connections, idle, self.status)
+                if action == "expire":
                     self._cancel_update()
                     self._event("lease_expired")
                     self.status, self.closed = "ended", True
@@ -439,7 +441,7 @@ class Session:
                     self.solver.close()
                     self.log.close()
                     return
-                if self.leased and not self.owner_connections and idle > 20 and self.status == "running":
+                if action == "pause":
                     self.lease_paused = True
                     self.status = "paused"
                     self._event("lease_paused")

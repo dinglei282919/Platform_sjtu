@@ -6,16 +6,15 @@ from uuid import uuid4
 from PySide6.QtCharts import QScatterSeries
 from PySide6.QtCore import QPointF, QRectF, QSignalBlocker, Qt, QTimer
 from PySide6.QtGui import QColor, QPen
-from PySide6.QtWidgets import QFileDialog, QHeaderView, QPushButton, QTableWidget, QTableWidgetItem
+from PySide6.QtWidgets import QFileDialog, QHeaderView, QTableWidget, QTableWidgetItem
 
 from platform_core.risk_control.healing import (COMPENSATION_PARAMETERS, Config, GROUPS, MODES, POST_FAULT_MIN,
                                                SCENARIOS, SIGNALS, STATE_NAMES, TRIGGER_LIMITS)
 from platform_core.risk_control.healing_display import COLORS, HEADINGS, METHODS, SPAN, event_label, view
 from platform_core.risk_control.cstr import FLOW_LIMITS, SAMPLE_MIN
-from .controls import ControlComboBox
-from .layout import FieldGrid, FlowRow, RunningValue, StagePage, StatusStrip, label
+from .layout import FieldGrid, FlowRow, RunningValue, StagePage, StatusStrip, action_button, choice, field, label
 from .process_diagram import ProcessDiagram
-from .workspace import Trend, field
+from .trends import Trend
 
 
 class EffectChart(Trend):
@@ -80,10 +79,9 @@ class HealingPage(StagePage):
         self.display.addWidget(self.status)
         self.parameters.addWidget(label("自愈控制配置", "heading"))
         form = FieldGrid(self.parameters)
-        self.scenario = self.choice(form, "退化场景", SCENARIOS)
-        self.mode = self.choice(form, "补偿调度", MODES)
-        self.degrade = self.button("施加退化", lambda: self.command("degrade"))
-        self.degrade.setProperty("role", "primary")
+        self.scenario = choice(form, "退化场景", SCENARIOS)
+        self.mode = choice(form, "补偿调度", MODES)
+        self.degrade = self.button("施加退化", lambda: self.command("degrade"), "primary")
         self.buttons = {"reset": self.button("应用配置并复位", lambda: self.command("reset"))}
         self.parameters.addLayout(FlowRow(self.degrade, self.buttons["reset"]))
         self.fault_help = label("", "guide")
@@ -140,7 +138,7 @@ class HealingPage(StagePage):
         self.message = label("", "guide")
         self.parameters.addWidget(self.message)
         self.display.addWidget(label("自愈效果对照", "heading"))
-        self.method = self.choice(FieldGrid(self.display), "对照的自愈方法", METHODS)
+        self.method = choice(FieldGrid(self.display), "对照的自愈方法", METHODS)
         self.phase = label("", "guide")
         self.display.addWidget(self.phase)
         self.effect_chart = EffectChart()
@@ -151,7 +149,7 @@ class HealingPage(StagePage):
         self.comparison = label("", "statusStrip")
         self.display.addWidget(self.comparison)
         display_form = FieldGrid(self.display)
-        self.group = self.choice(display_form, "工艺图与入口对照组", GROUPS)
+        self.group = choice(display_form, "工艺图与入口对照组", GROUPS)
         self.group.setCurrentIndex(2)
         self.diagram = ProcessDiagram()
         self.display.addWidget(self.diagram)
@@ -167,7 +165,7 @@ class HealingPage(StagePage):
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
         self.table.setFixedHeight(166)
         self.display.addWidget(self.table)
-        self.trend_set = self.choice(FieldGrid(self.display), "趋势信号", {"outputs":"输出与触发范围", "inputs":"实际入口与冷却流量"})
+        self.trend_set = choice(FieldGrid(self.display), "趋势信号", {"outputs":"输出与触发范围", "inputs":"实际入口与冷却流量"})
         self.follow = self.button("回到实时", self.restore)
         self.history = label("", "guide")
         self.display.addLayout(FlowRow(self.history, self.follow))
@@ -208,18 +206,8 @@ class HealingPage(StagePage):
         self.timer.timeout.connect(self.refresh)
         self.set_preset()
 
-    def choice(self, form, name, items):
-        box = ControlComboBox()
-        for key, value in items.items():
-            box.addItem(value, key)
-        form.add_field(name, box, wide=True)
-        return box
-
-    def button(self, text, fn):
-        button = QPushButton(text)
-        button.setProperty("role", "secondary")
-        button.clicked.connect(lambda: self.perform(fn))
-        return button
+    def button(self, text, fn, role="secondary"):
+        return action_button(text, lambda: self.perform(fn), role)
 
     def select_group(self, key):
         with QSignalBlocker(self.group), QSignalBlocker(self.method):

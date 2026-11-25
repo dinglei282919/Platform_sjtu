@@ -12,6 +12,22 @@ from platform_core.risk_control import cstr, presentation
 from platform_core.risk_control.dnn_mpc import dataset, model, validation
 from platform_core.risk_control.dnn_mpc.mpc import Settings, neural_objective, solve
 from platform_core.risk_control.session import Session
+from platform_core.risk_control.session_lifecycle import lease_action
+
+
+class SessionLeaseTests(unittest.TestCase):
+    def test_disconnect_deadlines_respect_manual_pauses_and_connected_owners(self):
+        cases = [
+            (True, 0, 20, "running", None),
+            (True, 0, 21, "running", "pause"),
+            (True, 0, 120, "paused", None),
+            (True, 0, 121, "paused", "expire"),
+            (True, 1, 121, "running", None),
+            (False, 0, 121, "running", None),
+        ]
+        for leased, connections, idle, status, expected in cases:
+            with self.subTest(leased=leased, connections=connections, idle=idle, status=status):
+                self.assertEqual(lease_action(leased, connections, idle, status), expected)
 
 
 class PlantAndModelTests(unittest.TestCase):
@@ -398,6 +414,7 @@ class SessionBoundaryTests(unittest.TestCase):
         self.assertEqual(snap["run"], initial_run)
         self.assertEqual(snap["samples"][1]["model"], "candidate")
         self.assertEqual(snap["status"], "running")
+        self.s.owner_disconnected()
         self.s.owner_disconnected()
         self.assertEqual(self.s.owner_connections, 0)
 

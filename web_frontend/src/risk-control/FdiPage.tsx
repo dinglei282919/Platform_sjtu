@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
-import { api, ApiError } from './api'
+import { api, ApiError } from '../api'
 import { emptyHandle, fdiOwners } from './cstrOwner'
-import { FormNumber, Page, SimulationBar, StageSwitch } from './PlatformUI'
-import { useStoredState } from './taskSession'
-import { CstrProcessDiagram } from './CstrProcessDiagram'
+import { FormNumber, Page, SimulationBar, StageSwitch } from '../PlatformUI'
+import { useStoredState } from '../taskSession'
+import { SimulationLayout } from './SimulationLayout'
+import { CstrProcessDiagram, ControlDiagram } from './CstrProcessDiagram'
 import {chartHelp, comparisonDomain, InteractiveComparisonTrend, pannedPosition,
   type ComparisonLine, type SamplePosition, type TrendNavigation} from './ComparisonTrend'
-import demoViews from '../../assets/cstr/fdi-demo.json'
-import loopSvg from '../../assets/cstr/fdi-loops.svg?raw'
+import demoViews from '../../../assets/cstr/fdi-demo.json'
+import loopSvg from '../../../assets/cstr/fdi-loops.svg?raw'
 
 type Side = keyof typeof fdiOwners
 type Labels = Record<string,string>
@@ -39,9 +40,7 @@ function signalValue(row:Row, signal:Signal) {
 function LoopDiagram({display,labels}:{display:Labels;labels:Labels}) {
   const values={...display,...labels}
   const svg=loopSvg.replace(/@@([A-Z]+)@@/g,(_,key:string)=>values[key]??'')
-  return <details><summary>展开控制框图</summary>
-    <img className="fdi-loop-diagram" alt="所选分支的闭环信号图" src={'data:image/svg+xml;charset=utf-8,'+encodeURIComponent(svg)}/>
-  </details>
+  return <ControlDiagram svg={svg} label="所选分支的闭环信号图"/>
 }
 
 function Trend({spec, rows, bands, period, navigation}: {
@@ -149,7 +148,8 @@ function Trial({side, visible, options}:{side:Side; visible:boolean; options:Opt
   }
 
   if(!visible)return null
-  if(!snap||!draft)return <section className="panel" role="status">{connection||'正在连接试验会话…'}</section>
+  if(!snap||!draft)return connection ? <p className="error" role="alert">{connection}</p> :
+    <p className="module-status-bar" role="status">正在连接试验会话…</p>
   const historical=!!position
   const frame=historical && history ? history : snap, point=frame.latest
   const ended=snap.status==='ended'
@@ -181,7 +181,7 @@ function Trial({side, visible, options}:{side:Side; visible:boolean; options:Opt
     {message && <div role="alert" className="error">{message}</div>}
     <SimulationBar state={snap.status} time={Math.max(0,snap.seq)*options.sample_min} busy={busy}
       command={k=>void command(k)}/>
-    <div className="two-column cstr-layout"><aside className="panel" key={snap.run}>
+    <SimulationLayout controlsKey={snap.run} controls={<>
       <section className="cstr-disturbance-settings" aria-labelledby={'fdi-attack-heading-'+side}>
       <h3 id={'fdi-attack-heading-'+side}>虚假数据注入攻击FDI Attack</h3>
       <label>预置样本<select value={draft.scenario} disabled={presets.length===1}
@@ -210,7 +210,7 @@ function Trial({side, visible, options}:{side:Side; visible:boolean; options:Opt
         `每次注入单独评测，恢复观察最长 ${options.recovery_samples*options.sample_min} 仿真分钟。`}</p>
       <div className="actions"><button className="secondary" disabled={busy||ended} onClick={()=>void command('end')}>结束试验</button>
         <button className="secondary" disabled={busy} onClick={()=>void command('export')}>导出所选记录</button></div>
-    </aside><section className="panel healing-results">
+    </>}>
       <h3>闭环对照</h3>
       <header className="module-status-bar cstr-status" role="status">
         {sampleReady ? <><strong><i className={'status-dot '+frame.status}/>{frame.view.phase}</strong>
@@ -241,23 +241,23 @@ function Trial({side, visible, options}:{side:Side; visible:boolean; options:Opt
       <p className="cstr-chart-help">{historical?'历史回看':'跟随实时'}　{domain[0].toFixed(1)}–{domain[1].toFixed(1)} min　{chartHelp}</p>
       {demo.charts.map(spec=><Trend key={visibleRun+spec.title+scaleReset} spec={spec} rows={samples}
         bands={plotSource?.bands??[]} period={period} navigation={navigation}/>)}
-      <details className="fdi-details"><summary>试验详情</summary>
+      <details className="cstr-details"><summary>试验详情</summary>
         <label>工艺图与采样详情分支<select value={arm} onChange={e=>setArm(e.target.value)}>
           {arms.map(k=><option key={k} value={k}>{groups[k]}</option>)}</select></label>
         {sampleReady && point && selected && <>
-          <h3>所选采样点 · {groups[arm]}</h3><dl className="fdi-readings">
+          <h3>所选采样点 · {groups[arm]}</h3><dl className="cstr-readings">
             {frame.view.readings[arm].map(([k,v])=><div key={k}><dt>{k}</dt><dd>{v}</dd></div>)}</dl>
           <h3>{frame.view.metrics_title}</h3>
-          <div className="healing-table"><table><thead><tr><th scope="col">指标</th>{arms.map(k=><th scope="col" key={k}>{groups[k]}</th>)}</tr></thead>
+          <div className="cstr-metrics-table" role="region" aria-label={frame.view.metrics_title} tabIndex={0}><table><thead><tr><th scope="col">指标</th>{arms.map(k=><th scope="col" key={k}>{groups[k]}</th>)}</tr></thead>
             <tbody>{frame.view.table.map(([k,...values])=><tr key={k}><th scope="row">{k}</th>{values.map((v,i)=><td key={arms[i]}>{v}</td>)}</tr>)}</tbody></table></div>
           <p className="cstr-data-help">恢复用时取真实釜温连续 10 拍处于设定值 ±0.10 K 内的首拍。请在相同的有效区间数下比较 IAE。</p>
         </>}
-        {sampleReady && <><h3>采样事件</h3>{frame.view.events.length ? <ul className="healing-events">{frame.view.events.slice(-8).map((v,i)=><li key={i}>{v}</li>)}</ul> :
+        {sampleReady && <><h3>采样事件</h3>{frame.view.events.length ? <ul className="cstr-events">{frame.view.events.slice(-8).map((v,i)=><li key={i}>{v}</li>)}</ul> :
           <p className="cstr-data-help">暂无事件</p>}
         <p className="cstr-data-help">周期预算 {frame.timing.budget_ms.toFixed(1)} ms　计算 P95 {frame.timing.p95_ms?.toFixed(2)??'—'} ms　
           超时 {frame.timing.overruns} / {frame.timing.intervals}　实测推进 {frame.timing.effective_speed?.toFixed(1)??'—'}×</p></>}
       </details>
-    </section></div></>
+    </SimulationLayout></>
 }
 
 export const FDI_TITLE = '虚假数据注入下的自适应控制'
@@ -280,7 +280,7 @@ export function FdiPage() {
     <section id="fdi-stage-panel" role="tabpanel" aria-labelledby={'fdi-stage-'+stage} className="cstr-stage">
     {error && <div className="error" role="alert">{error} <button onClick={()=>{setError('');retry(n=>n+1)}}>重试</button></div>}
     {options ? (['measurement','execution'] as const).map(key=>
-      <Trial key={key} side={key} visible={key===side} options={options}/>) : !error && <p role="status">正在读取试验配置…</p>}
+      <Trial key={key} side={key} visible={key===side} options={options}/>) : !error && <p className="module-status-bar" role="status">正在读取试验配置…</p>}
     </section>
   </Page>
 }

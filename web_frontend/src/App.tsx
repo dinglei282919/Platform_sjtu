@@ -1,6 +1,6 @@
 import { Chart, FormNumber, Page } from './PlatformUI'
 import { ErrorDialog } from './ErrorDialog'
-import { CstrWorkspace, riskEntries, useCstrPresence, type RiskId } from './CstrWorkspace'
+import { CstrWorkspace, riskEntries, useCstrPresence, type RiskId } from './risk-control/CstrWorkspace'
 import { useCallback, useEffect, useMemo, useRef, useState, type FocusEvent } from 'react'
 import * as echarts from 'echarts'
 import { api, post } from './api'

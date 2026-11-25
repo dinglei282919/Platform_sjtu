@@ -5,7 +5,7 @@ const path = require('node:path')
 const vm = require('node:vm')
 const ts = require('../web_frontend/node_modules/typescript')
 
-const file = path.join(__dirname, '../web_frontend/src/cstrDisturbance.ts')
+const file = path.join(__dirname, '../web_frontend/src/risk-control/cstrDisturbance.ts')
 const compiled = ts.transpileModule(fs.readFileSync(file, 'utf8'), {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
 })

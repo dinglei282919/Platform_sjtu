@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
-import { api, post } from './api'
-import { readSession, writeSession } from './taskSession'
+import { api, post } from '../api'
+import { readSession, writeSession } from '../taskSession'
 
 type Handle = { id: string; owner: string }
 export const emptyHandle: Handle = { id: '', owner: '' }

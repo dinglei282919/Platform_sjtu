@@ -1,7 +1,8 @@
 import { Fragment, useEffect, useId, useRef, useState } from 'react'
-import { api, ApiError } from './api'
+import { api, ApiError } from '../api'
 import { emptyHandle, healingOwner } from './cstrOwner'
-import { FormNumber, Page, SimulationBar } from './PlatformUI'
+import { FormNumber, Page, SimulationBar } from '../PlatformUI'
+import { SimulationLayout } from './SimulationLayout'
 import { CstrProcessDiagram } from './CstrProcessDiagram'
 import { HealingEffect, HealingTrends } from './HealingTrends'
 import { healingColors, outputs, type Config, type Group, type Method, type Options, type Row, type Snapshot } from './healingTypes'
@@ -11,7 +12,7 @@ function RecoveryTable({view}: {view: Snapshot['view']}) {
   const units = ['%', 'mol/L', 'K', 'min', 'min', '次']
   return <section className="healing-recovery">
     <h3 id={title}>四组恢复指标</h3>
-    <div className="healing-table" role="region" aria-labelledby={title} tabIndex={0}>
+    <div className="cstr-metrics-table" role="region" aria-labelledby={title} tabIndex={0}>
       <table aria-labelledby={title} aria-describedby={description}>
         <thead><tr><th scope="col">恢复指标</th>{view.metrics.map(([group], i) =>
           <th scope="col" key={group}><span className="healing-group-dot" style={{background:healingColors[i]}}/>{group}</th>
@@ -50,6 +51,8 @@ function TriggerBand({index, cfg, draft, running, change}: {index:number; cfg:Op
       hint={`可输入范围 ${widthMin} 至 ${widthMax} ${unit}\n${endpoints}`}/>
   </div>
 }
+
+export const HEALING_TITLE = '多变量过程自愈控制'
 
 export function HealingPage() {
   const compensationHintId=useId()
@@ -144,11 +147,11 @@ export function HealingPage() {
     setDraft(old=>old && {...old,[key]:old[key].map((v,j)=>j===index?value:v)})
   }
   const message=error||pollError||snap?.error
-  return <Page title="多变量过程自愈控制" className="cstr-page">
+  return <Page title={HEALING_TITLE} className="cstr-page">
     {message && <div role="alert" className="error">{message} {pollError && <button onClick={()=>setAttempt(n=>n+1)}>重试</button>}</div>}
-    {(!cfg||!snap||!draft) ? <section className="panel" role="status">正在连接自愈仿真会话…</section> :
+    {(!cfg||!snap||!draft) ? !message && <p className="module-status-bar" role="status">正在连接自愈仿真会话…</p> :
     <><SimulationBar state={snap.status} time={snap.latest.t} busy={busy} command={kind=>void command(kind)}/>
-    <div className="two-column cstr-layout"><section className="panel" key={snap.run}><h3>自愈控制配置</h3>
+    <SimulationLayout controlsKey={snap.run} controls={<><h3>自愈控制配置</h3>
       <div className="form-grid"><label>退化场景<select aria-label="退化场景" value={draft.scenario} onChange={e=>preset(e.target.value,draft.mode)}>
         {Object.entries(cfg.scenarios).map(([k,v])=><option key={k} value={k}>{v}</option>)}</select></label>
       <label>补偿调度<select aria-label="补偿调度" value={draft.mode} onChange={e=>preset(draft.scenario,e.target.value)}>
@@ -184,7 +187,7 @@ export function HealingPage() {
       </div><p className="cstr-data-help">配置在复位后生效。手动施加退化后继续观测 {cfg.post_fault_min} 仿真分钟。</p>
       <div className="actions">{[['end','结束'],['export','导出实验记录']].map(([k,v])=>
         <button key={k} className="secondary" disabled={busy||(k==='end'&&snap.status==='ended')} onClick={()=>void command(k)}>{v}</button>)}</div>
-    </section><section className="panel healing-results">
+    </>}>
       <header className="module-status-bar cstr-status" role="status"><strong>{snap.view.state}</strong><span>{snap.view.status}</span><span>{snap.view.speed}</span></header>
       <HealingEffect snap={snap} method={method} select={selectGroup}/>
       <label>工艺图与入口对照组<select aria-label="工艺图与入口对照组" value={group} onChange={e=>selectGroup(e.target.value as Group)}>
@@ -194,8 +197,8 @@ export function HealingPage() {
         活性系数 {snap.latest.groups[group].a.toFixed(4)}　换热系数 {snap.latest.groups[group].b.toFixed(4)}</p>
       <RecoveryTable view={snap.view}/>
       <HealingTrends key={'trends-'+snap.run} {...{cfg,snap,rows,group}}/>
-      <h3>补偿事件</h3>{snap.recent.length ? <ul className="healing-events">{snap.recent.slice(-6).reverse().map(e=><li key={e.group+e.first_seq}>{e.label}</li>)}</ul>
+      <h3>补偿事件</h3>{snap.recent.length ? <ul className="cstr-events">{snap.recent.slice(-6).reverse().map(e=><li key={e.group+e.first_seq}>{e.label}</li>)}</ul>
         : <p className="cstr-data-help">暂无补偿事件</p>}
       <p className="cstr-data-help">{snap.view.timing.join('　')}</p>
-    </section></div></>}</Page>
+    </SimulationLayout></>}</Page>
 }

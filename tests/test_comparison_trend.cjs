@@ -7,7 +7,7 @@ const ts = require('../web_frontend/node_modules/typescript')
 const jsx = require('../web_frontend/node_modules/react/jsx-runtime')
 
 function load(file, imports) {
-  const source = ts.transpileModule(fs.readFileSync(path.join(__dirname,'../web_frontend/src', file), 'utf8'), {
+  const source = ts.transpileModule(fs.readFileSync(path.join(__dirname,'../web_frontend/src/risk-control', file), 'utf8'), {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
   })
   const result = {}

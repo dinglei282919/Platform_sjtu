@@ -3,17 +3,16 @@
 from __future__ import annotations
 
 import sys
-import asyncio
 import math
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from fastapi.responses import FileResponse, JSONResponse
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -22,15 +21,13 @@ if str(ROOT) not in sys.path:
 FRONTEND_DIST = ROOT / "web_frontend" / "dist"
 
 from web_backend.task_manager import TaskManager, TaskStateUnavailable
+from web_backend.services.dnn_mpc import routes as dnn_mpc_routes
 from web_backend.services.healing import routes as healing_routes
 from web_backend.services.fdi import routes as fdi_routes
 from web_backend.services.replay import routes as replay_routes
 from web_backend.services import anomaly, cdq, classification, path_picker, scoring, sdg, sil
 from platform_core.risk_control import FDI_TITLE, REPLAY_TITLE
-from platform_core.risk_control.dnn_mpc.dataset import MAX_CSV_BYTES, example_csv
 from platform_core.risk_control.service import ControlService
-from platform_core.risk_control.presentation import (tokens as cstr_tokens, template as cstr_template,
-                                                     trial_status as cstr_trial_status, online_update_status, control_status)
 
 
 task_manager = TaskManager()
@@ -159,33 +156,6 @@ class AnomalyTaskRequest(BaseModel):
 class LocalPathSelectRequest(BaseModel):
     kind: Literal["directory", "open-mat", "save-mat", "open-npz", "save-npz"]
     initial_path: str = ""
-
-
-class CstrCreate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    model_id: str = "default"
-    auto_start: bool = False
-    settings: dict[str, Any] = Field(default_factory=dict)
-
-
-class CstrCommand(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    kind: Literal["start", "pause", "resume", "reset", "end", "reference", "model", "disturbance", "clear_disturbance"]
-    key: str = Field(min_length=1, max_length=128)
-    preset: str | None = None
-    duration_cycles: int | None = Field(default=None, strict=True)
-    value: float | None = None
-    model_id: str | None = None
-    settings: dict[str, Any] | None = None
-
-
-class CstrUpdate(BaseModel):
-    device: Literal["auto", "cpu", "cuda"] = "auto"
-
-
-class CstrUpdatePolicy(CstrUpdate):
-    model_config = ConfigDict(extra="forbid")
-    enabled: bool = Field(strict=True)
 
 
 @asynccontextmanager
@@ -390,143 +360,10 @@ def cancel_control_task(task_id: str):
     return task
 
 
-def _cstr_call(fn, *args, **kwargs):
-    try:
-        return fn(*args, **kwargs)
-    except KeyError as exc:
-        raise HTTPException(404, str(exc)) from exc
-    except PermissionError as exc:
-        raise HTTPException(403, str(exc)) from exc
-    except (ValueError, TypeError) as exc:
-        raise _bad_request(exc) from exc
-
-
-@app.get("/api/cstr/config")
-def cstr_config():
-    return {**cstr_service.config(), "diagram_template": cstr_template()}
-
-
-@app.post("/api/cstr/training")
-def cstr_train(options: dict[str, Any]):
-    return {"task_id": _cstr_call(cstr_service.train, options)}
-
-
-@app.get("/api/cstr/training/example.csv")
-def cstr_example():
-    return Response(example_csv(), media_type="text/csv", headers={
-        "Content-Disposition": 'attachment; filename="cstr-trajectories.csv"'})
-
-
-@app.post("/api/cstr/training/csv")
-async def cstr_train_csv(request: Request, epochs: int = 320, seed: int = 42,
-                         lr: float = 0.001, device: str = "auto"):
-    content = bytearray()
-    async for chunk in request.stream():
-        if len(content) + len(chunk) > MAX_CSV_BYTES:
-            raise HTTPException(413, "CSV 文件超过 32 MiB")
-        content.extend(chunk)
-    if not content:
-        raise HTTPException(400, "请选择非空 CSV 文件")
-    return {"task_id": _cstr_call(cstr_service.train,
-            dict(epochs=epochs, seed=seed, lr=lr, device=device), bytes(content))}
-
-
-@app.get("/api/cstr/training/{task_id}/report")
-def cstr_training_report(task_id: str):
-    task = get_task(task_id)
-    directory = task_manager.artifact_dir(task_id)
-    if task["title"] != "CSTR 预测模型训练" or not directory or not (directory / "result.json").is_file():
-        raise HTTPException(404, "训练报告尚不可用")
-    return FileResponse(directory / "result.json", filename="cstr-training.json")
-
-
-@app.post("/api/cstr/sessions")
-def cstr_create(request: CstrCreate):
-    s = _cstr_call(cstr_service.create, model_id=request.model_id, settings=request.settings, lease=True, auto_start=request.auto_start)
-    return {"id": s.id, "owner": s.owner, "run": s.run}
-
-
-@app.get("/api/cstr/sessions/{identifier}")
-def cstr_snapshot(identifier: str, after: int = -1, owner: str | None = Header(None, alias="X-Control-Owner")):
-    s = _cstr_call(cstr_service.session, identifier)
-    data = s.snapshot(after, owner)
-    online = data["online_update"]
-    return {**data, "control_display": control_status(data), "display": cstr_tokens(data["latest"]), "disturbance_display": cstr_trial_status(data["disturbance"]),
-            "online_update": {**online, **online_update_status(online)}}
-
-
-@app.get("/api/cstr/sessions/{identifier}/presence")
-async def cstr_presence(identifier: str, request: Request, owner: str | None = Header(None, alias="X-Control-Owner")):
-    session = _cstr_call(cstr_service.session, identifier, owner, True)
-    return _presence_stream(session, request)
-
-
-def _presence_stream(session, request):
-
-    async def connected():
-        session.owner_connected()
-        try:
-            while not session.closed and not await request.is_disconnected():
-                yield b": online\n\n"
-                await asyncio.sleep(5)
-        finally:
-            session.owner_disconnected()
-
-    return StreamingResponse(connected(), media_type="text/event-stream",
-                             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
-
-
-app.include_router(healing_routes(lambda: cstr_service.healing, _cstr_call, _presence_stream))
-app.include_router(fdi_routes(lambda: cstr_service.fdi, _cstr_call, _presence_stream))
-app.include_router(replay_routes(lambda: cstr_service.replay, _cstr_call, _presence_stream))
-
-
-@app.get("/api/cstr/sessions/{identifier}/history")
-def cstr_history(identifier: str, run: str, first: int, count: int):
-    session = _cstr_call(cstr_service.session, identifier)
-    return {"run": run, "samples": _cstr_call(session.sample_window, run, first, count)}
-
-
-@app.post("/api/cstr/sessions/{identifier}/commands")
-def cstr_command(identifier: str, request: CstrCommand, owner: str | None = Header(None, alias="X-Control-Owner")):
-    s = _cstr_call(cstr_service.session, identifier, owner, True)
-    return _cstr_call(cstr_service.command, s, request.kind, request.key, request.value,
-                      request.model_id, request.settings, preset=request.preset, duration_cycles=request.duration_cycles)
-
-
-@app.post("/api/cstr/sessions/{identifier}/updates")
-def cstr_update(identifier: str, request: CstrUpdate, owner: str | None = Header(None, alias="X-Control-Owner")):
-    s = _cstr_call(cstr_service.session, identifier, owner, True)
-    return {"task_id": _cstr_call(cstr_service.update_model, s, request.device)}
-
-
-@app.post("/api/cstr/sessions/{identifier}/updates/policy")
-def cstr_update_policy(identifier: str, request: CstrUpdatePolicy, owner: str | None = Header(None, alias="X-Control-Owner")):
-    session = _cstr_call(cstr_service.session, identifier, owner, True)
-    policy = _cstr_call(cstr_service.configure_updates, session, request.enabled, request.device)
-    return {**policy, **online_update_status(policy)}
-
-
-@app.post("/api/cstr/sessions/{identifier}/updates/{task_id}/cancel")
-def cstr_cancel_update(identifier: str, task_id: str, owner: str | None = Header(None, alias="X-Control-Owner")):
-    s = _cstr_call(cstr_service.session, identifier, owner, True)
-    with s.lock:
-        if not s.update or s.update["id"] != task_id:
-            raise HTTPException(409, "此更新已结束或不属于本次运行")
-    return _cstr_call(cstr_service.cancel, task_id)
-
-
-@app.get("/api/cstr/sessions/{identifier}/export")
-def cstr_export(identifier: str):
-    s = _cstr_call(cstr_service.session, identifier)
-    return JSONResponse(s.export(), headers={"Content-Disposition": 'attachment; filename="cstr-run.json"'})
-
-
-@app.delete("/api/cstr/sessions/{identifier}")
-def cstr_release(identifier: str, owner: str | None = Header(None, alias="X-Control-Owner")):
-    s = _cstr_call(cstr_service.session, identifier, owner, True)
-    cstr_service.release(s)
-    return {"status": "closed"}
+app.include_router(dnn_mpc_routes(lambda: cstr_service, lambda: task_manager))
+app.include_router(healing_routes(lambda: cstr_service.healing))
+app.include_router(fdi_routes(lambda: cstr_service.fdi))
+app.include_router(replay_routes(lambda: cstr_service.replay))
 
 
 @app.get("/{requested_path:path}", include_in_schema=False)

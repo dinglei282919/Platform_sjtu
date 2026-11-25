@@ -5,7 +5,7 @@ import re
 from concurrent.futures import CancelledError
 from dataclasses import asdict
 from pathlib import Path
-from threading import Event, RLock
+from threading import Event
 from uuid import uuid4
 
 import numpy as np
@@ -13,6 +13,7 @@ from .cstr import DEMO_INITIAL, TREND_INTERVALS, FEATURE_NAMES, NOMINAL, REFEREN
 from .dnn_mpc import dataset, model, training, validation
 from .dnn_mpc.mpc import Settings
 from .session import Session
+from .session_lifecycle import SessionRegistry
 from .healing_session import HealingService
 from .fdi_session import FdiService
 from .replay_session import ReplayService
@@ -44,17 +45,15 @@ def train_options(options):
     return opts
 
 
-class ControlService:
+class ControlService(SessionRegistry):
     def __init__(self, tasks, root=None):
         self.tasks = tasks
-        self.root = Path(root or os.environ.get("PLATFORM_CSTR_RUNTIME")
-                         or USER_DATA/"Platform_sjtu"/"cstr")
+        super().__init__(Path(root or os.environ.get("PLATFORM_CSTR_RUNTIME")
+                              or USER_DATA/"Platform_sjtu"/"cstr"))
         self.record_root = tasks.register_record_root(self.root/"tasks")
         self.healing = HealingService(self.root/"self-healing")
         self.fdi = FdiService(self.root/"fdi")
         self.replay = ReplayService(self.root/"replay")
-        self.lock = RLock()
-        self.sessions = {}
 
     def models(self):
         default = model.load()
@@ -85,20 +84,7 @@ class ControlService:
         predictor = self.get_model(model_id)
         if not predictor.metadata.get("acceptance", {}).get("passed"):
             raise ValueError("模型缺少闭环验证记录")
-        session = Session(self.root, predictor, config, lease, auto_start, submit_update=self.update_model)
-        with self.lock:
-            self.sessions = {k: s for k, s in self.sessions.items() if not s.closed}
-            self.sessions[session.id] = session
-        return session
-
-    def session(self, identifier, owner=None, control=False):
-        with self.lock:
-            s = self.sessions.get(identifier)
-        if s is None or s.closed:
-            raise KeyError("会话不存在或已释放")
-        if control and owner != s.owner:
-            raise PermissionError("此会话处于只读模式")
-        return s
+        return self._create_session(Session, predictor, config, lease, auto_start, submit_update=self.update_model)
 
     def command(self, s, kind, key, value=None, model_id=None, settings=None, *, preset=None, duration_cycles=None):
         if kind == "model":
@@ -281,16 +267,10 @@ class ControlService:
         return self.tasks.cancel(task_id)
 
     def release(self, s):
-        with self.lock:
-            self.sessions.pop(s.id, None)
-        s.close()
+        super().release(s)
 
     def close(self):
         self.healing.close()
         self.fdi.close()
         self.replay.close()
-        with self.lock:
-            sessions = list(self.sessions.values())
-            self.sessions.clear()
-        for s in sessions:
-            s.close()
+        super().close()

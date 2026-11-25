@@ -20,7 +20,7 @@ Framework.py -> main_interface.py -> 各功能 QWidget 页面
 | 潜在安全威胁识别与自动分类 | `error_classification.py` |
 | 多评估准则融合的风险学习分析 | `auto_score.py` |
 | 风险场景动态匹配与适配方案生成算法 | `cdq_risk_matching.py` |
-| 深度神经网络优化控制 | `desktop/risk_control/workspace.py` 的模型训练与在线控制视图 |
+| 深度神经网络优化控制 | `desktop/risk_control/dnn_mpc_page.py` 的模型训练与在线控制视图 |
 | 虚假数据注入下的自适应控制 | `desktop/risk_control/fdi_page.py` |
 | 重放攻击下的自适应控制 | `desktop/risk_control/replay_page.py` |
 | 多变量过程自愈控制 | `desktop/risk_control/healing_page.py` |
@@ -42,10 +42,10 @@ BS（浏览器/服务端）由 React 前端和 FastAPI 后端组成：
 | 层 | 目录/文件 | 技术 |
 | --- | --- | --- |
 | 页面和导航 | `web_frontend/src/App.tsx` | React + TypeScript |
-| 风险管控页面、组件与样式 | `web_frontend/src/`、`styles.css` | React + TypeScript + CSS |
+| 风险管控页面、组件与样式 | `web_frontend/src/risk-control/`（页面、共享组件与 `risk-control.css`） | React + TypeScript + CSS |
 | 页面样式 | `web_frontend/src/styles.css` | CSS |
 | 前端构建和开发服务器 | `web_frontend/package.json`、`web_frontend/vite.config.ts` | Vite |
-| API、请求模型、任务和结果接口 | `web_backend/app.py` | FastAPI |
+| 应用入口、全局任务和结果接口 | `web_backend/app.py` | FastAPI |
 | 长任务协调 | `platform_core/task_manager.py`，`web_backend/task_manager.py` 提供兼容导入 | 任务、持久化与取消 |
 | 算法/Runtime 适配 | `web_backend/services/` | BS 后端服务层 |
 | 本机启动脚本 | `scripts/run_web_local.ps1` | PowerShell + Uvicorn |
@@ -93,10 +93,10 @@ BS 启动入口是：
 | 潜在安全威胁识别与自动分类 | `error_classification.py` | `ClassificationPage` | `web_backend/services/classification.py`；`/api/classification/*` | `input_data/error_classification_*.csv` |
 | 多评估准则融合的风险学习分析 | `auto_score.py` | `ScorePage` | `platform_core/scoring.py`、`web_backend/services/scoring.py`；`/api/score/*` | 公共评分逻辑 |
 | 风险场景动态匹配与适配方案生成算法 | `cdq_risk_matching.py` | `CdqPageReplica` | `web_backend/services/cdq.py`；`/api/cdq/*` | `input_data/cdq_data.xlsx` |
-| 深度神经网络优化控制 | `desktop/risk_control/workspace.py` | `CstrWorkspace.tsx` | `web_backend/app.py`，`/api/cstr/config`、`/api/cstr/training`、`/api/cstr/sessions` | `platform_core/risk_control/dnn_mpc/`、`service.py`、`session.py`、`assets/cstr/default_model.npz` |
+| 深度神经网络优化控制 | `desktop/risk_control/dnn_mpc_page.py` | `DnnMpcPage.tsx` | `web_backend/services/dnn_mpc.py`，`/api/cstr/config`、`/api/cstr/training`、`/api/cstr/sessions` | `platform_core/risk_control/dnn_mpc/`、`service.py`、`session.py`、`assets/cstr/default_model.npz` |
 | 虚假数据注入下的自适应控制 | `desktop/risk_control/fdi_page.py` | `FdiPage.tsx` | `web_backend/services/fdi.py`、`/api/cstr/fdi/*` | `platform_core/risk_control/fdi.py` 与同目录的控制和会话实现。三张趋势图与演示样本共用 `assets/cstr/fdi-demo.json` |
 | 重放攻击下的自适应控制 | `desktop/risk_control/replay_page.py` | `ReplayPage.tsx` | `web_backend/services/replay.py`，`/api/cstr/replay/*` | `platform_core/risk_control/{replay,replay_session,replay_display}.py` |
-| 多变量过程自愈控制 | `desktop/risk_control/healing_page.py` | `HealingPage.tsx` | `web_backend/services/healing.py`，`/api/cstr/healing/*` | `platform_core/risk_control/{healing,healing_display,healing_session}.py` |
+| 多变量过程自愈控制 | `desktop/risk_control/healing_page.py` | `HealingPage.tsx` | `web_backend/services/healing.py`，`/api/cstr/healing/*` | `platform_core/risk_control/{healing,healing_display,healing_metrics,healing_session}.py` |
 | 综合仿真展示 | `desktop/risk_control/workspace.py` | `CstrWorkspace.tsx` | 共享导航，综合运行器待接入 | 各模块的独立结果见[操作手册](RISK_CONTROL_MANUAL.md#scope) |
 | SDG-HAZOP | `sdg_hazop.py` | `SdgPage` | `web_backend/services/sdg.py`；`/api/sdg/*` | SDG 示例/分析数据 |
 | 基于 GSPN-MC 模型的动态化 SIL 验证方法 | `sil_validation.py` | `SilPage` | `web_backend/services/sil.py`；`/api/sil/*` | GSPN-MC 仿真参数和结果 |
@@ -105,14 +105,16 @@ CS 菜单名称和 BS 菜单名称应保持业务含义一致。当前 CS 菜单
 
 ### 2.1 风险管控的调用边界
 
+Qt 的 `desktop/risk_control/workspace.py` 和 Web 的 `web_frontend/src/risk-control/CstrWorkspace.tsx` 负责选页。四个模块各自拥有页面、运行状态和 HTTP 适配器。Web 仿真页在 `SimulationLayout.tsx` 中组合控制面板与结果区。Qt 仿真页从 `layout.py` 和 `trends.py` 引入通用控件与趋势图。
+
 | 职责 | 文件 | 修改时核对 |
 | --- | --- | --- |
-| 模块入口 | `platform_core/risk_control/__init__.py`、`desktop/risk_control/workspace.py`、`web_frontend/src/CstrWorkspace.tsx`、`web_backend/app.py` | 菜单名称、可用状态及页面选择 |
+| 模块入口 | `platform_core/risk_control/__init__.py`、`desktop/risk_control/workspace.py`、`web_frontend/src/risk-control/CstrWorkspace.tsx`、`web_backend/app.py` | 菜单名称、可用状态及页面选择 |
 | 数值参数输入 | Web 的 `PlatformUI.tsx`、`ErrorDialog.tsx` 与 Qt 的 `desktop/risk_control/controls.py` | 使用各字段已有的范围与精度，在确认无效输入时弹窗、恢复上次确认值，并将焦点交还原字段 |
-| 对象与会话 | `platform_core/risk_control/cstr.py`、`thermal.py`、`service.py`、`comparison_service.py`、`journal.py` | 有效采样、运行标识、控制权、历史记录。算法状态由各分支持有 |
-| 对照试验的 HTTP 生命周期 | `web_backend/services/comparison.py` | 自愈、FDI、重放复用创建、在线连接、控制权限和释放。各模块的适配器声明自己的指令集、快照、回看和导出能力 |
+| 对象与会话 | `platform_core/risk_control/cstr.py`、`thermal.py`、`service.py`、`comparison_service.py`、`session_lifecycle.py`、`journal.py` | 有效采样、运行标识、控制权、历史记录。算法状态由各分支持有 |
+| HTTP 会话接口 | `web_backend/services/control_http.py`、`comparison.py` | 四个模块共用控制者请求头、错误映射和在线连接。自愈、FDI、重放也共用创建与释放路由。各模块适配器声明自己的指令、回看和导出接口 |
 | CSTR 动态工艺图 | `assets/cstr/process.svg`、`platform_core/risk_control/presentation.py`、Qt 的 `ProcessDiagram` 和 Web 的 `CstrProcessDiagram` | 从同一运行、分支和采样点取真实状态与实际冷却流量。模块 4 在 `replay_display.diagram_sample` 映射读数，历史测温只显示在观测支路。暂停和历史回看时停下管线动画 |
-| FDI 与重放曲线 | Web 的 `ComparisonTrend.tsx`、`trendGestures.ts`、`SampleChart.tsx` 和 Qt 的 `desktop/risk_control/comparison_trends.py`、`workspace.Trend` | Web 与自愈共用绘图区手势，Qt 使用在线趋势图类。同一运行的图共用时间窗口，纵轴逐图调整。按窗口内最后一个已发布采样点读取工艺图与详情，保留实际注入区间 |
+| FDI 与重放曲线 | Web 的 `ComparisonTrend.tsx`、`trendGestures.ts`、`SampleChart.tsx` 和 Qt 的 `desktop/risk_control/comparison_trends.py`、`trends.Trend` | Web 与自愈共用绘图区手势，Qt 使用在线趋势图类。同一运行的图共用时间窗口，纵轴逐图调整。按窗口内最后一个已发布采样点读取工艺图与详情，保留实际注入区间 |
 
 ## 3. 环境、数据与输出约定
 
