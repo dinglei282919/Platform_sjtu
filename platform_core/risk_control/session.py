@@ -9,6 +9,7 @@ import numpy as np
 from .cstr import DEMO_INITIAL, INLET, NOMINAL, NOMINAL_FLOW, SAMPLE_MIN, TREND_MAX_INTERVALS, apply_flow, step
 from .dnn_mpc.dataset import Trajectories
 from .dnn_mpc.mpc import check_reference, solve
+from .dnn_mpc.supervision import DISPATCH_RESERVE_S, PI_KP, TRANSFER_STEP, Decision, SolverWorker, backup_flow
 from .journal import Journal
 from .disturbance import DEFAULT_CYCLES, InletTrial
 
@@ -35,6 +36,7 @@ class Session:
         self.update_submit_lock = Lock()
         self.update_worker = None
         self._init_run()
+        self.solver = SolverWorker(self.lock)
         self.worker = Thread(target=self._run, daemon=True, name="cstr-control")
         self.worker.start()
         if submit_update is not None:
@@ -51,6 +53,9 @@ class Session:
         self.state = (DEMO_INITIAL if self.auto_start else NOMINAL).copy()
         self.previous = NOMINAL_FLOW
         self.reference = self.settings.reference
+        self.pi_integral = self.previous - PI_KP * (self.state[1] - self.reference)
+        self.fallback_streak = 0
+        self.last_fallback = None
         self.warm = self.pending = self.pending_ref = self.update = None
         self.trial_previous = None
         self.update_cutoff = 0
@@ -90,7 +95,7 @@ class Session:
                             self.settings),
                         update=self.update["id"] if self.update else None, resync=resync,
                         samples=[s for s in self.samples if resync or s["seq"] > after],
-                        latest=self.samples[-1], events=list(self.events),
+                        latest=self.samples[-1], events=list(self.events), last_fallback=self.last_fallback,
                         disturbance=self.disturbance.summary(self.seq) if self.disturbance else None,
                         online_update=self._online_status())
 
@@ -307,12 +312,16 @@ class Session:
         records = log.records(barrier, seq, event)
         intervals = [item for item in records if item["kind"] == "sample" and item["seq"]]
         failures = [item for item in records if item.get("event") == "failed"]
-        missed = sum(item.get("deadline_missed", False) for item in failures)
-        solve_ms = [row["solve_ms"] for row in intervals]
+        fallback = [row for row in intervals if row.get("control_source") == "pi"]
+        missed = sum(item.get("deadline_missed", False) for item in (*intervals, *failures))
+        solve_ms = [row["solve_ms"] for row in intervals if row.get("solve_ms") is not None]
         compute_ms = [row["cycle_ms"] for row in intervals]
         wall_ms = sum(row["wall_ms"] for row in intervals)
         attempts = len(intervals)+len(failures)
         timing = dict(cycles=len(intervals), failed=len(failures), deadline_misses=missed,
+                      fallback_cycles=len(fallback), max_fallback_streak=max(
+                          (row["fallback_streak"] for row in fallback), default=0),
+                      cycle_overruns=sum(row.get("cycle_overrun", False) for row in intervals),
                       overrun_rate=missed/attempts if attempts else 0,
                       wall_budget_ms=60000*SAMPLE_MIN/config["speed"],
                       achieved_speed=len(intervals)*60000*SAMPLE_MIN/wall_ms if wall_ms else None,
@@ -338,6 +347,67 @@ class Session:
             self._event("reference_applied", key=key, value=self.reference, first_interval=self.seq+1)
             self.pending_ref = None
         return self.trial_previous
+
+    def _decide(self, model, old, x, previous, reference, warm, settings, inlet, generation, cutoff):
+        # The scheduler owns the PI state. Its tentative integral commits with the applied sample.
+        error = float(x[1] - reference)
+        with self.lock:
+            if self.generation != generation or self.closed or self.status != "running":
+                return None
+            standby, integral = backup_flow(self.pi_integral, error, previous, settings)
+            decision = Decision(standby, integral, model, [])
+            predictors = (model, old) if old is not None else (model,)
+            for predictor in predictors:
+                if time.perf_counter() >= cutoff:
+                    decision.outcome, decision.reason, decision.missed = "timeout", "MPC 求解超时", True
+                    break
+                guess = warm if predictor is model else None
+                reply = self.solver.submit(solve, (predictor, x, previous, reference, settings, guess),
+                                           dict(inlet=inlet, deadline=cutoff))
+                if reply is None:
+                    decision.outcome, decision.reason, decision.missed = "busy", "上一轮 MPC 求解尚未退出", True
+                    break
+                decision.attempts.append(predictor.version)
+                self.lock.wait_for(lambda: reply.done() or self.closed or self.generation != generation,
+                                   timeout=max(0., cutoff-time.perf_counter()))
+                if self.closed or self.generation != generation or self.status != "running":
+                    return None
+                try:
+                    if not reply.done() or time.perf_counter() >= cutoff:
+                        raise TimeoutError("MPC 求解超时")
+                    plan, diag = reply.result()
+                    plan = np.asarray(plan, dtype=float)
+                    if (plan.shape != (settings.horizon,) or not np.isfinite(plan).all()
+                            or np.any(plan < settings.flow_min) or np.any(plan > settings.flow_max)):
+                        raise ValueError("MPC 流量序列无效或越界")
+                    command = float(plan[0])
+                    if self.fallback_streak and abs(command - previous) > TRANSFER_STEP:
+                        decision.outcome, decision.reason = "transfer_limit", "MPC 接回流量变化超过限值"
+                        decision.missed = False
+                        if predictor is model and old is not None:
+                            decision.rollback = decision.reason
+                            continue
+                        break
+                    if time.perf_counter() >= cutoff:
+                        raise TimeoutError("MPC 求解超时")
+                    decision.command, decision.integral = command, command - PI_KP * error
+                    decision.model, decision.sequence, decision.diagnostics = predictor, plan, diag
+                    decision.outcome, decision.reason, decision.missed = "ok", "", False
+                    return decision
+                except Exception as exc:
+                    decision.missed = isinstance(exc, TimeoutError)
+                    decision.outcome = "timeout" if decision.missed else "failed"
+                    decision.reason = str(exc) or type(exc).__name__
+                    if predictor is model and old is not None:
+                        decision.rollback = decision.reason
+            return decision
+
+    def _rollback(self, old, reason, attempts):
+        if (self.last_online_result and self.last_online_result["state"] == "activated"
+                and self.last_online_result["version"] == self.model.version):
+            self.last_online_result = dict(state="rollback", seq=self.seq+1, version=old.version, detail=reason)
+        self.model, self.warm, self.trial_previous = old, None, None
+        self._event("rollback", reason=reason, attempts=attempts, restored=old.version)
 
     def _run(self):
         while True:
@@ -366,6 +436,7 @@ class Session:
                     self._event("lease_expired")
                     self.status, self.closed = "ended", True
                     self.lock.notify_all()
+                    self.solver.close()
                     self.log.close()
                     return
                 if self.leased and not self.owner_connections and idle > 20 and self.status == "running":
@@ -375,6 +446,7 @@ class Session:
                 if self.status != "running":
                     self.lock.wait(1)
                     continue
+                start = time.perf_counter()
                 old = self._select_cycle()
                 trial = self.disturbance
                 inlet = INLET
@@ -390,52 +462,32 @@ class Session:
                 model = self.model
                 generation = self.generation
                 x, previous, ref, warm, settings = self.state.copy(), self.previous, self.reference, self.warm, self.settings
-            start = time.perf_counter()
-            deadline = start+60*SAMPLE_MIN/settings.speed
-            attempts = [model.version]
-            failure = None
-            rollback = False
+            budget = 60*SAMPLE_MIN/settings.speed
+            deadline = start + budget
+            cutoff = deadline - DISPATCH_RESERVE_S
+            decision = None
             try:
-                try:
-                    seq, diag = solve(model, x, previous, ref, settings, warm, inlet=inlet, deadline=deadline)
-                except (RuntimeError, ValueError, TimeoutError) as exc:
-                    if old is None:
-                        raise
-                    rollback = True
-                    failure = str(exc)
-                    if time.perf_counter() >= deadline:
-                        raise
-                    model = old
-                    attempts.append(model.version)
-                    seq, diag = solve(model, x, previous, ref, settings, None, inlet=inlet, deadline=deadline)
-                cmd = float(seq[0])
-                applied = apply_flow(cmd)
+                decision = self._decide(model, old, x, previous, ref, warm, settings, inlet, generation, cutoff)
+                if decision is None:
+                    continue
+                decision_ms = (time.perf_counter()-start)*1000
+                applied = apply_flow(decision.command)
                 nxt = step(x, applied, inlet)
                 comparison = trial.compare(inlet) if trial is not None else None
                 compute_ms = (time.perf_counter()-start)*1000
-                if time.perf_counter() > deadline:
-                    raise TimeoutError("总周期计算超时")
                 error = None
             except Exception as exc:
-                error = str(exc)
-            deadline_missed = time.perf_counter() > deadline
+                error = str(exc) or type(exc).__name__
             with self.lock:
                 if self.closed or self.generation != generation or self.status != "running":
                     continue
-                if old is not None and error and not rollback:
-                    rollback = True
-                    failure = error
-                if rollback:
-                    if (self.last_online_result and self.last_online_result["state"] == "activated"
-                            and self.last_online_result["seq"] == self.seq+1):
-                        self.last_online_result = dict(state="rollback", seq=self.seq+1, version=old.version,
-                                                       detail=failure)
-                    self.model, self.warm, self.trial_previous = old, None, None
-                    self._event("rollback", reason=failure, attempts=attempts, restored=old.version)
+                if old is not None and (error or decision.rollback):
+                    self._rollback(old, error or decision.rollback, decision.attempts if decision else [])
                 if error:
                     self.in_flight = False
                     self.status, self.error = "paused", error
-                    self._event("failed", reason=error, attempts=attempts, deadline_missed=deadline_missed)
+                    self._event("failed", reason=error, attempts=decision.attempts if decision else [],
+                                deadline_missed=time.perf_counter() > deadline)
                     continue
                 self.lock.wait_for(lambda: self.closed or self.generation != generation,
                                    timeout=max(0.0, deadline-time.perf_counter()))
@@ -443,20 +495,35 @@ class Session:
                     continue
                 self.in_flight = False
                 next_number = self.seq + 1
-                diagnostics = {**diag, "attempts": attempts, "wall_ms": 1000*(time.perf_counter()-start)}
+                standby = decision.source == "pi"
+                streak = self.fallback_streak + 1 if standby else 0
+                diagnostics = {"solve_ms": None, **decision.diagnostics}
+                diagnostics.update(control_source=decision.source, control_model=None if standby else decision.model.version,
+                                   attempts=decision.attempts, mpc_outcome=decision.outcome, fallback_reason=decision.reason,
+                                   fallback_streak=streak, deadline_missed=decision.missed,
+                                   decision_ms=decision_ms, decision_budget_ms=(budget-DISPATCH_RESERVE_S)*1000,
+                                   cycle_overrun=compute_ms > budget*1000, wall_ms=1000*(time.perf_counter()-start))
+                if trial is not None:
+                    diagnostics.update(trial.sample_fields(comparison))
                 try:
-                    if trial is not None:
-                        diagnostics.update(trial.sample_fields(comparison))
-                    self._sample(cmd, applied, model.version, diagnostics, compute_ms, nxt, next_number, inlet)
+                    self._sample(decision.command, applied, self.model.version, diagnostics, compute_ms, nxt, next_number, inlet)
                 except (OSError, RuntimeError) as exc:
                     self.status, self.error = "paused", str(exc)
                     continue
-                self.trial_previous = None
-                self.state, self.previous, self.warm = nxt, applied, seq
+                if not standby:
+                    self.trial_previous = None
+                previous_streak = self.fallback_streak
+                self.fallback_streak, self.pi_integral = streak, decision.integral
+                self.state, self.previous, self.warm = nxt, applied, decision.sequence
                 self.seq = next_number
                 self.history.append((np.r_[x, applied, inlet], nxt.copy()))
                 if trial is not None and trial.commit(next_number, nxt[1], ref, comparison):
                     self._event("disturbance_completed", **trial.summary(next_number))
+                if standby:
+                    self.last_fallback = dict(interval=next_number, reason=decision.reason, streak=streak, Qc=applied)
+                    self._event("pi_takeover", **self.last_fallback)
+                elif previous_streak:
+                    self._event("mpc_recovered", interval=next_number, previous_streak=previous_streak, Qc=applied)
                 if self._update_due():
                     self.lock.notify_all()
 
@@ -466,6 +533,7 @@ class Session:
                 self._cancel_update()
                 self.status, self.closed = "ended", True
                 self.lock.notify_all()
+        self.solver.close()
         self.worker.join()
         if self.update_worker is not None:
             self.update_worker.join()

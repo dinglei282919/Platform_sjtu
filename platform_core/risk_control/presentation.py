@@ -71,6 +71,26 @@ def trial_traces(rows, period):
     return bands, groups
 
 
+def control_status(snapshot):
+    sample = snapshot["latest"]
+    active = sample.get("control_source") == "pi"
+    if active:
+        timing = f"PI 备用 · 控制决策 {sample['decision_ms']:.1f} ms"
+    elif sample.get("solve_ms") is not None:
+        timing = f"MPC 求解 {sample['solve_ms']:.1f} ms"
+    else:
+        timing = "等待首个控制周期"
+    if sample.get("cycle_overrun"):
+        timing += " · 整周期计算超时"
+    alarm = snapshot.get("last_fallback")
+    message = ""
+    if alarm:
+        prefix = "PI 已接管" if active else "MPC 已恢复 · 最近一次 PI 接管"
+        message = (f"{prefix} · 第 {alarm['interval']} 周期 · {alarm['reason']} · "
+                   f"实际流量 {alarm['Qc']:.2f} L/min · 连续 {alarm['streak']} 个周期")
+    return dict(active=active, timing=timing, message=message)
+
+
 def online_update_status(policy):
     phase = policy["phase"]
     labels = {"ended": "本次仿真已结束", "off": "自动更新已关闭", "waiting_run": "等待仿真继续采样",

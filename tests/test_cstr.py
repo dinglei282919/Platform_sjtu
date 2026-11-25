@@ -264,19 +264,125 @@ class SessionBoundaryTests(unittest.TestCase):
         self.assertEqual(v["samples"][1]["model"], self.old)
         self.assertIn("rollback", [e["event"] for e in v["events"]])
 
-    def test_expired_candidate_budget_restores_old_without_advancing(self):
+    def test_overdue_candidate_uses_pi_and_late_success_cannot_overwrite_or_queue(self):
         info, _ = self.s.prepare_update()
         self.s.finish_update(info, self.candidate, {"passed": True})
+        entered, release = threading.Event(), threading.Event()
+        calls = []
 
-        def timeout(*args, deadline, **kwargs):
-            time.sleep(max(0, deadline-time.perf_counter())+.015)
-            raise TimeoutError("candidate missed the budget")
-        with patch("platform_core.risk_control.session.solve", side_effect=timeout):
+        def sometimes_late(net, state, previous, ref, settings, *args, **kwargs):
+            calls.append(net.version)
+            if len(calls) == 1:
+                entered.set()
+                release.wait(8)
+                flow = settings.flow_max
+            else:
+                flow = previous
+            return np.full(settings.horizon, flow), {"solve_ms": 0.5}
+
+        with patch("platform_core.risk_control.session.solve", side_effect=sometimes_late):
             self.s.command("start", "start")
-            snapshot = self.wait(lambda v: v["status"] == "paused")
-        self.assertEqual(snapshot["seq"], 0)
-        self.assertEqual(snapshot["model"], self.old)
-        self.assertEqual(self.s.export()["timing"]["deadline_misses"], 1)
+            try:
+                self.assertTrue(entered.wait(4))
+                snap = self.wait(lambda v: v["seq"] >= 2)
+                self.assertEqual(snap["status"], "running")
+                self.assertEqual(calls, ["candidate"])
+                self.assertEqual(snap["model"], self.old)
+                self.assertEqual([r["mpc_outcome"] for r in snap["samples"][1:3]], ["timeout", "busy"])
+                self.assertTrue(presentation.control_status(snap)["active"])
+                for i in (1, 2):
+                    row = snap["samples"][i]
+                    self.assertEqual(row["control_source"], "pi")
+                    self.assertIsNone(row["control_model"])
+                    self.assertIsNone(row["solve_ms"])
+                    self.assertEqual(row["fallback_streak"], i)
+                    self.assertLess(row["decision_budget_ms"], 600)
+                    prev = snap["samples"][i-1]
+                    expected = cstr.step([prev[k] for k in ("C", "T", "Tc")], row["Qc"])
+                    np.testing.assert_allclose(expected, [row[k] for k in ("C", "T", "Tc")])
+                    self.assertAlmostEqual(self.s.history[23+i][0][3], row["Qc"])
+            finally:
+                release.set()
+            snap = self.wait(lambda v: v["latest"].get("control_source") == "mpc")
+            self.s.command("pause", "preserve")
+        self.assertEqual(snap["latest"]["control_model"], self.old)
+        self.assertLess(snap["latest"]["Qc"], self.s.settings.flow_max)
+        self.assertIn("mpc_recovered", [e["event"] for e in snap["events"]])
+        self.assertIn("MPC 已恢复", presentation.control_status(snap)["message"])
+        timing = self.s.export()["timing"]
+        self.assertGreaterEqual(timing["deadline_misses"], 2)
+        self.assertEqual(timing["failed"], 0)
+        self.assertEqual(timing["deadline_misses"], timing["fallback_cycles"])
+
+    def test_reset_during_solve_discards_reply_and_resets_pi_alarm(self):
+        entered, release = threading.Event(), threading.Event()
+        def late(net, x, previous, ref, settings, *args, **kwargs):
+            entered.set()
+            release.wait(8)
+            return np.full(settings.horizon, settings.flow_max), {"solve_ms": 0.5}
+        with patch("platform_core.risk_control.session.solve", side_effect=late):
+            self.s.command("start", "go")
+            try:
+                self.assertTrue(entered.wait(4))
+                self.wait(lambda v: v["latest"].get("control_source") == "pi")
+                self.s.command("reset", "reset")
+                self.assertIsNone(self.s.snapshot()["last_fallback"])
+            finally:
+                release.set()
+            with self.s.lock:
+                self.assertTrue(self.s.lock.wait_for(lambda: self.s.solver.job is None, timeout=3))
+        self.assertEqual(self.s.snapshot()["seq"], 0)
+        self.assertEqual(len(self.s.history), 0)
+        self.assertEqual(self.s.previous, cstr.NOMINAL_FLOW)
+
+    def test_invalid_mpc_and_large_reentry_hold_pi_until_a_bounded_proposal(self):
+        calls = []
+        def propose(net, x, previous, ref, settings, *args, **kwargs):
+            calls.append(previous)
+            flow = [np.nan, settings.flow_max, previous+1][min(len(calls)-1, 2)]
+            return np.full(settings.horizon, flow), {"solve_ms": 0.2}
+        with patch("platform_core.risk_control.session.solve", side_effect=propose):
+            self.s.command("start", "go")
+            snap = self.wait(lambda v: v["seq"] >= 3)
+            self.s.command("pause", "stop")
+        rows = snap["samples"][1:4]
+        self.assertEqual([r["mpc_outcome"] for r in rows], ["failed", "transfer_limit", "ok"])
+        self.assertEqual([r["fallback_streak"] for r in rows], [1, 2, 0])
+        self.assertAlmostEqual(rows[2]["Qc"], rows[1]["Qc"]+1)
+        self.assertEqual(self.s.export()["timing"]["deadline_misses"], 0)
+
+    def test_candidate_outside_transfer_band_rolls_back_and_retries_previous_model(self):
+        info, _ = self.s.prepare_update()
+        calls = []
+        def sequence(net, state, previous, ref, settings, *args, **kwargs):
+            calls.append(net.version)
+            if len(calls) == 1:
+                raise RuntimeError("first solve unavailable")
+            flow = settings.flow_max if net.version == "candidate" else previous
+            return np.full(settings.horizon, flow), {"solve_ms": 1.}
+        with patch("platform_core.risk_control.session.solve", side_effect=sequence):
+            self.s.command("start", "start")
+            # Deliver the candidate after PI has taken control, at a known boundary.
+            self.wait(lambda v: v["latest"].get("control_source") == "pi")
+            self.s.command("pause", "hold")
+            self.assertTrue(self.s.finish_update(info, self.candidate, {"passed": True}))
+            self.s.command("resume", "go")
+            self.wait(lambda v: any(e["event"] == "mpc_recovered" for e in v["events"]))
+            self.s.command("end", "stop")
+        samples = self.s.snapshot()["samples"]
+        recovered = next(row for row in samples if row.get("attempts") == ["candidate", self.old])
+        self.assertEqual((recovered["control_model"], recovered["control_source"]), (self.old, "mpc"))
+        self.assertIsNone(self.s.trial_previous)
+
+    def test_backup_pi_limits_and_antiwindup(self):
+        from platform_core.risk_control.dnn_mpc.supervision import backup_flow
+        cfg = self.s.settings
+        q, integral = backup_flow(150., 5., 150., cfg)
+        self.assertEqual((q, integral), (155., 150.))
+        self.assertEqual(backup_flow(100., -2., 102., cfg), (100., 100.))
+        q, integral = backup_flow(150., 0.2, 151., cfg)
+        self.assertAlmostEqual(q, 152.2)
+        self.assertAlmostEqual(integral, 150.1)
 
     def test_background_owner_keeps_running_and_manual_model_switch_keeps_run(self):
         with self.s.lock:
